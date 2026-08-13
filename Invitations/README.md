@@ -16,6 +16,37 @@ Two invitation flavors show up in past posters:
 
 The topic-specific artwork is generated from a prompt that turns the Mishmar's subject into a themed watercolor painting — see `prompt/` for the base prompt and its per-topic variants.
 
+## House style — measured from the source files
+
+Fonts actually used in past posters (read from the embedded fonts in the PDFs in `examples/`):
+
+| Poster | Fonts |
+|---|---|
+| ערב לימוד | Ambivalenti Compressed (title), BarLev + BarLev Bold, FB Flashback Bold |
+| אלול | Aluma MF Medium/Bold, Choco Regular/Bold |
+| קולנוע, פילוסופיית המזרח | Ariana Regular |
+
+These are commercial Hebrew faces and aren't available in this repo. The key characteristic to preserve when substituting: **they are narrow/compressed**, which is what lets large text sit on a single line. A free stand-in that behaves the same way is *Noto Sans Hebrew Variable* at `font-stretch: 62.5%`.
+
+Proportions measured from the ערב לימוד PDF (as % of page width, so they scale to any output size):
+
+| Element | Size |
+|---|---|
+| Title | 21.4cqw |
+| "הנכם מוזמנים ל.." | 6.4cqw |
+| Schedule lines | 5.2cqw |
+| "מחכים לראותכם!" | 5.9cqw |
+| Top meta row (בס"ד + date) | 4.2cqw |
+| Schedule line spacing | 1.38 × font size |
+| Schedule block | 31%–75% of page height |
+| Closing line | 82% of page height |
+
+The schedule sits close to the closing line, and each item is one single line: `זמן - שם, נושא`.
+
+## The translucent panel
+
+A device used on several posters: a **rounded-corner box, very high transparency, light pastel tone drawn from the image behind it**, placed under the text so details read clearly instead of blending into the artwork. Used on the busier illustrated backgrounds (חנוכה, קולנוע). Not needed when the background is calm enough behind the text, or when a full-page wash already lifts it.
+
 ## Structure
 
 ```
