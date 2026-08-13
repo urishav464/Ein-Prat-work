@@ -14,7 +14,7 @@ Two invitation flavors show up in past posters:
 
 2. **General event/study-days poster** — reuses a generic Ein Prat landscape watercolor (hills, the Judean Desert, the campus) rather than a topic-specific painting, for multi-day schedules like study days or holiday programs (Pesach, Chanukah).
 
-The topic-specific artwork is generated from a prompt that turns the Mishmar's subject into a themed watercolor painting — that prompt lives in `prompt/` once shared.
+The topic-specific artwork is generated from a prompt that turns the Mishmar's subject into a themed watercolor painting — see `prompt/` for the base prompt and its per-topic variants.
 
 ## Structure
 
