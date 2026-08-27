@@ -11,6 +11,7 @@ The educational toolkit for Midreshet Ein Prat. Long-term goal: every tool built
 - **Language:** file/folder names in English, all content in Hebrew.
 - **Dates:** always give Hebrew + Gregorian together (e.g. `כ״א אלול תשפ״ו | 3.9.2026`).
 - **Never invent content.** Topics, speakers, texts, and dates come from the user. Unknown fields stay `TBD` — never filled in by guessing.
+- **Never invent a speaker.** Names come from `Mishmer-section/speakers/database.md`. A name from model knowledge must carry `⚠️ לאמת` plus the verification checklist (alive? still active? where do they live?) — never asserted as fact. **Never invent contact details**; unknown ones stay `TBD`. Watch the dead-thinker trap: the prompt is full of Spinoza, Levinas, Kafka, Agnon — those are texts to study, not candidates to invite.
 - **Flag inconsistencies, don't silently fix them.** If source material contradicts itself, note it and ask — don't resolve it on your own judgment. See `Mishmer-section/2025-26/mishmarim/` for the pattern (each archived work-file has an inline note where the real document had a discrepancy).
 - **Git:** all development happens on `claude/mishmer-generator-setup-h5gxqx`. `main` exists only as a base for Pull Requests — don't push work there directly.
 
@@ -22,6 +23,7 @@ Mishmer-section/
 ├── templates/
 │   ├── mishmar-template.md                 # blank output skeleton for the generator's idealized structure
 │   └── mishmar-workfile-template.md        # the REAL per-Mishmar operating format (see below)
+├── speakers/database.md                    # cross-year speaker database — 44 real people, the source the generator draws names from
 ├── 2025-26/mishmarim/                      # archive: 5 real work-files from last year, verbatim
 └── 2026-27/                                # current season
     ├── schedule.md                         # source of truth: all 21 dates, type, responsible pair/status
