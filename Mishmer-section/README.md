@@ -45,7 +45,7 @@ Mishmer-section/
 ├── topic-ideas.md   ← רעיונות לנושאים לפי תקופה
 └── mishmarim/
     └── 01-mishmar-bogrim/
-        ├── workfile.md   ← המרכז: לוז, אחראים, מרצים, קישוט, משימות
+        ├── workfile.md   ← המרכז: לוז, אחראים, מרצים, קישוט
         ├── draft.md      ← אופציונלי — תכנון עמוק דרך מחולל המשמרים
         ├── invitation.md ← מפרט ההזמנה
         └── sources/      ← דפי מקורות וטקסטים

@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The educational toolkit for Midreshet Ein Prat. Long-term goal: every tool built here — the Mishmar generator, future lesson/hike generators — accessible to students and staff through a single chatbot. There is no application code today; this is a **content and documentation repository** (Markdown work-files, a generator prompt, one self-contained HTML invitation, and one PPTX deck). "Building" here means composing Hebrew documents and rendering HTML/PPTX to images for visual QA, not compiling software.
 
+## Operating layer
+
+`system_rules.md` (repo root) is the operating layer for running the programme with students and staff — roles (Instructor Mode / Student Mode), the Mishmar philosophy, and the tracking protocol. **Read it whenever someone interacts as a student or as the instructor**, rather than as a repo developer. `students_tasks.md` (root) is the single source of truth for tasks.
+
+The split: this file guides whoever *builds* the repo; `system_rules.md` guides whoever *operates* the programme. Sibling to `Mishmer-section/generator/mishmar-generator-prompt.md`, which is the topic-design tool.
+
 ## Conventions
 
 - **Language:** file/folder names in English, all content in Hebrew.
@@ -31,11 +37,14 @@ Mishmer-section/
     ├── speakers.md                         # shared speaker pool for the season (avoid double-asking someone)
     ├── topic-ideas.md
     └── mishmarim/NN-slug/
-        ├── workfile.md                     # the hub: schedule, speakers, decoration, tasks
+        ├── workfile.md                     # the hub: schedule, speakers, decoration (tasks live in /students_tasks.md)
         ├── draft.md                        # optional: deep planning via the generator
         ├── brief.md                        # optional: this Mishmar's special constraints
         ├── invitation.md / invitation.html
         └── sources/
+
+system_rules.md        # operating layer: roles, philosophy, tracking protocol
+students_tasks.md      # SINGLE source of truth for tasks — work-files point here, they don't hold tasks
 
 Invitations/
 ├── README.md          # measured house style (font sizes as %, the translucent-panel device, real font names)
