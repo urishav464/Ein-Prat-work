@@ -25,7 +25,32 @@ This system is built for **one cohort only**:
 ## 1. Architecture
 
 - **Frontend:** Streamlit. **Backend:** Python.
-- **Data layer:** all reads/writes go through a single seam (`data_manager.py`). Today it parses the existing Markdown sources; it will move to CSV/JSON/SQLite as the speaker index grows. Nothing else in the codebase touches files directly.
+- **Data layer:** all reads/writes go through a single seam (`data_manager.py`). Nothing else in the codebase opens the database or touches files directly.
+
+### Decision 1 — SQLite, not flat files
+Dynamic data (tasks, budget) lives in **SQLite** (Python standard library), not `.md`/`.csv`. Streamlit serves every user session on its own thread and reruns the script on each interaction; concurrent writes to a flat file lose data.
+
+Three settings are what actually make this safe, and they are not optional:
+
+| הגדרה | למה |
+|---|---|
+| `PRAGMA journal_mode=WAL` | קוראים מקבילים לצד כותב אחד. בלעדיו — "database is locked" |
+| `check_same_thread=False` | Streamlit מריץ כל סשן ב-thread נפרד |
+| `timeout=10` | ממתין לנעילה במקום ליפול מיד |
+
+**Schema — five tables** plus `Assignments` (pair ownership is many-to-many) and `_meta`: `Mishmarim` · `Students` · `Tasks` · `Budget` · `Speakers`. `Speakers.source_type` separates `original_44` from `web_search`, so we can measure whether the index is actually growing past the original 44.
+
+`budget_used` is a **view** computed from `Budget`, never a stored column — a stored copy drifts from its source the moment an expense is edited.
+
+### Decision 2 — Migration & deprecation of the Markdown
+On first run `data_manager.migrate_and_archive_md()` reads `students_tasks.md`, loads it into SQLite, then **renames** it to `students_tasks_ARCHIVED.md`. From that moment **SQLite is the sole source of truth for tasks** — there is no second home. Rename rather than delete: it holds 193 hand-written task lines and a rename is reversible.
+
+> **Not yet executed.** The migration has been tested on a copy but not run against the repo, because `app.py` does not exist yet and the 21 work-files still point at `students_tasks.md`. Those pointers must be updated in the same step that runs the migration for real.
+
+### Decision 3 — Web search via DDGS, no paid APIs
+V1 uses the free **`ddgs`** library (formerly `duckduckgo-search`; the class is `DDGS`). `speaker_search.py` queries for real Israeli experts by Mishmar topic, pulls the top snippets, and hands them to the model to synthesise into speaker recommendations.
+
+Two operational facts to design around: it scrapes DuckDuckGo's endpoints, so it **rate-limits** (`RatelimitException`) and can break when their markup changes. Cache results, back off on failure, and degrade to showing the user the query — never fail the page.
 - **⚠️ Streamlit has no native RTL.** The entire UI is Hebrew. RTL is injected as CSS at app entry. Expect this to be the first thing that breaks.
 
 **Your engineering role:** help write the Python that bridges the data to the Streamlit UI — while staying the Mishmar Co-Manager, not turning into a generic coding assistant. Pedagogy and logistics remain the point; the app is the delivery mechanism.

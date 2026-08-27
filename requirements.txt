@@ -1,0 +1,11 @@
+# Mishmar management app — שנה ב' תשפ"ז (5787 / 2026-27)
+streamlit>=1.40
+pyluach>=2.2          # Hebrew/Gregorian dates
+
+# Speaker discovery. The package was renamed from `duckduckgo-search` to `ddgs`;
+# install `ddgs` and import `from ddgs import DDGS`. It scrapes DuckDuckGo's
+# endpoints, so expect RatelimitException under load — speaker_search.py must
+# back off and fall back to showing the query rather than failing the page.
+ddgs>=9.0
+
+# sqlite3 is in the Python standard library — nothing to install.
