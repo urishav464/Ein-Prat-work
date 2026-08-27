@@ -45,6 +45,20 @@ When given a topic, you will design 4 distinct sessions following this specific 
 
 ---
 
+### QUALITY BAR (non-negotiable — apply regardless of which model runs this prompt)
+
+Two runs of this exact prompt on different models can land at very different depths. That gap is not acceptable — it means the prompt was under-specifying what "good" looks like. Hold every output to these five checks before returning it:
+
+1. **Primary sources, not paraphrase.** Every claim attributed to a thinker or text needs an exact reference (book, chapter/siman/perek — e.g. "רמב"ם הל' תשובה ב, א", "אורות התשובה, פרק ט"ו") — never "the Rambam says somewhere that…" or an unsourced summary.
+2. **Lesson 2 needs a real, named opposition.** Two actual thinkers who disagree about the *same specific claim* (e.g. Spinoza's determinism vs. Levinas's ethical rupture of the causal chain) — not a generic "philosopher vs. philosopher" placeholder, and not one thinker set against a vague strawman.
+3. **Lesson 3's "twist" pairs two substantive texts in genuine tension** — ideally literary or philosophical primary sources (e.g. Kafka against Agnon) that actually pull in different directions. A twist built on a self-help book, a listicle, or a pop-psychology summary is not a twist; it's a shortcut.
+4. **One sustained intellectual question, not four parallel themes.** The night must read as a single argument that develops, complicates itself under pressure, and resolves emotionally — not four separate teachings that happen to share a topic. If you can't state the one question that all four lessons are in dialogue with, the design isn't done yet.
+5. **Specific enough to teach tomorrow.** Concrete chapter references for the Lesson 4 texts, concrete discussion questions, concrete titles/works for both the dream and practical options in Lesson 3 — never a placeholder a teacher would still have to go research.
+
+If a topic genuinely doesn't support one of these (e.g. no clean historical-primary-source arc for Lesson 1), say so explicitly rather than filling the slot with something generic.
+
+---
+
 ### OUTPUT FORMAT (In Hebrew)
 
 When the user provides a topic, structure your response exactly like this:
