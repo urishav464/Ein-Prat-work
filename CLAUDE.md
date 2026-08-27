@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-The educational toolkit for Midreshet Ein Prat. Long-term goal: every tool built here — the Mishmar generator, future lesson/hike generators — accessible to students and staff through a single chatbot. There is no application code today; this is a **content and documentation repository** (Markdown work-files, a generator prompt, one self-contained HTML invitation, and one PPTX deck). "Building" here means composing Hebrew documents and rendering HTML/PPTX to images for visual QA, not compiling software.
+The educational toolkit for Midreshet Ein Prat.
+
+**Direction (current):** the Mishmar programme is moving from local Markdown tracking to a **Streamlit web app** (Python frontend + backend), scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**. See `system_rules.md` for the app's architecture, roles, speaker-discovery mandate and budget model. No application code exists yet — the Markdown files below are still the live data, and are what the app will read and write through a single data seam.
+
+Everything else here remains a **content and documentation repository** (Markdown work-files, a generator prompt, one self-contained HTML invitation, one PPTX deck). "Building" in those areas means composing Hebrew documents and rendering HTML/PPTX to images for visual QA.
 
 ## Operating layer
 
-`system_rules.md` (repo root) is the operating layer for running the programme with students and staff — roles (Instructor Mode / Student Mode), the Mishmar philosophy, and the tracking protocol. **Read it whenever someone interacts as a student or as the instructor**, rather than as a repo developer. `students_tasks.md` (root) is the single source of truth for tasks.
+`system_rules.md` (repo root) is the operating layer for the Mishmar **web app** — hardcoded scope (תשפ"ז only), roles (Instructor `Uri` / Student), the 4-lesson pedagogy, the web-search speaker mandate, the budget model, and the tracking protocol. **Read it whenever someone interacts as a student or as the instructor**, rather than as a repo developer. `students_tasks.md` (root) is the single source of truth for tasks.
 
 The split: this file guides whoever *builds* the repo; `system_rules.md` guides whoever *operates* the programme. Sibling to `Mishmer-section/generator/mishmar-generator-prompt.md`, which is the topic-design tool.
 
@@ -17,7 +21,7 @@ The split: this file guides whoever *builds* the repo; `system_rules.md` guides 
 - **Language:** file/folder names in English, all content in Hebrew.
 - **Dates:** always give Hebrew + Gregorian together (e.g. `כ״א אלול תשפ״ו | 3.9.2026`).
 - **Never invent content.** Topics, speakers, texts, and dates come from the user. Unknown fields stay `TBD` — never filled in by guessing.
-- **Never invent a speaker.** Names come from `Mishmer-section/speakers/database.md`. A name from model knowledge must carry `⚠️ לאמת` plus the verification checklist (alive? still active? where do they live?) — never asserted as fact. **Never invent contact details**; unknown ones stay `TBD`. Watch the dead-thinker trap: the prompt is full of Spinoza, Levinas, Kafka, Agnon — those are texts to study, not candidates to invite.
+- **Never invent a speaker** — but never narrow to the database either. It is a growing index, not the candidate set; web search is a primary discovery path (see `system_rules.md` §4). Every proposed name needs a source. Existing entries live in `Mishmer-section/speakers/database.md`. A name from model knowledge must carry `⚠️ לאמת` plus the verification checklist (alive? still active? where do they live?) — never asserted as fact. **Never invent contact details**; unknown ones stay `TBD`. Watch the dead-thinker trap: the prompt is full of Spinoza, Levinas, Kafka, Agnon — those are texts to study, not candidates to invite.
 - **Flag inconsistencies, don't silently fix them.** If source material contradicts itself, note it and ask — don't resolve it on your own judgment. See `Mishmer-section/2025-26/mishmarim/` for the pattern (each archived work-file has an inline note where the real document had a discrepancy).
 - **Git:** all development happens on `claude/mishmer-generator-setup-h5gxqx`. `main` exists only as a base for Pull Requests — don't push work there directly.
 
