@@ -12,7 +12,7 @@ Everything else here remains a **content and documentation repository** (Markdow
 
 ## Operating layer
 
-`system_rules.md` (repo root) is the operating layer for the Mishmar **web app** — hardcoded scope (תשפ"ז only), roles (Instructor `Uri` / Student), the 4-lesson pedagogy, the web-search speaker mandate, the budget model, and the tracking protocol. **Read it whenever someone interacts as a student or as the instructor**, rather than as a repo developer. `students_tasks.md` (root) is the single source of truth for tasks.
+`system_rules.md` (repo root) is the operating layer for the Mishmar **web app** — hardcoded scope (תשפ"ז only), roles (Instructor `Uri` / Student), the 4-lesson pedagogy, the web-search speaker mandate, the budget model, and the tracking protocol. **Read it whenever someone interacts as a student or as the instructor**, rather than as a repo developer. Tasks live in SQLite (`mishmar.db`) via `data_manager.py`; `students_tasks.md` seeds it once and is then archived.
 
 The split: this file guides whoever *builds* the repo; `system_rules.md` guides whoever *operates* the programme. Sibling to `Mishmer-section/generator/mishmar-generator-prompt.md`, which is the topic-design tool.
 
@@ -41,14 +41,16 @@ Mishmer-section/
     ├── speakers.md                         # shared speaker pool for the season (avoid double-asking someone)
     ├── topic-ideas.md
     └── mishmarim/NN-slug/
-        ├── workfile.md                     # the hub: schedule, speakers, decoration (tasks live in /students_tasks.md)
+        ├── workfile.md                     # the hub: schedule, speakers, decoration (tasks live in the app DB)
         ├── draft.md                        # optional: deep planning via the generator
         ├── brief.md                        # optional: this Mishmar's special constraints
         ├── invitation.md / invitation.html
         └── sources/
 
-system_rules.md        # operating layer: roles, philosophy, tracking protocol
-students_tasks.md      # SINGLE source of truth for tasks — work-files point here, they don't hold tasks
+app.py                 # Streamlit frontend: login, admin dashboard, student Kanban
+data_manager.py        # the ONLY data seam — SQLite schema, migration, all queries
+system_rules.md        # operating layer: roles, philosophy, speaker mandate, budget
+students_tasks.md      # seed data for the DB migration; archived after first run
 
 Invitations/
 ├── README.md          # measured house style (font sizes as %, the translucent-panel device, real font names)
