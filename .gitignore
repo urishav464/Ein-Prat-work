@@ -1,12 +1,18 @@
-# SQLite database — runtime state, not source. Rebuilt by data_manager.bootstrap().
-*.db
-*.db-wal
-*.db-shm
-
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 
-# Streamlit secrets — API key, OAuth client secret. Never commit.
+# Streamlit secrets — API keys, OAuth client secret. Never commit.
 .streamlit/secrets.toml
+
+# Personal Claude Code files. settings.local.json is auto-gitignored by
+# current Claude Code; these entries are defense for collaborators on older
+# versions. CLAUDE.local.md is no longer supported and should not exist.
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Legacy: SQLite files from before the Supabase migration. None should exist.
+*.db
+*.db-wal
+*.db-shm
