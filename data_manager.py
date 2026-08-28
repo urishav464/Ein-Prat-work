@@ -948,6 +948,29 @@ def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
     return out
 
 
+def get_student_by_email(email: str, db_path: str = DB_PATH) -> Optional[dict]:
+    """Map a Google identity to a trainee row. Case-insensitive."""
+    if not (email or "").strip():
+        return None
+    rows = _query(
+        "SELECT * FROM Students WHERE LOWER(email) = LOWER(?)",
+        (email.strip(),),
+        db_path=db_path,
+    )
+    return rows[0] if rows else None
+
+
+def set_student_email(
+    student_id: int, email: Optional[str], db_path: str = DB_PATH
+) -> bool:
+    """Attach (or clear) the Google address a trainee signs in with."""
+    value = (email or "").strip() or None
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "UPDATE Students SET email = ? WHERE id = ?", (value, student_id)
+        ).rowcount > 0
+
+
 def get_overdue_tasks(today: Optional[_date] = None, db_path: str = DB_PATH) -> list[dict]:
     """Open tasks whose recommended closing date has passed, soonest first.
 

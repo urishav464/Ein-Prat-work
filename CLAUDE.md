@@ -17,7 +17,10 @@ The app migrates the content half's task tracking into SQLite. That migration is
 pip install -r requirements.txt
 streamlit run app.py                    # first run creates mishmar.db AND archives students_tasks.md
 python3 data_manager.py                 # bootstrap the DB without the UI; prints migration counts
+export ANTHROPIC_API_KEY=sk-ant-...     # only the chat page needs this; everything else works without
 ```
+
+Deployment (Google sign-in, the ephemeral-disk problem): **`DEPLOY.md`**.
 
 There is no test suite. Verify against a **sandboxed copy**, never the live repo — the migration is destructive (it renames `students_tasks.md`), so testing in place consumes the seed data:
 
@@ -42,7 +45,11 @@ streamlit run app.py --server.headless true --server.port 8555 &
 **`data_manager.py` is the only data seam.** Nothing else opens the database or reads the Markdown sources. It owns the schema, the migration, and every query.
 
 - **SQLite in WAL mode**, `check_same_thread=False`, `timeout=10`. Not incidental: Streamlit serves each session on its own thread and reruns the whole script on every interaction, so without WAL the app hits "database is locked" as soon as two people use it.
-- **Eight tables**: `Mishmarim`, `Students`, `Tasks`, `Budget`, `Speakers`, plus `Assignments` (Mishmar ownership is a *pair*, so it is many-to-many), `_meta` (migration guard) and `SearchCache` (web-search responses).
+- **Eleven tables**: `Mishmarim`, `Students`, `Tasks`, `Budget`, `Speakers`, `Lessons`, `Feedback`, `ChatMessages`, plus `Assignments` (Mishmar ownership is a *pair*, so it is many-to-many), `_meta` (migration guard + schema version) and `SearchCache`.
+
+- **Schema changes go in `MIGRATIONS`, never into `SCHEMA`.** `CREATE TABLE IF NOT EXISTS` adds a missing table but never a missing *column*, so anything past the base schema is a numbered step applied once and recorded in `_meta.schema_version`. Bump `SCHEMA_VERSION` with it.
+- **`Lessons` is deliberately not four rows.** `slot_order` is 1..N and `lesson_role` is free text, because the 2025-26 archive holds a ceremony plus two lessons, and a song circle. The four-lesson arc is the default the generator emits, not a constraint the schema enforces.
+- **Task deadlines are derived, never stored by hand** — `classify_task()` maps the text to a category, `compute_due_date()` offsets from the Mishmar date (topic −21d, speakers −14d, invitation/refreshments/decoration −7d). The opening deck calls these *"המלצה — לא חוק"*, so `annotate_deadline()` phrases them as nudges; only the instructor dashboard treats a passed date as actionable.
 - **`budget_used` is a view**, never a stored column — a stored copy drifts from the `Budget` rows it derives from.
 - **`Tasks.student_id` is nullable**: `NULL` means the task belongs to the Mishmar and therefore to both owners in the pair, which is how the task lists were actually written.
 - **`Speakers.source_type`** separates `original_44` (seeded from `Mishmer-section/speakers/database.md`) from `web_search`, so growth of the index is measurable.
@@ -50,6 +57,10 @@ streamlit run app.py --server.headless true --server.port 8555 &
 **Migration & deprecation.** `migrate_and_archive_md()` parses `students_tasks.md` — which carries dates, type, ownership *and* tasks, so it seeds the whole schema — loads it into SQLite, then **renames** it to `students_tasks_ARCHIVED.md`. From then on SQLite is the sole source of truth. Guarded by a `_meta` flag, so it is safe to call on every start. Rename rather than delete: it holds 193 hand-written task lines.
 
 **`speaker_search.py`** is the speaker-discovery layer. Two paths, and the distinction is the whole design: `search_candidates()` **discovers** — broad queries (including `site:ac.il`) whose results are mined for names by `extract_names()`; `verify_speaker()` **verifies** one name against the `⚠️ לאמת` checklist. Discovery is what surfaces a lecturer no model has heard of, so it is not optional garnish on verification. Synthesis happens in chat via `format_for_chat()` — no paid API in v1. Every network call funnels through one `_fetch()` so the cache, the 4s throttle and the cooldown ladder cannot be bypassed.
+
+**`chat_agent.py`** is the conversational layer, and it is where the pedagogy and the app finally meet: the generator prompt is loaded from disk as the system prompt rather than pasted into an external chat. Nine tools read and write the real data. **Every writing tool is bound to the Mishmar in the session context — the model never supplies a `mishmar_id`**, so a trainee's chat cannot reach another pair's Mishmar even if the conversation asks it to. The ~20k-char stable half of the system prompt carries the cache breakpoint; live context sits after it.
+
+**`archive.py`** is cross-year memory. Two traps it already hit: this season's folders are unfilled templates and must not be searched as history, and every work-file inherits a status legend containing `ממתין לתשובה`, so an unfiltered search for a Mishmar on תשובה matched all 21 templates. Strip boilerplate before matching.
 
 **`app.py`** renders only. Bootstrap is wrapped in `@st.cache_resource` — uncached, it would reopen the database on every click. Login is name-based with no password (`Uri`/`uri`/`אורי` → admin); a deliberate v1 decision, and the login screen carries the warning. **Run locally only** while the speaker index holds contact details.
 
@@ -67,6 +78,7 @@ The split: this file guides whoever *builds* the repo; `system_rules.md` guides 
 - **Never invent a speaker — but never narrow to the database either.** It is a growing index, not the candidate set; web search is a primary discovery path (`system_rules.md` §4). Every proposed name needs a source. A name from model knowledge carries `⚠️ לאמת` plus the checklist (alive? still active? where do they live?). Watch the dead-thinker trap: the generator prompt is full of Spinoza, Levinas, Kafka, Agnon — those are texts to study, not people to invite.
 - **Flag inconsistencies, don't silently fix them.** See `Mishmer-section/2025-26/mishmarim/` for the pattern, and the open `ה7` flag in `Mishmer-section/speakers/database.md` (up to four different people named אורי — the standing instruction is *"אל תאחד אותם על דעתך"*).
 - **Budget is tracking, not enforcement.** ₪500 per Mishmar is an average covering speakers *and* refreshments. Overrun on one Mishmar is not an error — it draws from the season-wide line and cheap nights balance it. There is deliberately no season ceiling.
+- **Two auth modes.** No `[auth]` in `.streamlit/secrets.toml` → name-only login, for local development. `[auth]` present → Google OIDC, and the name box is removed entirely; leaving it would keep the "type Uri" bypass open next to real auth.
 - **Git:** all development happens on `claude/mishmer-generator-setup-h5gxqx`. `main` exists only as a base for Pull Requests — don't push work there directly.
 
 ## Repository structure

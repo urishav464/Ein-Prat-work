@@ -7,3 +7,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Streamlit secrets — API key, OAuth client secret. Never commit.
+.streamlit/secrets.toml

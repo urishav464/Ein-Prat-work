@@ -108,20 +108,83 @@ def _init_session() -> None:
 
 
 def logout() -> None:
+    """Clear the session. Under Google auth, also end the OIDC session."""
     for key in ("role", "user_name", "student_id", "search_result",
                 "verify_name", "verify_cache", "nav",
                 "chat_history", "chat_loaded_for", "chat_mishmar"):
         st.session_state.pop(key, None)
+    if auth_configured() and getattr(st.user, "is_logged_in", False):
+        st.logout()
+
+
+def auth_configured() -> bool:
+    """True when Google sign-in is set up in .streamlit/secrets.toml.
+
+    Deployment needs real auth; local development should not. When [auth] is
+    present we use Google and the name box is switched OFF entirely — leaving
+    it available would mean anyone could still bypass sign-in by typing "Uri".
+    """
+    try:
+        return "auth" in st.secrets and hasattr(st, "login")
+    except Exception:
+        return False
+
+
+def _admin_emails() -> set[str]:
+    try:
+        raw = st.secrets.get("admin_emails", [])
+    except Exception:
+        raw = []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {e.strip().lower() for e in raw if e and e.strip()}
+
+
+def show_google_login() -> None:
+    st.title("🕯️ ניהול משמרים")
+    st.caption('שנה ב׳ · תשפ״ז · מדרשת עין פרת')
+
+    if not getattr(st.user, "is_logged_in", False):
+        st.write("היכנסו עם חשבון הגוגל שלכם.")
+        st.button("כניסה עם Google", on_click=st.login, width="stretch")
+        return
+
+    email = (getattr(st.user, "email", "") or "").strip()
+    if email.lower() in _admin_emails():
+        st.session_state.role = "admin"
+        st.session_state.user_name = getattr(st.user, "name", None) or "Uri"
+        st.rerun()
+
+    match = dm.get_student_by_email(email)
+    if match:
+        st.session_state.role = "student"
+        st.session_state.user_name = match["name"]
+        st.session_state.student_id = match["id"]
+        st.rerun()
+
+    # Signed in with Google, but nobody has linked this address to a trainee.
+    st.warning(
+        f"התחברת בתור **{_clean(email)}**, אבל הכתובת הזו עדיין לא משויכת "
+        "לאף חניך במערכת."
+    )
+    st.caption("בקשו מהמדריך לשייך את הכתובת בלוח הבקרה, תחת «שיוך חשבונות».")
+    st.button("התנתק", on_click=st.logout)
 
 
 def show_login() -> None:
+    if auth_configured():
+        show_google_login()
+        return
+
     st.title("🕯️ ניהול משמרים")
     st.caption('שנה ב׳ · תשפ״ז · מדרשת עין פרת')
 
     st.warning(
-        "**גרסה 1 — ללא אימות.** ההזדהות היא בשם בלבד, בלי סיסמה. "
+        "**מצב פיתוח — ללא אימות.** ההזדהות היא בשם בלבד, בלי סיסמה. "
         "מי שמקליד «Uri» מקבל גישה מלאה לכל המשימות ולפרטי הקשר במאגר. "
-        "להרצה מקומית בלבד — לא לפרסם בכתובת חיצונית."
+        "להרצה מקומית בלבד. לפריסה חיצונית — הגדירו `[auth]` "
+        "ב-`.streamlit/secrets.toml` (ראו `secrets.toml.example`), "
+        "וההתחברות תעבור אוטומטית ל-Google."
     )
 
     students = dm.get_students()
@@ -274,6 +337,26 @@ def show_admin_dashboard() -> None:
                         dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
                     if c3.button("→ הושלם", key=f"ov-dn-{t['id']}"):
                         dm.update_task_status(t["id"], "DONE"); st.rerun()
+
+    if auth_configured():
+        st.divider()
+        st.subheader("שיוך חשבונות")
+        st.caption(
+            "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
+            "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
+        )
+        with st.form("emails"):
+            students = [x for x in dm.get_students() if x["role"] == "student"]
+            entered = {}
+            for stu in students:
+                entered[stu["id"]] = st.text_input(
+                    stu["name"], value=stu.get("email") or "",
+                    key=f"em-{stu['id']}", placeholder="name@gmail.com")
+            if st.form_submit_button("שמור שיוכים"):
+                n = 0
+                for sid, addr in entered.items():
+                    dm.set_student_email(sid, addr); n += 1
+                st.toast(f"נשמרו {n} שיוכים"); st.rerun()
 
     st.divider()
     st.subheader("התקדמות החניכים")
