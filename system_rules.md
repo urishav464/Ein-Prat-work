@@ -45,7 +45,9 @@ Three settings are what actually make this safe, and they are not optional:
 ### Decision 2 — Migration & deprecation of the Markdown
 On first run `data_manager.migrate_and_archive_md()` reads `students_tasks.md`, loads it into SQLite, then **renames** it to `students_tasks_ARCHIVED.md`. From that moment **SQLite is the sole source of truth for tasks** — there is no second home. Rename rather than delete: it holds 193 hand-written task lines and a rename is reversible.
 
-> **Not yet executed.** The migration has been tested on a copy but not run against the repo, because `app.py` does not exist yet and the 21 work-files still point at `students_tasks.md`. Those pointers must be updated in the same step that runs the migration for real.
+> **Not yet executed against the repo.** Tested repeatedly on sandboxed copies. `app.py` now exists and the work-files and template already point at the app, so the first real `streamlit run app.py` will archive `students_tasks.md` cleanly.
+
+**Speakers after the migration — two files, two jobs.** `Mishmer-section/speakers/database.md` stays as the **seed and the paste-block** for running the generator prompt in an external chat window. But once the app is running, the live index is the `Speakers` table: that is where web-search finds, feedback, and status changes are written. Do not ask a trainee to hand-edit the Markdown.
 
 ### Decision 3 — Web search via DDGS, no paid APIs
 V1 uses the free **`ddgs`** library (formerly `duckduckgo-search`; the class is `DDGS`). Implemented in `speaker_search.py`.

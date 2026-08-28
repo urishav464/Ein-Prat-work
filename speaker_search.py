@@ -175,14 +175,19 @@ def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[
             query=query,
             retry_after=secs,
         ) from exc
-    except (TimeoutException, DDGSException, Exception) as exc:
-        # Includes the proxy/network refusals seen in sandboxed environments.
-        # Cached as a failure, which expires in an hour rather than in 60 days.
+    except (TimeoutException, DDGSException, OSError) as exc:
+        # KNOWN search/network failures only — this covers the proxy refusals
+        # seen in sandboxed environments. Cached as a failure, which expires in
+        # an hour rather than in 60 days.
         dm.cache_put(query, [], ok=False, backend=BACKENDS, region=REGION, db_path=db_path)
         raise SearchUnavailable(
             f"החיפוש נכשל: {type(exc).__name__}. אפשר לחפש ידנית בקישור למטה.",
             query=query,
         ) from exc
+    # Anything else — a TypeError, an AttributeError, a bug in this module — is
+    # deliberately NOT caught. Swallowing it here would cache a real programming
+    # error as a network failure and make it look identical to a blocked proxy,
+    # which is the hardest kind of bug to find.
 
     normalised = [
         {
@@ -490,6 +495,7 @@ def verify_speaker(
 
     blob = " ".join(f"{e.get('title','')} {e.get('body','')}" for e in evidence)
     recent_years = sorted(set(re.findall(r"\b(202[3-9])\b", blob)))
+    notes = _index_note(name, db_path=db_path)   # one lookup, used twice below
 
     return {
         "name": name,
@@ -498,7 +504,7 @@ def verify_speaker(
         "evidence": evidence[:12],
         "errors": errors,
         "flags": _flags_for(name, evidence),
-        "index_notes": _index_note(name, db_path=db_path),
+        "index_notes": notes,
         "recent_years": recent_years,
         # Deliberately NOT auto-decided. The module gathers evidence; a human
         # (or the model in chat) judges it. Contact details are never scraped.
@@ -508,8 +514,7 @@ def verify_speaker(
             "היכן מתגורר": "⚪ לא ידוע — לברר",
             "מרצה בפועל בפני קהל": "⚠️ לבדוק בראיות למטה",
             "לא פנינו אליו השנה": (
-                "✅ לא נמצא במאגר" if not _index_note(name, db_path=db_path)
-                else "⚠️ מופיע במאגר — ראו הערות"
+                "⚠️ מופיע במאגר — ראו הערות" if notes else "✅ לא נמצא במאגר"
             ),
             "פרטי קשר": "TBD — לעולם לא ממולא אוטומטית",
         },

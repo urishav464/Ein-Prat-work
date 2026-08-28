@@ -107,9 +107,8 @@ def _init_session() -> None:
 
 def logout() -> None:
     for key in ("role", "user_name", "student_id", "search_result",
-                "verify_name", "nav"):
+                "verify_name", "verify_cache", "nav"):
         st.session_state.pop(key, None)
-    st.cache_data.clear()
 
 
 def show_login() -> None:
@@ -365,6 +364,7 @@ def show_speaker_search() -> None:
         with st.spinner("מחפש… (יש השהיה מכוונת בין שאילתות כדי לא להיחסם)"):
             st.session_state["search_result"] = ss.search_candidates(topic, lesson)
         st.session_state.pop("verify_name", None)
+        st.session_state.pop("verify_cache", None)
 
     result = st.session_state.get("search_result")
     if not result:
@@ -413,8 +413,14 @@ def show_speaker_search() -> None:
         st.divider()
         name = st.session_state["verify_name"]
         st.subheader(f"אימות — {name}")
-        with st.spinner("מאמת…"):
-            v = ss.verify_speaker(name, topic=result["topic"])
+        # Cache per name. Without this the verification re-ran on every rerun —
+        # i.e. on every unrelated button click on this page — which is exactly
+        # the burst pattern the throttle exists to prevent.
+        cache = st.session_state.setdefault("verify_cache", {})
+        if name not in cache:
+            with st.spinner("מאמת…"):
+                cache[name] = ss.verify_speaker(name, topic=result["topic"])
+        v = cache[name]
         for k, val in v["checklist"].items():
             st.markdown(f"- **{k}:** {val}")
         for f in v.get("flags", []):
