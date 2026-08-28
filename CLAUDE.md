@@ -42,12 +42,14 @@ streamlit run app.py --server.headless true --server.port 8555 &
 **`data_manager.py` is the only data seam.** Nothing else opens the database or reads the Markdown sources. It owns the schema, the migration, and every query.
 
 - **SQLite in WAL mode**, `check_same_thread=False`, `timeout=10`. Not incidental: Streamlit serves each session on its own thread and reruns the whole script on every interaction, so without WAL the app hits "database is locked" as soon as two people use it.
-- **Seven tables**: `Mishmarim`, `Students`, `Tasks`, `Budget`, `Speakers`, plus `Assignments` (Mishmar ownership is a *pair*, so it is many-to-many) and `_meta` (migration guard).
+- **Eight tables**: `Mishmarim`, `Students`, `Tasks`, `Budget`, `Speakers`, plus `Assignments` (Mishmar ownership is a *pair*, so it is many-to-many), `_meta` (migration guard) and `SearchCache` (web-search responses).
 - **`budget_used` is a view**, never a stored column — a stored copy drifts from the `Budget` rows it derives from.
 - **`Tasks.student_id` is nullable**: `NULL` means the task belongs to the Mishmar and therefore to both owners in the pair, which is how the task lists were actually written.
 - **`Speakers.source_type`** separates `original_44` (seeded from `Mishmer-section/speakers/database.md`) from `web_search`, so growth of the index is measurable.
 
 **Migration & deprecation.** `migrate_and_archive_md()` parses `students_tasks.md` — which carries dates, type, ownership *and* tasks, so it seeds the whole schema — loads it into SQLite, then **renames** it to `students_tasks_ARCHIVED.md`. From then on SQLite is the sole source of truth. Guarded by a `_meta` flag, so it is safe to call on every start. Rename rather than delete: it holds 193 hand-written task lines.
+
+**`speaker_search.py`** is the speaker-discovery layer. Two paths, and the distinction is the whole design: `search_candidates()` **discovers** — broad queries (including `site:ac.il`) whose results are mined for names by `extract_names()`; `verify_speaker()` **verifies** one name against the `⚠️ לאמת` checklist. Discovery is what surfaces a lecturer no model has heard of, so it is not optional garnish on verification. Synthesis happens in chat via `format_for_chat()` — no paid API in v1. Every network call funnels through one `_fetch()` so the cache, the 4s throttle and the cooldown ladder cannot be bypassed.
 
 **`app.py`** renders only. Bootstrap is wrapped in `@st.cache_resource` — uncached, it would reopen the database on every click. Login is name-based with no password (`Uri`/`uri`/`אורי` → admin); a deliberate v1 decision, and the login screen carries the warning. **Run locally only** while the speaker index holds contact details.
 
@@ -116,6 +118,10 @@ Never suggest filters (sharpen, upscale, texture) as a substitute for actually g
 from pyluach.dates import GregorianDate
 GregorianDate(2026, 9, 3).to_heb().hebrew_date_string()
 ```
+
+**Speaker search — the burst, not the volume, is the constraint.** A season is only ~300-600 queries, but a pair building one Mishmar fires 25 in three minutes, which is what trips DuckDuckGo's limiter. Hence: SQLite cache (60 days for a success, **1 hour for a failure** — otherwise one blocked afternoon poisons the cache for the season), a module-level `threading.Lock` enforcing a 4s gap (all trainees share one machine and therefore one IP, so a process-wide lock genuinely gates everyone), a 60s→5m→15m cooldown ladder, and backend rotation across the eight `ddgs` text backends. Every failure degrades to a clickable manual-search link rather than an exception.
+
+**Search the `notes` column, not just `expertise_topics`.** The parser files "מה העביר אצלנו" into `notes`, and that is often the strongest topical signal — גדי תורג'מן is filed under "הלכה, מחשבת הרמב"ם" while his notes read "מועמד טבעי לכל משמר תשובה". Searching topics alone hid exactly the person a תשובה search most wanted.
 
 **Web search is blocked in this sandbox.** The `ddgs` package (renamed from `duckduckgo-search`; the class is `DDGS`) fails here with `403 Forbidden` on the proxy CONNECT — it defaults to a Google backend, and the DuckDuckGo backend is blocked too. Code depending on it must degrade gracefully and cannot be verified live from this environment: test the failure path and the caching, and leave live verification to the user's machine.
 

@@ -48,9 +48,22 @@ On first run `data_manager.migrate_and_archive_md()` reads `students_tasks.md`, 
 > **Not yet executed.** The migration has been tested on a copy but not run against the repo, because `app.py` does not exist yet and the 21 work-files still point at `students_tasks.md`. Those pointers must be updated in the same step that runs the migration for real.
 
 ### Decision 3 — Web search via DDGS, no paid APIs
-V1 uses the free **`ddgs`** library (formerly `duckduckgo-search`; the class is `DDGS`). `speaker_search.py` queries for real Israeli experts by Mishmar topic, pulls the top snippets, and hands them to the model to synthesise into speaker recommendations.
+V1 uses the free **`ddgs`** library (formerly `duckduckgo-search`; the class is `DDGS`). Implemented in `speaker_search.py`.
 
-Two operational facts to design around: it scrapes DuckDuckGo's endpoints, so it **rate-limits** (`RatelimitException`) and can break when their markup changes. Cache results, back off on failure, and degrade to showing the user the query — never fail the page.
+**Two parallel paths, neither a fallback for the other:**
+
+| | פונקציה | מה היא עושה |
+|---|---|---|
+| **גילוי** | `search_candidates(topic, lesson)` | יורה שאילתות רחבות (כולל `site:ac.il`) ו**מחלצת שמות מהתוצאות**. זה מה שמעלה מרצה שאף אחד לא הכיר — פוסט-דוקטורנט חדש, חוקר מצוין ולא מפורסם |
+| **אימות** | `verify_speaker(name, topic)` | ממכן את צ'קליסט `⚠️ לאמת` על שם מכל מקור — חי? עדיין בתחום? איפה גר? מרצה בפועל? |
+
+חילוץ השמות (`extract_names`) הוא מה שהופך את הגילוי לאמיתי. בלעדיו המודול יכול רק לאמת שמות שמישהו כבר הכיר — כלומר להציע שוב ושוב את אותם מפורסמים.
+
+**הסינתזה נעשית בצ'אט, לא באפליקציה.** `format_for_chat()` מייצר בלוק מוכן להעתקה. אין קריאת API בתשלום ב-v1.
+
+**מה שנבנה נגד חסימות** — הצוואר הוא *פרץ*, לא נפח (עונה שלמה ≈ 300–600 שאילתות, אבל זוג חניכים יורה 25 בשלוש דקות): מטמון ב-SQLite (60 יום להצלחה, **שעה בלבד לכישלון**, אחרת תקלה רגעית מרעילה את המטמון לחודשיים) · מרווח מינימלי של 4 שניות שנאכף ב-`threading.Lock` ברמת המודול · cooldown מדורג 60s→5m→15m · סבב backends. **כל חסימה נופלת רכות לקישור חיפוש ידני** — לעולם לא נופלים על הדף.
+
+> **המכונה משותפת** — כל החניכים מאחורי IP אחד, ולכן ה-throttle גלובלי לתהליך והמטמון משותף לכולם.
 - **⚠️ Streamlit has no native RTL.** The entire UI is Hebrew. RTL is injected as CSS at app entry. Expect this to be the first thing that breaks.
 
 **Your engineering role:** help write the Python that bridges the data to the Streamlit UI — while staying the Mishmar Co-Manager, not turning into a generic coding assistant. Pedagogy and logistics remain the point; the app is the delivery mechanism.
@@ -174,9 +187,9 @@ That feeds the running total, so at any point in the year Uri can see total Mish
 
 | מידע | המקור |
 |---|---|
-| משימות (קנבן) | `students_tasks.md` |
+| משימות (קנבן) | SQLite (`mishmar.db`) דרך `data_manager.py` |
 | תאריכים, שיבוץ, פנימי/חיצוני | `Mishmer-section/2026-27/schedule.md` |
-| מרצים | `Mishmer-section/speakers/database.md` + חיפוש רשת |
+| מרצים | טבלת `Speakers` + `speaker_search.py` (גילוי ואימות) |
 | פניות שכבר נעשו השנה | `Mishmer-section/2026-27/speakers.md` |
 | תוכן המשמר עצמו | `Mishmer-section/2026-27/mishmarim/NN-*/workfile.md` |
 

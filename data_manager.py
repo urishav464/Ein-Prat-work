@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS Speakers (
     UNIQUE (name, source_type)
 );
 
+-- Web-search response cache. All trainees share one machine and therefore one
+-- IP, so the same query typed by two people must cost one network call, not
+-- two. Keyed by a hash of query+backend+region.
+CREATE TABLE IF NOT EXISTS SearchCache (
+    query_hash   TEXT PRIMARY KEY,
+    query_text   TEXT NOT NULL,
+    results_json TEXT NOT NULL,
+    -- 0 = the call failed or came back empty. Cached too, but for an hour
+    -- rather than for weeks: without this a single blocked afternoon would
+    -- poison the cache with empty results for the rest of the season.
+    ok           INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS _meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -175,6 +189,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_mishmar  ON Tasks(mishmar_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status   ON Tasks(status);
 CREATE INDEX IF NOT EXISTS idx_budget_mishmar ON Budget(mishmar_id);
 CREATE INDEX IF NOT EXISTS idx_speakers_src   ON Speakers(source_type);
+CREATE INDEX IF NOT EXISTS idx_cache_created  ON SearchCache(created_at);
 
 -- budget_used is deliberately NOT a stored column on Mishmarim. A stored copy
 -- drifts from the Budget rows it is derived from the moment anyone edits an
@@ -656,12 +671,123 @@ def search_speakers_by_topic(
     speaker_search.py must still run a live web search alongside this. If every
     name proposed came out of this function, the search was too narrow.
     """
-    sql = "SELECT * FROM Speakers WHERE (expertise_topics LIKE ? OR name LIKE ?)"
-    params: list[Any] = [f"%{topic}%", f"%{topic}%"]
+    # `notes` is searched too, and that is load-bearing rather than generous:
+    # the parser puts "מה העביר אצלנו" there, which is often the strongest
+    # topical signal we hold. גדי תורג'מן is filed under "הלכה, מחשבת הרמב"ם"
+    # but his notes read "הלכות תשובה ברמב״ם · מועמד טבעי לכל משמר תשובה" —
+    # searching topics alone hides exactly the person we most wanted.
+    sql = """SELECT * FROM Speakers
+             WHERE (expertise_topics LIKE ? OR name LIKE ? OR notes LIKE ?)"""
+    params: list[Any] = [f"%{topic}%", f"%{topic}%", f"%{topic}%"]
     if lesson:
-        sql += " AND lesson_fit LIKE ?"
+        # An unrecorded lesson_fit means "we never wrote it down", not "not
+        # suitable" — dropping those silently would bury real candidates.
+        sql += " AND (lesson_fit LIKE ? OR lesson_fit IS NULL OR lesson_fit = 'TBD')"
         params.append(f"%{lesson}%")
     return _query(sql + " ORDER BY source_type, name", params, db_path=db_path)
+
+
+def get_speaker_by_name(name: str, db_path: str = DB_PATH) -> list[dict]:
+    """Every index row matching this name.
+
+    Returns a LIST, not a single row, and that is deliberate: flag ה7 in
+    Mishmer-section/speakers/database.md records up to four different people
+    called אורי, with the standing instruction "אל תאחד אותם על דעתך". Handing
+    back one row would be exactly that merge. The caller shows all of them.
+    """
+    return _query(
+        "SELECT * FROM Speakers WHERE name = ? OR name LIKE ? ORDER BY source_type",
+        (name, f"%{name}%"),
+        db_path=db_path,
+    )
+
+
+# --------------------------------------------------------------------------
+# Search cache — used by speaker_search.py
+# --------------------------------------------------------------------------
+
+CACHE_TTL_DAYS_OK = 60      # speaker facts are stable for months
+CACHE_TTL_HOURS_FAIL = 1    # a failure is transient; do not cache it for weeks
+
+
+def _cache_key(query: str, backend: str = "", region: str = "") -> str:
+    import hashlib
+
+    return hashlib.sha256(f"{query}|{backend}|{region}".encode("utf-8")).hexdigest()
+
+
+def cache_get(
+    query: str,
+    backend: str = "",
+    region: str = "",
+    db_path: str = DB_PATH,
+) -> Optional[list[dict]]:
+    """Return cached results, or None on a miss or an expired entry."""
+    import json
+
+    rows = _query(
+        "SELECT results_json, ok, created_at FROM SearchCache WHERE query_hash = ?",
+        (_cache_key(query, backend, region),),
+        db_path=db_path,
+    )
+    if not rows:
+        return None
+
+    row = rows[0]
+    # Two different lifetimes, chosen by whether the call actually worked.
+    if row["ok"]:
+        expiry = f"-{CACHE_TTL_DAYS_OK} days"
+    else:
+        expiry = f"-{CACHE_TTL_HOURS_FAIL} hours"
+
+    fresh = _query(
+        "SELECT 1 AS ok FROM SearchCache WHERE query_hash = ? AND created_at > datetime('now', ?)",
+        (_cache_key(query, backend, region), expiry),
+        db_path=db_path,
+    )
+    if not fresh:
+        return None
+    return json.loads(row["results_json"])
+
+
+def cache_put(
+    query: str,
+    results: list[dict],
+    ok: bool = True,
+    backend: str = "",
+    region: str = "",
+    db_path: str = DB_PATH,
+) -> None:
+    import json
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO SearchCache
+               (query_hash, query_text, results_json, ok, created_at)
+               VALUES (?,?,?,?, datetime('now'))""",
+            (
+                _cache_key(query, backend, region),
+                query,
+                json.dumps(results, ensure_ascii=False),
+                1 if ok else 0,
+            ),
+        )
+
+
+def cache_stats(db_path: str = DB_PATH) -> dict:
+    rows = _query(
+        """SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS ok_rows,
+                  MAX(created_at) AS newest
+           FROM SearchCache""",
+        db_path=db_path,
+    )
+    r = rows[0] if rows else {}
+    return {
+        "total": r.get("total") or 0,
+        "ok": r.get("ok_rows") or 0,
+        "newest": r.get("newest"),
+    }
 
 
 def get_speaker_stats(db_path: str = DB_PATH) -> dict:

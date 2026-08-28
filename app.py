@@ -18,6 +18,7 @@ import html
 import streamlit as st
 
 import data_manager as dm
+import speaker_search as ss
 
 # --------------------------------------------------------------------------
 # Page config must be the first Streamlit call.
@@ -105,8 +106,9 @@ def _init_session() -> None:
 
 
 def logout() -> None:
-    for key in ("role", "user_name", "student_id"):
-        st.session_state[key] = None
+    for key in ("role", "user_name", "student_id", "search_result",
+                "verify_name", "nav"):
+        st.session_state.pop(key, None)
     st.cache_data.clear()
 
 
@@ -283,6 +285,157 @@ def show_student_view(student_name: str) -> None:
                         st.rerun()
 
 
+def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
+    """One discovered candidate: name, confidence, flags, evidence, actions."""
+    name = entry["name"]
+    conf = {"high": "🟢 ודאות גבוהה", "medium": "🟡 ודאות בינונית", "low": "🟠 ודאות נמוכה"}
+    bits = [conf.get(entry.get("confidence", "low"), "")]
+    if entry.get("already_known"):
+        bits.append("‼️ כבר במאגר — בדקו סטטוס לפני פנייה")
+    bits.extend(entry.get("flags", []))
+
+    st.markdown(f"**{_clean(name)}** — " + " · ".join(b for b in bits if b))
+    for note in entry.get("index_notes", []):
+        st.caption(note)
+
+    for ev in entry.get("evidence", [])[:2]:
+        href = ev.get("href", "")
+        if href:
+            st.caption(f"[{_clean(ev.get('title', href))[:90]}]({href})")
+
+    c1, c2, _ = st.columns([1, 1, 3])
+    if c1.button("הוסף למאגר", key=f"add-{idx}-{name}"):
+        # Explicit write-back only. Auto-writing every search result would
+        # grow the index fast and fill it with noise; this keeps
+        # source_type='web_search' meaning "a human decided this is a person".
+        href = entry["evidence"][0].get("href") if entry.get("evidence") else None
+        new_id = dm.add_new_speaker(
+            name=name,
+            expertise_topics=topic,
+            verification_url=href,
+            source_type="web_search",
+            lesson_fit=lesson,
+            notes="נמצא בחיפוש רשת · ⚠️ לאמת לפני פנייה",
+        )
+        st.toast(f"«{name}» נוסף למאגר" if new_id else f"«{name}» כבר קיים במאגר")
+    if c2.button("אמת", key=f"ver-{idx}-{name}"):
+        st.session_state["verify_name"] = name
+
+
+def show_speaker_search() -> None:
+    st.title("חיפוש מרצים")
+    st.caption("שני נתיבים מקבילים: המאגר המקומי, וגילוי שמות חדשים מהרשת")
+
+    status = ss.search_status()
+    cache = dm.cache_stats()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("קריאות רשת (בסשן)", status["network_calls"])
+    c2.metric("נחסך מהמטמון", status["cache_hits"])
+    c3.metric("שאילתות במטמון", cache["total"])
+    if not status["available"]:
+        st.warning(
+            f"⏳ מנוע החיפוש חסם אותנו זמנית. ממתינים "
+            f"{status['cooldown_remaining_sec']} שניות. "
+            "בינתיים אפשר להשתמש בקישורי החיפוש הידני שמופיעים בתוצאות."
+        )
+
+    default_topic = ""
+    if st.session_state.get("student_id"):
+        for m in dm.get_mishmarim_for_student(st.session_state["student_id"]):
+            if m.get("topic"):
+                default_topic = m["topic"]
+                break
+
+    with st.form("speaker_search"):
+        topic = st.text_input("נושא המשמר", value=default_topic, placeholder="למשל: תשובה")
+        lesson = st.selectbox(
+            "לאיזה שיעור?",
+            options=["1", "2", "3", "4"],
+            format_func=lambda k: (
+                f"{k} · {ss.LESSON_PROFILES[k]['label']}" if k in ss.LESSON_PROFILES
+                else "4 · נחיתה אל הלב (ללא מרצה חיצוני)"
+            ),
+        )
+        go = st.form_submit_button("חפש")
+
+    # The search fires ONLY here, and the result is kept in session state.
+    # Streamlit reruns this whole script on every click, so calling the search
+    # at render time would re-fire it on every button press in the page.
+    if go and topic.strip():
+        with st.spinner("מחפש… (יש השהיה מכוונת בין שאילתות כדי לא להיחסם)"):
+            st.session_state["search_result"] = ss.search_candidates(topic, lesson)
+        st.session_state.pop("verify_name", None)
+
+    result = st.session_state.get("search_result")
+    if not result:
+        st.info("הזינו נושא ובחרו שיעור כדי להתחיל.")
+        return
+
+    if result.get("skipped"):
+        st.info(result["reason"])
+        return
+
+    st.divider()
+    st.subheader(f"📗 מהמאגר ({len(result['index_hits'])})")
+    if result["index_hits"]:
+        for r in result["index_hits"]:
+            st.markdown(
+                f"**{_clean(r['name'])}** — {_clean(r.get('expertise_topics') or 'תחום לא רשום')} · "
+                f"אזור: {r.get('region') or '⚪ לא ידוע'} · סטטוס: {r.get('status') or '—'}"
+            )
+            if "סירב" in (r.get("status") or ""):
+                st.caption("↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב בתקופה אחרת")
+    else:
+        st.caption("אין התאמות במאגר לנושא הזה.")
+
+    st.divider()
+    st.subheader(f"🌐 שמות חדשים מהרשת ({len(result['web_names'])})")
+    st.caption(
+        "כל שם כאן הוא ⚠️ **לאמת** — הוא חולץ מתוצאות חיפוש, לא מהמאגר. "
+        "ודאו שהאדם חי, פעיל, ועוסק בתחום לפני פנייה. פרטי קשר לעולם לא ממולאים אוטומטית."
+    )
+    if result["web_names"]:
+        for i, entry in enumerate(result["web_names"][:20]):
+            _speaker_card(entry, result["topic"], result["lesson"], i)
+            st.divider()
+    else:
+        st.caption("לא חולצו שמות מהתוצאות.")
+
+    if result.get("errors"):
+        st.subheader("⚠️ שאילתות שלא רצו — הריצו ידנית")
+        for err in result["errors"]:
+            st.markdown(
+                f"`{err['query']}` — [DuckDuckGo]({err['manual']['duckduckgo']}) · "
+                f"[Google]({err['manual']['google']})"
+            )
+
+    if st.session_state.get("verify_name"):
+        st.divider()
+        name = st.session_state["verify_name"]
+        st.subheader(f"אימות — {name}")
+        with st.spinner("מאמת…"):
+            v = ss.verify_speaker(name, topic=result["topic"])
+        for k, val in v["checklist"].items():
+            st.markdown(f"- **{k}:** {val}")
+        for f in v.get("flags", []):
+            st.warning(f)
+        if v.get("recent_years"):
+            st.caption("שנים שהופיעו בתוצאות: " + ", ".join(v["recent_years"]))
+        for ev in v.get("evidence", [])[:6]:
+            if ev.get("href"):
+                st.markdown(f"- [{_clean(ev.get('title', ''))[:90]}]({ev['href']})")
+        for err in v.get("errors", []):
+            st.markdown(f"`{err['query']}` — [חיפוש ידני]({err['manual']['duckduckgo']})")
+
+    st.divider()
+    with st.expander("📋 בלוק להעתקה לצ'אט (לסינתזה)"):
+        st.caption(
+            "האפליקציה אוספת ראיות; הדירוג וההמלצה נעשים בצ'אט. "
+            "העתיקו את הבלוק והדביקו בשיחה."
+        )
+        st.code(ss.format_for_chat(result), language="markdown")
+
+
 # --------------------------------------------------------------------------
 # 5. Sidebar + routing
 # --------------------------------------------------------------------------
@@ -294,6 +447,9 @@ def show_sidebar() -> None:
         st.caption("מדריך (אדמין)" if st.session_state.role == "admin" else "חניך")
         st.divider()
         st.caption('שנה ב׳ · תשפ״ז · 5787')
+        st.divider()
+        home = "לוח בקרה" if st.session_state.role == "admin" else "המשימות שלי"
+        st.radio("מסך", [home, "חיפוש מרצים"], key="nav")
         st.divider()
         if st.button("התנתק", width="stretch"):
             logout()
@@ -316,7 +472,9 @@ def main() -> None:
         return
 
     show_sidebar()
-    if st.session_state.role == "admin":
+    if st.session_state.get("nav") == "חיפוש מרצים":
+        show_speaker_search()
+    elif st.session_state.role == "admin":
         show_admin_dashboard()
     else:
         show_student_view(st.session_state.user_name)
