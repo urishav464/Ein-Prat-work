@@ -98,6 +98,33 @@ class StorageUnavailable(RuntimeError):
 _client = None
 
 
+def normalize_supabase_url(url: str) -> str:
+    """Accept what a person actually pastes, not only the canonical form.
+
+    The client appends `/rest/v1` itself, so a URL that already ends in it
+    builds `/rest/v1/rest/v1/<table>` and PostgREST answers PGRST125 "Invalid
+    path specified in request URL" — which looks nothing like a credentials
+    problem and reads, wrongly, as a missing schema. Supabase's dashboard does
+    display that REST endpoint, so pasting it is the obvious mistake to make.
+    Surrounding whitespace is stripped too: the client rejects it outright, and
+    a trailing newline is easy to carry into a secrets box.
+    """
+    clean = (url or "").strip().rstrip("/")
+    for suffix in ("/rest/v1", "/rest"):
+        if clean.endswith(suffix):
+            clean = clean[: -len(suffix)].rstrip("/")
+    # The dashboard URL cannot be repaired by trimming — it is a different host
+    # entirely — and it is the other easy paste, since it is what the browser
+    # address bar shows while you are copying the keys.
+    if "supabase.com/dashboard" in clean or "supabase.com/project" in clean:
+        raise StorageUnavailable(
+            "ה-`SUPABASE_URL` הוא כתובת הדשבורד, לא כתובת ה-API. צריך "
+            "`https://<project-ref>.supabase.co` — Supabase → Project Settings "
+            "→ API → Project URL."
+        )
+    return clean
+
+
 def get_client():
     """The Supabase client, built once per process from Streamlit Secrets."""
     global _client
@@ -129,7 +156,7 @@ def get_client():
             "חסרים SUPABASE_URL / SUPABASE_KEY ב-Secrets של Streamlit. "
             "ראו DEPLOY.md."
         )
-    _client = create_client(url, key)
+    _client = create_client(normalize_supabase_url(url), (key or "").strip())
     return _client
 
 
@@ -167,23 +194,44 @@ def storage_ready() -> dict:
         return {"ok": True, "reason": ""}
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
-        # RLS is on with no policies, so an anon key is refused rather than
-        # returning nothing. Distinguish that from a schema that was never
-        # installed — the two look alike from here but need opposite fixes.
-        denied = any(k in detail.lower() for k in
-                     ("permission denied", "42501", "row-level security"))
-        if denied:
+        low = detail.lower()
+
+        # Each of these needs a DIFFERENT fix, and they are indistinguishable
+        # from the client unless the code is read. Guessing "the tables are
+        # missing" for all of them sends someone to the SQL Editor to re-run a
+        # schema that was never the problem.
+        if "pgrst125" in low or "invalid path" in low:
+            reason = (
+                "ה-`SUPABASE_URL` שגוי. הוא צריך להיות **כתובת הפרויקט בלבד** — "
+                "`https://<project-ref>.supabase.co` — בלי `/rest/v1` בסוף. "
+                "Supabase → Project Settings → API → Project URL."
+            )
+        elif any(k in low for k in ("permission denied", "42501", "row-level security")):
+            # RLS is on with no policies, so an anon key is refused rather than
+            # returning nothing.
             reason = (
                 "ההתחברות עובדת, אבל המפתח נדחה. RLS מופעל על כל הטבלאות, ולכן "
                 "**חייבים את מפתח ה-service_role** — מפתח anon לא ייתן גישה. "
                 "Supabase → Project Settings → API → service_role."
             )
-        else:
+        elif any(k in low for k in ("pgrst301", "jwt", "invalid api key", "401")):
+            reason = (
+                "המפתח `SUPABASE_KEY` נדחה. ודאו שהעתקתם את מפתח ה-**service_role** "
+                "במלואו. Supabase → Project Settings → API."
+            )
+        elif any(k in low for k in ("pgrst205", "pgrst106", "could not find the table",
+                                    "does not exist")):
             reason = (
                 "ההתחברות ל-Supabase עובדת אבל הטבלאות חסרות. הריצו את "
                 "`supabase_schema.sql` ב-SQL Editor."
             )
-        return {"ok": False, "reason": f"{reason} ({detail[:120]})"}
+        else:
+            reason = (
+                "ההתחברות ל-Supabase נכשלה, והסיבה לא מזוהה. בדקו את "
+                "`SUPABASE_URL` ו-`SUPABASE_KEY` ב-Secrets, ושה-"
+                "`supabase_schema.sql` רץ ב-SQL Editor."
+            )
+        return {"ok": False, "reason": f"{reason} ({detail[:160]})"}
 
 
 # --------------------------------------------------------------------------

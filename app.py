@@ -1316,13 +1316,20 @@ def main() -> None:
     info = bootstrap()
     if not info.get("storage_ok"):
         st.title("🕯️ ניהול משמרים")
+        # The probe already identified WHICH of the failure modes this is, so
+        # it leads. The general checklist folds away underneath — printing
+        # "run the schema" first sends people to the SQL Editor for a problem
+        # that is usually the URL or the key.
         st.error(info.get("reason") or "אין חיבור לאחסון.")
-        st.markdown(
-            "**מה צריך לקרות:**\n"
-            "1. להריץ את `supabase_schema.sql` ב-Supabase → SQL Editor.\n"
-            "2. להגדיר `SUPABASE_URL` ו-`SUPABASE_KEY` ב-Secrets של Streamlit.\n\n"
-            "ההוראות המלאות ב-`DEPLOY.md`."
-        )
+        with st.expander("הרשימה המלאה — כל מה שצריך להיות מוגדר"):
+            st.markdown(
+                "1. `SUPABASE_URL` — **כתובת הפרויקט בלבד**, "
+                "`https://<project-ref>.supabase.co`, בלי `/rest/v1`.\n"
+                "2. `SUPABASE_KEY` — מפתח ה-**service_role** (לא anon; "
+                "RLS מופעל ולכן anon ייחסם).\n"
+                "3. `supabase_schema.sql` הורץ ב-Supabase → SQL Editor.\n\n"
+                "שלושתם ב-Secrets של Streamlit. ההוראות המלאות ב-`DEPLOY.md`."
+            )
         return
     if info.get("seeded"):
         st.toast(
