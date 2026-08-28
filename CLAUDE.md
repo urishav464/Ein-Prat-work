@@ -61,7 +61,7 @@ Decisions that are not obvious from the DDL:
 
 **`archive.py`** — cross-year memory. Two traps it already hit: this season's folders are unfilled templates and must not be searched as history, and every work-file inherits a status legend containing `ממתין לתשובה`, so an unfiltered search for a Mishmar on תשובה matched all 21 templates. Strip boilerplate before matching.
 
-**`app.py`** renders only. Login has two modes: no `[auth]` in secrets → name-only, for development; `[auth]` present → Google OIDC **and the name box is removed entirely**, since leaving it would keep the "type Uri" bypass open beside real authentication.
+**`app.py`** renders only. **The UI is phase-driven:** `dm.mishmar_progress()` derives a 4-phase build state (נושא → מרצים ותוכן → לוגיסטיקה → אחרי) from task categories, and every screen shows the current phase first — the student home shows ONLY the current phase's tasks, the workfile is an accordion opened on it. The chat is a global panel beside every page, not a page. List views (admin pipeline, speaker index) load their rows in one or two queries and group in Python — a query per row was 47 HTTPS round-trips per rerun and the reason the speaker index felt slow. `mishmarim.gregorian_date` is TEXT in d.m.Y (`15.10.2026`), not a DATE — a date parser that only reads ISO silently breaks every countdown. Login has two modes: no `[auth]` in secrets → name-only, for development; `[auth]` present → Google OIDC **and the name box is removed entirely**, since leaving it would keep the "type Uri" bypass open beside real authentication.
 
 ## Verifying changes
 

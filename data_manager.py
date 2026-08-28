@@ -1037,6 +1037,13 @@ def record_outreach(status: str, name: Optional[str] = None,
     return {"speaker_id": speaker["id"], "name": speaker["name"], "status": status}
 
 
+def get_all_outreach() -> list[dict]:
+    """The whole outreach log, newest first, one query. The index page used to
+    call get_outreach_for_speaker per row — 46 HTTPS round-trips per rerun,
+    which is the whole reason the page felt slow. Group this in Python."""
+    return _rows(_t("v_outreach_full").select("*").order("id", desc=True).execute())
+
+
 def get_outreach_for_speaker(speaker_id: int) -> list[dict]:
     return _rows(_t("v_outreach_full").select("*").eq("speaker_id", speaker_id)
                  .order("id", desc=True).execute())

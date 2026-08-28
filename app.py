@@ -933,69 +933,43 @@ def show_speaker_search() -> None:
         st.code(ss.format_for_chat(result), language="markdown")
 
 
-def show_speaker_index() -> None:
-    """The shared board. This is what the opening deck's slide 11 points at:
-    check here before approaching anyone, so two pairs never contact the same
-    person a week apart without knowing."""
-    st.title("👥 מאגר המרצים")
-    st.caption(
-        "המאגר המשותף לכל הצוותים. **לפני שפונים למישהו — בדקו כאן.** "
-        "כל עדכון סטטוס נרשם ביומן ונראה מיד לכל שאר הזוגות."
-    )
+def _speaker_index_card(r: dict, history: list[dict], dup_count: int) -> None:
+    """One person in the shared index: name, live status, what they bring,
+    and the log + update form folded underneath."""
+    status = r.get("current_status") or "⬜ לא פנינו"
+    with st.container(border=True):
+        warn = " ⚠️" if dup_count > 1 else ""
+        st.markdown(
+            f"<div class='task-desc'>{_clean(dm.display_name(r))}{warn}</div>"
+            f"<div>{_speaker_status_chip(status)}</div>",
+            unsafe_allow_html=True,
+        )
+        bits = []
+        if r.get("expertise_topics"):
+            bits.append(_clean(r["expertise_topics"])[:60])
+        if r.get("lesson_fit") and r["lesson_fit"] != "TBD":
+            bits.append(f"שיעור {r['lesson_fit']}")
+        if bits:
+            st.caption(" · ".join(bits))
+        if r.get("notes"):
+            st.caption("📝 " + _clean(r["notes"])[:90])
+        if history:
+            o = history[0]
+            who = o.get("student_name") or "צוות"
+            st.caption(
+                f"🕓 אחרון: {o['status']} · {who} · {(o.get('created_at') or '')[:10]}")
 
-    c1, c2 = st.columns([2, 1])
-    query = c1.text_input("חיפוש לפי שם או תחום", placeholder="למשל: תשובה · קולנוע · תמר")
-    only_contacted = c2.checkbox("רק מי שכבר פנינו אליו")
-
-    rows = dm.get_speakers_with_status(only_contacted=only_contacted)
-    if query.strip():
-        q = dm.normalize_name(query).lower()
-        rows = [
-            r for r in rows
-            if q in dm.normalize_name(r["name"]).lower()
-            or q in (r.get("expertise_topics") or "").lower()
-            or q in (r.get("notes") or "").lower()
-        ]
-
-    contacted = [r for r in rows if r.get("has_outreach")]
-    m1, m2, m3 = st.columns(3)
-    m1.metric("במאגר", len(rows))
-    m2.metric("פנינו אליהם", len(contacted))
-    m3.metric("סה״כ במאגר", len(dm.get_speakers_with_status()))
-
-    if not rows:
-        st.info("אין התאמות.")
-        return
-
-    # Names carried by more than one row are the ה7 situation: several
-    # different people share a name and must NOT be merged on our judgment.
-    seen: dict[str, int] = {}
-    for r in rows:
-        seen[r["name"]] = seen.get(r["name"], 0) + 1
-
-    st.divider()
-    for r in rows[:60]:
-        header = f"{r['name']} — {r.get('current_status') or 'ללא סטטוס'}"
-        if seen[r["name"]] > 1:
-            header += f"  ⚠️ ({r.get('source_type')})"
-        with st.expander(header):
-            if seen[r["name"]] > 1:
+        with st.expander("יומן ועדכון"):
+            if dup_count > 1:
                 st.warning(
-                    f"יש {seen[r['name']]} רשומות בשם «{r['name']}» — ככל הנראה "
-                    "אנשים שונים. לא מאחדים אותם על דעתנו; ודאו שזה האדם הנכון."
+                    f"יש {dup_count} רשומות בשם הזה — ככל הנראה אנשים שונים. "
+                    "לא מאחדים אותם על דעתנו; ודאו שזה האדם הנכון."
                 )
             st.caption(
-                f"תחום: {_clean(r.get('expertise_topics') or 'TBD')} · "
-                f"שיעור: {r.get('lesson_fit') or 'TBD'} · "
                 f"אזור: {r.get('region') or '⚪ לא ידוע'} · "
                 f"קשר: {r.get('contact') or 'TBD'}"
             )
-            if r.get("notes"):
-                st.caption(f"היסטוריה: {_clean(r['notes'])[:220]}")
-
-            history = dm.get_outreach_for_speaker(r["speaker_id"])
             if history:
-                st.markdown("**יומן הפניות:**")
                 for o in history[:6]:
                     who = o.get("student_name") or "צוות"
                     where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "—"
@@ -1004,24 +978,22 @@ def show_speaker_index() -> None:
                         + (f" — {_clean(o['note'])}" if o.get("note") else "")
                     )
                 if any("לא יכול" in (o["status"] or "") for o in history):
-                    st.caption(
-                        "↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב בתקופה אחרת."
-                    )
+                    st.caption("↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב.")
             else:
                 st.caption("עוד לא פנינו אליו/ה השנה.")
 
             with st.form(f"outreach-{r['speaker_id']}"):
-                cc1, cc2 = st.columns([1, 1])
-                new_status = cc1.selectbox("עדכון סטטוס", dm.SPEAKER_STATUSES,
+                cc1, cc2 = st.columns(2)
+                new_status = cc1.selectbox("סטטוס", dm.SPEAKER_STATUSES,
                                            key=f"st-{r['speaker_id']}")
                 mine = _my_mishmarim()
                 labels = {m["id"]: f"#{m['id']:02d} · {m['gregorian_date']}" for m in mine}
                 for_mishmar = cc2.selectbox(
-                    "לאיזה משמר?", [None, *labels],
-                    format_func=lambda i: "ללא משמר" if i is None else labels[i],
+                    "משמר", [None, *labels],
+                    format_func=lambda i: "ללא" if i is None else labels[i],
                     key=f"mm-{r['speaker_id']}")
                 note = st.text_input("הערה", key=f"nt-{r['speaker_id']}")
-                if st.form_submit_button("רשום פנייה"):
+                if st.form_submit_button("רשום פנייה", type="primary"):
                     dm.record_outreach(
                         new_status, speaker_id=r["speaker_id"],
                         mishmar_id=for_mishmar,
@@ -1029,6 +1001,65 @@ def show_speaker_index() -> None:
                         note=note or None)
                     st.toast(f"«{r['name']}» → {new_status}")
                     st.rerun()
+
+
+def show_speaker_index() -> None:
+    """The shared board. Check here before approaching anyone, so two pairs
+    never contact the same person a week apart without knowing."""
+    st.title("👥 מאגר המרצים")
+    st.caption(
+        "המאגר המשותף לכל הצוותים. **לפני שפונים למישהו — בדקו כאן.** "
+        "כל עדכון נראה מיד לכל שאר הזוגות. הצ׳אט יכול לרשום פנייה בשבילכם."
+    )
+
+    # TWO queries for the whole page, not one per speaker.
+    rows = dm.get_speakers_with_status()
+    outreach_by_speaker: dict[int, list[dict]] = {}
+    for o in dm.get_all_outreach():
+        outreach_by_speaker.setdefault(o["speaker_id"], []).append(o)
+
+    c1, c2 = st.columns([2.2, 1.8])
+    query = c1.text_input("חיפוש", placeholder="שם · תחום · הערה — למשל: תשובה",
+                          label_visibility="collapsed")
+    view = c2.radio("סינון", ["הכל", "פנינו אליהם", "טרם פנינו"],
+                    horizontal=True, label_visibility="collapsed")
+
+    if query.strip():
+        q = dm.normalize_name(query).lower()
+        rows = [
+            r for r in rows
+            if q in dm.normalize_name(r["name"]).lower()
+            or q in (r.get("expertise_topics") or "").lower()
+            or q in (r.get("notes") or "").lower()
+        ]
+    if view == "פנינו אליהם":
+        rows = [r for r in rows if r.get("has_outreach")]
+    elif view == "טרם פנינו":
+        rows = [r for r in rows if not r.get("has_outreach")]
+
+    contacted = sum(1 for r in rows if r.get("has_outreach"))
+    st.caption(f"{len(rows)} במאגר · פנינו אל {contacted}")
+    if not rows:
+        st.info("אין התאמות.")
+        return
+
+    # Names carried by more than one row are the ה7 situation: several people
+    # share a name and must NOT be merged on our judgment.
+    seen: dict[str, int] = {}
+    for r in rows:
+        seen[r["name"]] = seen.get(r["name"], 0) + 1
+
+    shown = st.session_state.setdefault("speaker_page_size", 24)
+    for i in range(0, min(len(rows), shown), 3):
+        cols = st.columns(3)
+        for col, r in zip(cols, rows[i:i + 3]):
+            with col:
+                _speaker_index_card(
+                    r, outreach_by_speaker.get(r["speaker_id"], []), seen[r["name"]])
+    if len(rows) > shown:
+        if st.button(f"הצג עוד ({len(rows) - shown} נוספים)", width="stretch"):
+            st.session_state["speaker_page_size"] = shown + 24
+            st.rerun()
 
 
 LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"]
