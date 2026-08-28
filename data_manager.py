@@ -760,6 +760,81 @@ def get_budget_speaker_names(mishmar_id: int) -> list[str]:
     return out
 
 
+# --------------------------------------------------------------------------
+# The phase model — the app's answer to "what is my next step?"
+#
+# A Mishmar is built in a fixed order the deadline offsets already encode:
+# close a topic (−21d), then speakers and content (−14d), then logistics
+# (−7d), then the after-work. The UI shows a trainee ONLY the current
+# phase's tasks — everything at once is how 40 cards attack a person from
+# every direction on day one.
+# --------------------------------------------------------------------------
+
+PHASES = (
+    {"key": "topic",     "label": "נושא",        "icon": "🎯",
+     "categories": ("נושא",)},
+    {"key": "content",   "label": "מרצים ותוכן", "icon": "🎤",
+     "categories": ("מרצים", "תוכן")},
+    {"key": "logistics", "label": "לוגיסטיקה",   "icon": "📦",
+     "categories": ("הזמנה", "כיבוד", "קישוט", "לוגיסטיקה")},
+    {"key": "after",     "label": "אחרי הערב",   "icon": "🌙",
+     "categories": ("אחרי",)},
+)
+
+_PHASE_OF_CATEGORY = {c: p["key"] for p in PHASES for c in p["categories"]}
+
+
+def mishmar_progress(mishmar_id: Optional[int] = None,
+                     mishmar: Optional[dict] = None,
+                     tasks: Optional[list[dict]] = None) -> dict:
+    """Phase state for one Mishmar.
+
+    Accepts preloaded rows so a 21-Mishmar pipeline costs two queries, not 42.
+    A task with no category counts as content (the middle of the build), so an
+    unclassified task can never silently vanish from every phase.
+
+    Phase 1 is complete when the topic is SET — that is the real-world signal,
+    and the נושא tasks are auto-closed by both write paths when it happens. An
+    empty phase counts as complete: there is nothing to do in it.
+    """
+    m = mishmar or get_mishmar(mishmar_id)
+    if tasks is None:
+        tasks = get_tasks_for_mishmar(m["id"])
+
+    phases = []
+    for spec in PHASES:
+        ts = [t for t in tasks
+              if _PHASE_OF_CATEGORY.get(t.get("category") or "תוכן") == spec["key"]]
+        done = sum(1 for t in ts if t.get("status") == "DONE")
+        complete = done == len(ts)
+        if spec["key"] == "topic":
+            complete = bool(m.get("topic")) or (bool(ts) and complete)
+        phases.append({**spec, "tasks": ts, "done": done,
+                       "total": len(ts), "complete": complete})
+
+    current = next((i for i, p in enumerate(phases) if not p["complete"]),
+                   len(phases) - 1)
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.get("status") == "DONE")
+    open_current = [t for t in phases[current]["tasks"] if t.get("status") != "DONE"]
+    open_current.sort(key=lambda t: t.get("due_date") or "9999")
+    return {
+        "mishmar": m,
+        "phases": phases,
+        "current": current,
+        "done": done,
+        "total": total,
+        "pct": (done / total) if total else 0.0,
+        "next_task": open_current[0] if open_current else None,
+    }
+
+
+def get_all_tasks() -> list[dict]:
+    """Every task with its Mishmar context, one query — for pipeline views."""
+    return _rows(_t("v_tasks_full").select("*")
+                 .order("mishmar_id").order("id").execute())
+
+
 def get_task_totals() -> dict:
     """Season-wide task counts, for the instructor's progress bar. Counts task
     ROWS, so a pair-shared task (student_id NULL) is counted once — unlike

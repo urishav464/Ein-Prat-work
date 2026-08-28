@@ -643,126 +643,150 @@ def _card_grid(items: list[dict], key_prefix: str, per_row: int = 2,
                 _task_card(t, key_prefix, show_mishmar=show_mishmar)
 
 
-def _mishmar_card(m: dict, tasks: list[dict]) -> None:
-    """The trainee's Mishmar at a glance: dates, topic, progress, countdown."""
-    mine = [t for t in tasks if t.get("mishmar_id") == m["id"]]
-    done = sum(1 for t in mine if t.get("status") == "DONE")
-    total = len(mine)
+def _stepper_html(progress: dict) -> str:
+    """The four phases as a horizontal stepper. RTL flex puts phase 1 on the
+    right, where a Hebrew reader starts — no reversal needed here."""
+    parts = ["<div class='stepper'>"]
+    for i, ph in enumerate(progress["phases"]):
+        cls = "done" if ph["complete"] else ("current" if i == progress["current"] else "")
+        count = f"{ph['done']}/{ph['total']}" if ph["total"] else "—"
+        parts.append(
+            f"<div class='step {cls}'><div class='dot'>"
+            f"{'✓' if ph['complete'] else ph['icon']}</div>"
+            f"<div>{ph['label']}</div><div style='opacity:.55'>{count}</div></div>"
+        )
+        if i < len(progress["phases"]) - 1:
+            parts.append(f"<div class='step-bar {'done' if ph['complete'] else ''}'></div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _countdown_chip(m: dict) -> str:
+    d = _parse_date(m.get("gregorian_date"))
+    if not d:
+        return ""
+    days = (d - _date_cls.today()).days
+    if days < 0:
+        return _chip("התקיים", "gray")
+    if days == 0:
+        return _chip("הערב!", "red")
+    kind = "red" if days <= 7 else ("yellow" if days <= 14 else "green")
+    return _chip(f"בעוד {days} ימים", kind)
+
+
+def _next_mishmar_hero(m: dict, progress: dict) -> None:
+    """The trainee's ONE place to answer "what now?" — Mishmar identity,
+    the phase stepper, and only the current phase's open tasks."""
+    cur = progress["phases"][progress["current"]]
     with st.container(border=True):
-        chips = []
+        chips = [_countdown_chip(m)]
         if m.get("mishmar_type"):
             chips.append(_chip(m["mishmar_type"], "gold"))
-        d = _parse_date(m.get("gregorian_date"))
-        days = (d - _date_cls.today()).days if d else None
-        if days is not None:
-            if days < 0:
-                chips.append(_chip("התקיים", "gray"))
-            elif days <= 14:
-                chips.append(_chip(f"בעוד {days} ימים", "yellow" if days > 7 else "red"))
-            else:
-                chips.append(_chip(f"בעוד {days} ימים", "green"))
         st.markdown(
-            f"<div class='task-desc'>🕯️ משמר #{m['id']:02d} · {m['gregorian_date']} · "
-            f"{m['hebrew_date']}</div><div>{''.join(chips)}</div>",
+            f"<div style='display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap'>"
+            f"<span style='font-size:1.25rem;font-weight:800'>🕯️ משמר #{m['id']:02d}</span>"
+            f"<span style='opacity:.7'>{m['gregorian_date']} · {m['hebrew_date']}</span>"
+            f"<span>{''.join(c for c in chips if c)}</span></div>",
             unsafe_allow_html=True,
         )
         if m.get("topic"):
             st.markdown(f"**הנושא:** {_clean(m['topic'])}")
-        else:
-            st.markdown("**הנושא:** ❗ עדיין לא נסגר — זה הצעד הראשון")
-        if total:
-            st.progress(done / total, text=f"{done}/{total} משימות הושלמו")
-        else:
-            st.caption("אין עדיין משימות למשמר הזה.")
+
+        st.markdown(_stepper_html(progress), unsafe_allow_html=True)
+        if progress["total"]:
+            st.progress(progress["pct"],
+                        text=f"{progress['done']}/{progress['total']} משימות הושלמו")
+
+        nxt = progress.get("next_task")
+        if nxt:
+            st.markdown(
+                f"<div style='background:#f5edda;border-radius:10px;"
+                f"padding:.55rem .9rem;margin:.3rem 0 .5rem'>"
+                f"⭐ <b>הצעד הבא:</b> {_clean(nxt['task_description'])}"
+                + (f" <span class='card-meta'>מומלץ עד {_fmt_date(nxt['due_date'])}</span>"
+                   if nxt.get("due_date") else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        open_cur = [t for t in cur["tasks"] if t["status"] != "DONE"]
+        if open_cur:
+            st.markdown(f"**המשימות של שלב «{cur['label']}» ({len(open_cur)}):**")
+            _card_grid(sorted(open_cur, key=lambda t: t.get("due_date") or "9999"),
+                       f"hero-{m['id']}", show_mishmar=False)
+            # A teaser, not a list: the next phase exists, and it can wait.
+            ni = progress["current"] + 1
+            if ni < len(progress["phases"]):
+                np = progress["phases"][ni]
+                if np["total"]:
+                    st.caption(
+                        f"🔒 אחרי שלב «{cur['label']}» ייפתח שלב "
+                        f"«{np['label']}» — {np['total']} משימות מחכות שם בשקט."
+                    )
+        elif progress["total"]:
+            st.success("כל המשימות של השלב הנוכחי סגורות. 🎉")
+
+
+def _mini_mishmar_card(m: dict, progress: dict) -> None:
+    cur = progress["phases"][progress["current"]]
+    phase_chip = _chip(f"{cur['icon']} {cur['label']}", "gold")
+    with st.container(border=True):
+        st.markdown(
+            f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}</div>"
+            f"<div>{_countdown_chip(m)}{phase_chip}</div>",
+            unsafe_allow_html=True,
+        )
+        if progress["total"]:
+            st.progress(progress["pct"],
+                        text=f"{progress['done']}/{progress['total']}")
 
 
 def show_student_view(student_name: str) -> None:
     student_id = st.session_state.student_id
     st.title(f"🏠 שלום, {student_name}")
-    st.caption("המשמרים שלך, המשימות שלך — לפי מה שדחוף באמת.")
 
     mine = dm.get_mishmarim_for_student(student_id)
-    tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_student(student_id)]
-
     if not mine:
         st.info("עוד לא משובצים לך משמרים.")
         return
 
-    st.subheader("🕯️ המשמרים שלי")
-    for i in range(0, len(mine), 2):
-        cols = st.columns(2)
-        for col, m in zip(cols, mine[i:i + 2]):
-            with col:
-                _mishmar_card(m, tasks)
+    all_tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_student(student_id)]
+    by_mid: dict[int, list[dict]] = {}
+    for t in all_tasks:
+        by_mid.setdefault(t["mishmar_id"], []).append(t)
+    progress = {m["id"]: dm.mishmar_progress(mishmar=m, tasks=by_mid.get(m["id"], []))
+                for m in mine}
 
-    if not tasks:
-        st.info("אין משימות פתוחות כרגע.")
-        return
+    # The hero is the next Mishmar on the calendar; past ones fall to the strip.
+    today = _date_cls.today()
+    upcoming = [m for m in mine
+                if (_parse_date(m.get("gregorian_date")) or today) >= today]
+    hero = min(upcoming, key=lambda m: m["gregorian_date"]) if upcoming else mine[-1]
 
-    st.divider()
-    buckets: dict[str, list[dict]] = {"red": [], "yellow": [], "green": [], "done": []}
-    for t in tasks:
-        buckets[_urgency(t)].append(t)
-    by_due = lambda x: x.get("due_date") or "9999"
+    # Overdue anywhere is the one thing allowed to jump the phase queue.
+    overdue = [t for t in all_tasks
+               if t.get("overdue") and t["mishmar_id"] != hero["id"]]
+    if overdue:
+        st.markdown(f"#### 🔴 עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
+        st.caption("המלצה — לא חוק. אבל אלה קודמים לכל השאר.")
+        _card_grid(sorted(overdue, key=lambda t: t.get("due_date") or "9999"), "ovd")
 
-    if buckets["red"]:
-        st.subheader(f"🔴 עבר התאריך המומלץ ({len(buckets['red'])})")
-        st.caption("המלצה — לא חוק. אבל אלה הדברים ששווה לסגור קודם.")
-        _card_grid(sorted(buckets["red"], key=by_due), "red")
+    st.markdown("#### ⭐ המשמר הבא שלי")
+    _next_mishmar_hero(hero, progress[hero["id"]])
 
-    if buckets["yellow"]:
-        st.subheader(f"🟡 מומלץ השבוע ({len(buckets['yellow'])})")
-        _card_grid(sorted(buckets["yellow"], key=by_due), "yel")
+    others = [m for m in mine if m["id"] != hero["id"]]
+    if others:
+        st.markdown("#### 🕯️ שאר המשמרים שלי")
+        st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. הצ׳אט וקובץ העבודה פתוחים לכולם תמיד.")
+        cols = st.columns(min(3, max(1, len(others))))
+        for i, m in enumerate(others):
+            with cols[i % len(cols)]:
+                _mini_mishmar_card(m, progress[m["id"]])
 
-    if buckets["green"]:
-        # A season is ~40 open tasks per trainee. The urgent buckets stay flat
-        # on the page; the far-future bulk folds, or the grid becomes exactly
-        # the endless list the redesign is replacing.
-        urgent_exists = bool(buckets["red"] or buckets["yellow"])
-        with st.expander(f"🟢 פתוח — בהמשך ({len(buckets['green'])})",
-                         expanded=not urgent_exists):
-            _card_grid(sorted(buckets["green"], key=by_due), "grn")
-
-    if buckets["done"]:
-        with st.expander(f"✅ הושלמו ({len(buckets['done'])})"):
-            _card_grid(buckets["done"], "done")
-
-
-def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
-    """One discovered candidate: name, confidence, flags, evidence, actions."""
-    name = entry["name"]
-    conf = {"high": "🟢 ודאות גבוהה", "medium": "🟡 ודאות בינונית", "low": "🟠 ודאות נמוכה"}
-    bits = [conf.get(entry.get("confidence", "low"), "")]
-    if entry.get("already_known"):
-        bits.append("‼️ כבר במאגר — בדקו סטטוס לפני פנייה")
-    bits.extend(entry.get("flags", []))
-
-    st.markdown(f"**{_clean(name)}** — " + " · ".join(b for b in bits if b))
-    for note in entry.get("index_notes", []):
-        st.caption(note)
-
-    for ev in entry.get("evidence", [])[:2]:
-        href = ev.get("href", "")
-        if href:
-            st.caption(f"[{_clean(ev.get('title', href))[:90]}]({href})")
-
-    c1, c2, _ = st.columns([1, 1, 3])
-    if c1.button("הוסף למאגר", key=f"add-{idx}-{name}"):
-        # Explicit write-back only. Auto-writing every search result would
-        # grow the index fast and fill it with noise; this keeps
-        # source_type='web_search' meaning "a human decided this is a person".
-        href = entry["evidence"][0].get("href") if entry.get("evidence") else None
-        new_id = dm.add_new_speaker(
-            name=name,
-            expertise_topics=topic,
-            verification_url=href,
-            source_type="web_search",
-            lesson_fit=lesson,
-            notes="נמצא בחיפוש רשת · ⚠️ לאמת לפני פנייה",
-        )
-        st.toast(f"«{name}» נוסף למאגר" if new_id else f"«{name}» כבר קיים במאגר")
-    if c2.button("אמת", key=f"ver-{idx}-{name}"):
-        st.session_state["verify_name"] = name
+    done = [t for t in all_tasks if t["status"] == "DONE"]
+    if done:
+        with st.expander(f"✅ הושלמו ({len(done)})"):
+            _card_grid(done, "done")
 
 
 def show_speaker_search() -> None:
