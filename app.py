@@ -822,6 +822,32 @@ def _my_mishmarim() -> list[dict]:
     return dm.get_mishmarim_for_student(st.session_state.student_id)
 
 
+def _message_text(content) -> str:
+    """Readable text for one chat turn.
+
+    The live history holds what the API needs, not what a person reads: an
+    assistant turn is a LIST of content blocks (text, thinking, tool_use), and
+    a tool-result turn is a list of result blocks. Rendering only `str` content
+    silently dropped every assistant reply the moment the page reran — the
+    trainee watched the answer stream in and then vanish.
+    """
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        kind = getattr(block, "type", None)
+        if kind is None and isinstance(block, dict):
+            kind = block.get("type")
+        if kind != "text":
+            continue          # thinking and tool plumbing are not shown
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts).strip()
+
+
 def show_chat() -> None:
     st.title("בניית משמר")
 
@@ -868,11 +894,11 @@ def show_chat() -> None:
 
     history = st.session_state.setdefault("chat_history", [])
     for msg in history:
-        content = msg["content"]
-        if not isinstance(content, str):
-            continue  # tool-result blocks are internal plumbing, not shown
+        text = _message_text(msg["content"])
+        if not text:
+            continue   # tool-result turns carry no prose to show
         with st.chat_message(msg["role"]):
-            st.markdown(content)
+            st.markdown(text)
 
     prompt = st.chat_input("במה נתקדם? נושא, מרצים, מבנה הערב…")
     if not prompt:
