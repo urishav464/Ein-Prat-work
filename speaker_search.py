@@ -373,17 +373,27 @@ def _flags_for(name: str, evidence: list[dict]) -> list[str]:
 def _index_note(name: str, db_path: str = dm.DB_PATH) -> list[str]:
     """Local-index notes for a name. No network — this is a free check.
 
-    Covers the last line of the ⚠️ לאמת checklist ("have we already approached
-    them this year?"), which needs no web search at all.
+    Answers the last line of the ⚠️ לאמת checklist ("have we already approached
+    them this year?") from the shared outreach log, which is the whole point of
+    the index: the next pair must see what the previous pair already did.
     """
     notes = []
-    for row in dm.get_speaker_by_name(name, db_path=db_path):
-        status = (row.get("status") or "").strip()
-        if row.get("source_type") == "original_44":
-            notes.append(f"📗 מהמאגר · {status or 'ללא סטטוס'}")
-        else:
-            notes.append(f"📘 במאגר ({row.get('source_type')}) · {status or 'ללא סטטוס'}")
-        if "סירב" in status:
+    for row in dm.get_speaker_status(name, db_path=db_path):
+        status = (row.get("current_status") or "").strip()
+        origin = "📗 מהמאגר" if row.get("source_type") == "original_44" else "📘 במאגר"
+        notes.append(f"{origin} · {status or 'ללא סטטוס'}")
+
+        if row.get("has_outreach"):
+            # THE collision-prevention line. Without it two pairs approach the
+            # same person a week apart and neither knows.
+            history = dm.get_outreach_for_speaker(row["speaker_id"], db_path=db_path)
+            for o in history[:3]:
+                who = o.get("student_name") or "מישהו מהצוות"
+                where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "ללא משמר"
+                when = (o.get("created_at") or "")[:10]
+                notes.append(f"‼️ {who} כבר פנה — {where} · {o['status']} · {when}")
+
+        if "לא יכול" in status or "סירב" in status:
             # Per 2026-27/speakers.md: refusals are almost always to a specific
             # date, not in principle. Presenting one as a hard no loses a lead.
             notes.append("↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב בתקופה אחרת")

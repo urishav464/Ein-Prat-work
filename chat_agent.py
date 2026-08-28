@@ -100,6 +100,10 @@ ROLE_PROMPT = """\
    הקשת של ארבעת השיעורים הייתה נותנת, ואז תבנה איתו את שלו.
    לעולם אל תגיד לחניך שהמשמר שלו שגוי כי יש בו שלושה שיעורים.
 7. **כשאתה משנה משהו במסד — תגיד בדיוק מה השתנה.** לא "עדכנתי" סתם.
+8. **כל פנייה למרצה נרשמת ביומן המשותף.** אם החניך אומר "פניתי ל...", "הוא
+   אישר", "היא לא יכולה" — קרא ל-`record_speaker_outreach` מיד. עשרה חניכים
+   מחפשים מרצים במקביל; יומן שלא מתעדכן הוא איך ששני זוגות פונים לאותו אדם
+   בלי לדעת. לפני שאתה מציע מרצה — בדוק אם כבר פנו אליו.
 
 **סגנון**
 תשובות קצרות וממוקדות. שאלה אחת בכל פעם, לא שש. כשהחניך תקוע — הצע צעד אחד
@@ -313,6 +317,28 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "record_speaker_outreach",
+        "description": (
+            "רושם ביומן המשותף שפנינו למרצה ומה קרה. **חובה לקרוא לזה בכל פעם "
+            "שהחניך מספר שפנה, שקיבל תשובה, או שסגר מרצה** — אחרת זוג אחר לא "
+            "יידע ויפנה לאותו אדם. אם יש כמה אנשים באותו שם, הכלי יחזיר את "
+            "האפשרויות ותצטרך לשאול את החניך במי מדובר."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "status": {"type": "string", "enum": list(dm.SPEAKER_STATUSES)},
+                "note": {"type": "string"},
+                "speaker_id": {
+                    "type": "integer",
+                    "description": "רק כשהכלי כבר החזיר אפשרויות והחניך בחר",
+                },
+            },
+            "required": ["name", "status"],
+        },
+    },
+    {
         "name": "check_archive",
         "description": (
             "בודק אם היה משמר דומה בשנים קודמות. הארכיון קטן (5 קבצים) — "
@@ -395,7 +421,25 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
         if name == "search_speaker_index":
             found = dm.search_speakers_by_topic(
                 args["topic"], lesson=args.get("lesson"), db_path=db_path)
-            return {"count": len(found), "speakers": found,
+            # Attach live outreach state, so the model can say "someone already
+            # contacted them" instead of proposing a name that is already taken.
+            enriched = []
+            for r in found:
+                status = dm.get_speaker_status(r["name"], db_path=db_path)
+                current = status[0] if status else {}
+                out = dm.get_outreach_for_speaker(
+                    current["speaker_id"], db_path=db_path) if current else []
+                enriched.append({
+                    **r,
+                    "current_status": current.get("current_status") or r.get("status"),
+                    "already_approached": bool(out),
+                    "outreach": [
+                        {"status": o["status"], "mishmar_id": o.get("mishmar_id"),
+                         "by": o.get("student_name"), "when": (o.get("created_at") or "")[:10]}
+                        for o in out[:3]
+                    ],
+                })
+            return {"count": len(enriched), "speakers": enriched,
                     "reminder": "אלה רק מי שכבר מוכר למדרשה. הרחב עם discover_speakers_online."}
 
         if name == "discover_speakers_online":
@@ -412,6 +456,32 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
 
         if name == "verify_speaker":
             return ss.verify_speaker(args["name"], topic=args.get("topic"), db_path=db_path)
+
+        if name == "record_speaker_outreach":
+            try:
+                res = dm.record_outreach(
+                    args["status"],
+                    name=args.get("name"),
+                    speaker_id=args.get("speaker_id"),
+                    mishmar_id=mishmar_id,
+                    student_id=student_id,
+                    note=args.get("note"),
+                    db_path=db_path,
+                )
+            except dm.AmbiguousSpeaker as exc:
+                # Flag ה7: several real people share this name. Hand the
+                # options back so the model asks, rather than picking one.
+                return {
+                    "ambiguous": True,
+                    "message": f"יש {len(exc.candidates)} אנשים בשם «{exc.name}». שאל את החניך במי מדובר.",
+                    "candidates": [
+                        {"speaker_id": c["id"], "name": c["name"],
+                         "topics": c.get("expertise_topics"), "notes": c.get("notes")}
+                        for c in exc.candidates
+                    ],
+                }
+            return {"ok": True, **res,
+                    "visible_to": "כל הזוגות רואים את זה מעכשיו במאגר המשותף"}
 
         if name == "check_archive":
             return archive.summarise_for_topic(args["topic"], db_path=db_path)

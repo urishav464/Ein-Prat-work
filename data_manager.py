@@ -130,6 +130,15 @@ def get_connection(db_path: str = DB_PATH) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+DQ = chr(34)   # "
+SQ = chr(39)   # '
+
+
+def _lit(value: str) -> str:
+    """Quote a value as a SQL string literal (single quotes doubled)."""
+    return SQ + value.replace(SQ, SQ + SQ) + SQ
+
+
 def _query(sql: str, params: Iterable[Any] = (), db_path: str = DB_PATH) -> list[dict]:
     with get_connection(db_path) as conn:
         return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
@@ -852,6 +861,30 @@ def add_new_speaker(
         return int(cur.lastrowid) if cur.rowcount else None
 
 
+# Hebrew names in this repo are written with BOTH Hebrew gershayim (U+05F4)
+# and ASCII double quotes - 3 of the 46 seeded names use the Hebrew form. A
+# trainee typing the ASCII spelling when the index holds the Hebrew one failed
+# twice over: the "has anyone already approached them?" check came back empty,
+# and record_outreach then created a SECOND row for the same person, quietly
+# splitting one human into two index entries.
+GERSHAYIM = "\u05f4"
+GERESH = "\u05f3"
+
+
+def normalize_name(name: Optional[str]) -> str:
+    """Fold Hebrew punctuation to ASCII so both spellings compare equal."""
+    return (name or "").replace(GERSHAYIM, DQ).replace(GERESH, SQ).strip()
+
+
+def _norm_sql(col: str) -> str:
+    """The same folding expressed in SQL, for WHERE clauses."""
+    return (
+        "REPLACE(REPLACE(" + col
+        + ", " + _lit(GERSHAYIM) + ", " + _lit(DQ) + ")"
+        + ", " + _lit(GERESH) + ", " + _lit(SQ) + ")"
+    )
+
+
 class AmbiguousSpeaker(ValueError):
     """More than one index row carries this exact name.
 
@@ -881,7 +914,11 @@ def resolve_speaker(
     name = (name or "").strip()
     if not name:
         return None
-    exact = _query("SELECT * FROM Speakers WHERE name = ?", (name,), db_path=db_path)
+    exact = _query(
+        "SELECT * FROM Speakers WHERE " + _norm_sql("name") + " = ?",
+        (normalize_name(name),),
+        db_path=db_path,
+    )
     if len(exact) > 1:
         raise AmbiguousSpeaker(name, exact)
     if exact:
@@ -975,11 +1012,12 @@ def get_speaker_status(name: str, db_path: str = DB_PATH) -> list[dict]:
     A list, again because of ה7 — the caller shows all matches rather than
     silently merging people who happen to share a name.
     """
+    norm = normalize_name(name)
     return _query(
-        """SELECT v.*, sp.expertise_topics, sp.region, sp.notes, sp.source_type
-             FROM v_speaker_status v JOIN Speakers sp ON sp.id = v.speaker_id
-            WHERE v.name = ? OR v.name LIKE ?""",
-        (name, f"%{name}%"),
+        "SELECT v.*, sp.expertise_topics, sp.region, sp.notes, sp.source_type "
+        "FROM v_speaker_status v JOIN Speakers sp ON sp.id = v.speaker_id "
+        "WHERE " + _norm_sql("v.name") + " = ? OR " + _norm_sql("v.name") + " LIKE ?",
+        (norm, f"%{norm}%"),
         db_path=db_path,
     )
 
@@ -1234,9 +1272,11 @@ def get_speaker_by_name(name: str, db_path: str = DB_PATH) -> list[dict]:
     called אורי, with the standing instruction "אל תאחד אותם על דעתך". Handing
     back one row would be exactly that merge. The caller shows all of them.
     """
+    norm = normalize_name(name)
     return _query(
-        "SELECT * FROM Speakers WHERE name = ? OR name LIKE ? ORDER BY source_type",
-        (name, f"%{name}%"),
+        "SELECT * FROM Speakers WHERE " + _norm_sql("name") + " = ? OR "
+        + _norm_sql("name") + " LIKE ? ORDER BY source_type",
+        (norm, f"%{norm}%"),
         db_path=db_path,
     )
 

@@ -582,6 +582,104 @@ def show_speaker_search() -> None:
         st.code(ss.format_for_chat(result), language="markdown")
 
 
+def show_speaker_index() -> None:
+    """The shared board. This is what the opening deck's slide 11 points at:
+    check here before approaching anyone, so two pairs never contact the same
+    person a week apart without knowing."""
+    st.title("מאגר המרצים")
+    st.caption(
+        "המאגר המשותף לכל הצוותים. **לפני שפונים למישהו — בדקו כאן.** "
+        "כל עדכון סטטוס נרשם ביומן ונראה מיד לכל שאר הזוגות."
+    )
+
+    c1, c2 = st.columns([2, 1])
+    query = c1.text_input("חיפוש לפי שם או תחום", placeholder="למשל: תשובה · קולנוע · תמר")
+    only_contacted = c2.checkbox("רק מי שכבר פנינו אליו")
+
+    rows = dm.get_speakers_with_status(only_contacted=only_contacted)
+    if query.strip():
+        q = dm.normalize_name(query).lower()
+        rows = [
+            r for r in rows
+            if q in dm.normalize_name(r["name"]).lower()
+            or q in (r.get("expertise_topics") or "").lower()
+            or q in (r.get("notes") or "").lower()
+        ]
+
+    contacted = [r for r in rows if r.get("has_outreach")]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("במאגר", len(rows))
+    m2.metric("פנינו אליהם", len(contacted))
+    m3.metric("סה״כ במאגר", len(dm.get_speakers_with_status()))
+
+    if not rows:
+        st.info("אין התאמות.")
+        return
+
+    # Names carried by more than one row are the ה7 situation: several
+    # different people share a name and must NOT be merged on our judgment.
+    seen: dict[str, int] = {}
+    for r in rows:
+        seen[r["name"]] = seen.get(r["name"], 0) + 1
+
+    st.divider()
+    for r in rows[:60]:
+        header = f"{r['name']} — {r.get('current_status') or 'ללא סטטוס'}"
+        if seen[r["name"]] > 1:
+            header += f"  ⚠️ ({r.get('source_type')})"
+        with st.expander(header):
+            if seen[r["name"]] > 1:
+                st.warning(
+                    f"יש {seen[r['name']]} רשומות בשם «{r['name']}» — ככל הנראה "
+                    "אנשים שונים. לא מאחדים אותם על דעתנו; ודאו שזה האדם הנכון."
+                )
+            st.caption(
+                f"תחום: {_clean(r.get('expertise_topics') or 'TBD')} · "
+                f"שיעור: {r.get('lesson_fit') or 'TBD'} · "
+                f"אזור: {r.get('region') or '⚪ לא ידוע'} · "
+                f"קשר: {r.get('contact') or 'TBD'}"
+            )
+            if r.get("notes"):
+                st.caption(f"היסטוריה: {_clean(r['notes'])[:220]}")
+
+            history = dm.get_outreach_for_speaker(r["speaker_id"])
+            if history:
+                st.markdown("**יומן הפניות:**")
+                for o in history[:6]:
+                    who = o.get("student_name") or "צוות"
+                    where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "—"
+                    st.markdown(
+                        f"- {o['status']} · {where} · {who} · {(o.get('created_at') or '')[:10]}"
+                        + (f" — {_clean(o['note'])}" if o.get("note") else "")
+                    )
+                if any("לא יכול" in (o["status"] or "") for o in history):
+                    st.caption(
+                        "↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב בתקופה אחרת."
+                    )
+            else:
+                st.caption("עוד לא פנינו אליו/ה השנה.")
+
+            with st.form(f"outreach-{r['speaker_id']}"):
+                cc1, cc2 = st.columns([1, 1])
+                new_status = cc1.selectbox("עדכון סטטוס", dm.SPEAKER_STATUSES,
+                                           key=f"st-{r['speaker_id']}")
+                mine = _my_mishmarim()
+                labels = {m["id"]: f"#{m['id']:02d} · {m['gregorian_date']}" for m in mine}
+                for_mishmar = cc2.selectbox(
+                    "לאיזה משמר?", [None, *labels],
+                    format_func=lambda i: "ללא משמר" if i is None else labels[i],
+                    key=f"mm-{r['speaker_id']}")
+                note = st.text_input("הערה", key=f"nt-{r['speaker_id']}")
+                if st.form_submit_button("רשום פנייה"):
+                    dm.record_outreach(
+                        new_status, speaker_id=r["speaker_id"],
+                        mishmar_id=for_mishmar,
+                        student_id=st.session_state.student_id,
+                        note=note or None)
+                    st.toast(f"«{r['name']}» → {new_status}")
+                    st.rerun()
+
+
 LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"]
 LESSON_FORMATS = ["הרצאה", "חבורות", "דיבייט", "כתיבה", "טד", "ניגון", "טקס", "אחר"]
 
@@ -626,11 +724,24 @@ def _topic_and_structure(mid: int) -> None:
     )
     lessons = dm.get_lessons(mid)
     for l in lessons:
+        # Surface prior outreach beside the slot, so a pair sees "someone
+        # already contacted them" at the moment they are choosing.
+        prior = []
+        if l.get("speaker_name"):
+            for row in dm.get_speaker_status(l["speaker_name"]):
+                if row.get("has_outreach"):
+                    for o in dm.get_outreach_for_speaker(row["speaker_id"])[:2]:
+                        if o.get("mishmar_id") and o["mishmar_id"] != mid:
+                            prior.append(
+                                f"‼️ פנייה קודמת — משמר #{o['mishmar_id']:02d} · {o['status']}")
         with st.expander(
             f"{l['slot_order']}. {l.get('start_time') or '--:--'} · "
             f"{l.get('title') or 'ללא כותרת'}"
-            + (f" · {l['speaker_name']}" if l.get("speaker_name") else ""),
+            + (f" · {l['speaker_name']}" if l.get("speaker_name") else "")
+            + (f"  {l['speaker_status']}" if l.get("speaker_status") else ""),
         ):
+            for line in prior:
+                st.warning(line)
             with st.form(f"lesson-{l['id']}"):
                 c1, c2 = st.columns(2)
                 title = c1.text_input("כותרת", value=l.get("title") or "")
@@ -644,14 +755,28 @@ def _topic_and_structure(mid: int) -> None:
                     index=LESSON_FORMATS.index(l["format"]) if l.get("format") in LESSON_FORMATS else len(LESSON_FORMATS) - 1)
                 c5, c6 = st.columns(2)
                 speaker = c5.text_input("מרצה", value=l.get("speaker_name") or "")
-                status = c6.text_input("סטטוס", value=l.get("speaker_status") or "⬜ לא פנינו")
+                cur = l.get("speaker_status") or dm.SPEAKER_STATUSES[0]
+                status = c6.selectbox(
+                    "סטטוס פנייה", dm.SPEAKER_STATUSES,
+                    index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
+                    help="נרשם ביומן הפניות המשותף — כל זוג אחר יראה שפניתם.",
+                )
                 desc = st.text_area("תיאור", value=l.get("description") or "")
                 cc1, cc2 = st.columns([1, 1])
                 if cc1.form_submit_button("שמור"):
-                    dm.upsert_lesson(mid, l["slot_order"], title=title, start_time=start,
-                                     description=desc, lesson_role=role,
-                                     speaker_name=speaker, speaker_status=status, fmt=fmt)
-                    st.toast("המקטע נשמר"); st.rerun()
+                    try:
+                        dm.upsert_lesson(
+                            mid, l["slot_order"], title=title, start_time=start,
+                            description=desc, lesson_role=role,
+                            speaker_name=speaker, speaker_status=status, fmt=fmt,
+                            student_id=st.session_state.student_id)
+                        st.toast("המקטע נשמר · הסטטוס נרשם במאגר המשותף")
+                    except dm.AmbiguousSpeaker as exc:
+                        st.warning(
+                            f"יש {len(exc.candidates)} אנשים בשם «{exc.name}» במאגר. "
+                            "בחרו את הנכון במסך «מאגר המרצים» — לא נאחד אותם אוטומטית."
+                        )
+                    st.rerun()
                 if cc2.form_submit_button("מחק מקטע"):
                     dm.delete_lesson(l["id"]); st.toast("נמחק"); st.rerun()
 
@@ -964,7 +1089,7 @@ def show_sidebar() -> None:
         st.caption('שנה ב׳ · תשפ״ז · 5787')
         st.divider()
         home = "לוח בקרה" if st.session_state.role == "admin" else "המשימות שלי"
-        st.radio("מסך", [home, "קובץ העבודה", "בניית משמר", "חיפוש מרצים"], key="nav")
+        st.radio("מסך", [home, "קובץ העבודה", "בניית משמר", "מאגר המרצים", "חיפוש מרצים"], key="nav")
         st.divider()
         if st.button("התנתק", width="stretch"):
             logout()
@@ -991,6 +1116,8 @@ def main() -> None:
         show_mishmar_page()
     elif st.session_state.get("nav") == "בניית משמר":
         show_chat()
+    elif st.session_state.get("nav") == "מאגר המרצים":
+        show_speaker_index()
     elif st.session_state.get("nav") == "חיפוש מרצים":
         show_speaker_search()
     elif st.session_state.role == "admin":

@@ -147,6 +147,10 @@ When a student or Uri needs speakers — especially **Lesson 1 (academic)** and 
 
 **Write back.** Every speaker found or seriously considered goes into the database with their topic, so the index grows and the next student finds them in seconds.
 
+**Every approach is logged, and that is what makes the index shared.** The moment a trainee contacts someone — sent a message, got an answer, closed them, was turned down — it goes to `SpeakerOutreach` through `record_outreach()`. Ten trainees hunt for speakers in parallel; an index that does not record who already called is how two pairs approach the same person a week apart. Current status is derived from that log, never stored separately.
+
+**A refusal is almost always to a date, not in principle.** Show it with its history and say it is worth trying again in another part of the year.
+
 ### Every proposed name carries its evidence
 A name without provenance is not a suggestion. For each:
 - **Source link** — faculty page, institute page, podcast episode, book listing.
