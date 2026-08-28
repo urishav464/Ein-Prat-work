@@ -243,6 +243,60 @@ def show_admin_dashboard() -> None:
         st.subheader("ממתין לנושא")
         st.write(" · ".join(f"#{m['id']:02d} ({m['gregorian_date']})" for m in missing))
 
+    st.divider()
+    st.subheader("עבר את התאריך המומלץ")
+    overdue = dm.get_overdue_tasks()
+    if not overdue:
+        st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
+    else:
+        st.caption(
+            f"{len(overdue)} משימות פתוחות עברו את התאריך המומלץ. "
+            "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
+        )
+        by_mishmar: dict[int, list[dict]] = {}
+        for t in overdue:
+            by_mishmar.setdefault(t["mishmar_id"], []).append(t)
+        for mid, items in sorted(by_mishmar.items()):
+            head = items[0]
+            with st.expander(
+                f"#{mid:02d} · {head['gregorian_date']} · {head['owners']} — "
+                f"{len(items)} משימות"
+            ):
+                for t in items:
+                    a = dm.annotate_deadline(t)
+                    c1, c2, c3 = st.columns([4, 2, 2])
+                    c1.markdown(f"**{_clean(t['task_description'])[:70]}**")
+                    c1.caption(f"{t.get('category') or ''} · {a['nudge']}")
+                    # The instructor can advance a trainee's task directly,
+                    # for the common case where the work happened but nobody
+                    # updated the board.
+                    if c2.button("→ בתהליך", key=f"ov-ip-{t['id']}"):
+                        dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
+                    if c3.button("→ הושלם", key=f"ov-dn-{t['id']}"):
+                        dm.update_task_status(t["id"], "DONE"); st.rerun()
+
+    st.divider()
+    st.subheader("התקדמות החניכים")
+    progress = dm.get_student_progress()
+    rows = []
+    for r in progress:
+        total = r["tasks_total"] or 0
+        done = r["tasks_done"] or 0
+        rows.append({
+            "באיחור": r["overdue"] or 0,
+            "אחוז": f"{round(100 * done / total) if total else 0}%",
+            "משימות": f"{done}/{total}",
+            "משמרים": r["mishmarim"] or 0,
+            "חניך": r["name"],
+        })
+    st.dataframe(rows, width="stretch", hide_index=True)
+    behind = [r for r in progress if (r["overdue"] or 0) > 0]
+    if behind:
+        st.info(
+            "חניכים עם משימות שעברו את התאריך: "
+            + " · ".join(f"{r['name']} ({r['overdue']})" for r in behind)
+        )
+
 
 def show_student_view(student_name: str) -> None:
     student_id = st.session_state.student_id

@@ -948,6 +948,60 @@ def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
     return out
 
 
+def get_overdue_tasks(today: Optional[_date] = None, db_path: str = DB_PATH) -> list[dict]:
+    """Open tasks whose recommended closing date has passed, soonest first.
+
+    This is the instructor's view of the deadline model. The trainee sees the
+    same fact as a nudge; here it is something to act on.
+    """
+    stamp = (today or _date.today()).isoformat()
+    return _query(
+        """SELECT t.*, m.gregorian_date, m.hebrew_date, m.topic,
+                  -- #01 and #02 are staff-built and have no Assignments rows,
+                  -- so this would be NULL and blow up any caller formatting it.
+                  COALESCE((SELECT GROUP_CONCAT(s.name, ' + ')
+                     FROM Assignments a JOIN Students s ON s.id = a.student_id
+                    WHERE a.mishmar_id = m.id), 'צוות') AS owners
+           FROM Tasks t JOIN Mishmarim m ON m.id = t.mishmar_id
+           WHERE t.status != 'DONE'
+             AND t.due_date IS NOT NULL
+             AND t.due_date < ?
+           ORDER BY t.due_date""",
+        (stamp,),
+        db_path=db_path,
+    )
+
+
+def get_student_progress(
+    today: Optional[_date] = None, db_path: str = DB_PATH
+) -> list[dict]:
+    """Per-trainee: how many Mishmarim, how many tasks done, how many overdue.
+
+    A trainee's tasks are those on the Mishmarim they own — both the shared
+    pair tasks (student_id IS NULL) and anything assigned to them personally.
+    """
+    stamp = (today or _date.today()).isoformat()
+    return _query(
+        """SELECT s.id, s.name,
+                  COUNT(DISTINCT a.mishmar_id)                        AS mishmarim,
+                  COUNT(t.id)                                         AS tasks_total,
+                  SUM(CASE WHEN t.status = 'DONE' THEN 1 ELSE 0 END)  AS tasks_done,
+                  SUM(CASE WHEN t.status != 'DONE'
+                            AND t.due_date IS NOT NULL
+                            AND t.due_date < ? THEN 1 ELSE 0 END)     AS overdue
+           FROM Students s
+           LEFT JOIN Assignments a ON a.student_id = s.id
+           LEFT JOIN Tasks t
+                  ON t.mishmar_id = a.mishmar_id
+                 AND (t.student_id IS NULL OR t.student_id = s.id)
+           WHERE s.role = 'student'
+           GROUP BY s.id, s.name
+           ORDER BY s.id""",
+        (stamp,),
+        db_path=db_path,
+    )
+
+
 def get_speaker_by_name(name: str, db_path: str = DB_PATH) -> list[dict]:
     """Every index row matching this name.
 
