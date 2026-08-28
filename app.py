@@ -58,7 +58,21 @@ def bootstrap() -> dict:
 
 RTL_CSS = """
 <style>
-  /* The whole UI is Hebrew; Streamlit has no native RTL mode. */
+  /* ---- Typography: Heebo is the app's voice. Loaded from Google Fonts on
+     the deployed app; sandboxes without network fall back silently. ---- */
+  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap');
+  html, body, .stApp, [class^="st-"], button, input, textarea, select {
+      font-family: 'Heebo', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
+  }
+  /* The override above must NOT reach Streamlit's icon glyphs — they are
+     ligature text ("keyboard_arrow_down") that renders literally without
+     the Material font. */
+  [data-testid="stIconMaterial"], span[class*="material-symbols"] {
+      font-family: 'Material Symbols Rounded' !important;
+  }
+  h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.01em; }
+
+  /* ---- RTL: the whole UI is Hebrew; Streamlit has no native mode. ---- */
   .stApp,
   [data-testid="stAppViewContainer"],
   [data-testid="stSidebar"],
@@ -79,22 +93,107 @@ RTL_CSS = """
   .stButton button, .stFormSubmitButton button { direction: rtl; }
   [data-testid="stExpander"] summary { direction: rtl; text-align: right; }
   [data-testid="stProgress"] { direction: rtl; }
+  [data-testid="stChatInput"] textarea { direction: rtl; text-align: right; }
 
-  /* Soft warm ground for the sidebar; the main area stays clean. */
+  /* ---- Sidebar: warm ground, and the nav radio restyled as cards.
+     The radio circle is hidden; the label IS the card. ---- */
   [data-testid="stSidebar"] {
       background: #f4f1ea;
       border-inline-end: 1px solid #e6e0d2;
   }
-
-  /* st.container(border=True) is the app's card primitive — white, rounded,
-     a light shadow, so a grid of them reads as a board and not as forms. */
-  [data-testid="stVerticalBlockBorderWrapper"] {
+  [data-testid="stSidebar"] div[role="radiogroup"] > label {
+      display: flex; align-items: center;
       background: #ffffff;
+      border: 1px solid #e8e2d4;
       border-radius: 12px;
-      box-shadow: 0 1px 4px rgba(60, 50, 20, 0.08);
+      padding: 0.6rem 0.9rem;
+      margin-bottom: 0.4rem;
+      width: 100%;
+      cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, transform .1s ease;
+      box-shadow: 0 1px 2px rgba(60,50,20,.05);
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+      border-color: #c9a961;
+      transform: translateX(-2px);
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+      background: linear-gradient(135deg, #f7efdd, #f2e6c9);
+      border-color: #c9a961;
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
+      font-weight: 700;
+  }
+  /* the visual radio mark. Two places, because the DOM has both a hidden
+     input wrapper (label > span) and the drawn 16px circle nested beside the
+     text (label > div > div > div:first-child). Hiding them keeps the label
+     clickable — it still wraps the real input. */
+  [data-testid="stSidebar"] div[role="radiogroup"] > label > span:first-child {
+      display: none;
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label > div > div > div:first-child {
+      display: none;
   }
 
-  /* Colored tag chips (status / category / urgency). */
+  .side-avatar {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: linear-gradient(135deg, #c9a961, #a9873f);
+      color: #fff; font-weight: 800; font-size: 1.15rem;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: .3rem;
+  }
+
+  /* ---- Cards: st.container(border=True) is the app's card primitive ---- */
+  [data-testid="stVerticalBlockBorderWrapper"] {
+      background: #ffffff;
+      border-radius: 14px;
+      box-shadow: 0 1px 5px rgba(60, 50, 20, 0.07);
+  }
+
+  /* ---- Chat: bubbles, not a white box ---- */
+  .chat-head {
+      background: linear-gradient(135deg, #2f2a1d, #4a4028);
+      color: #f7efdd;
+      border-radius: 14px;
+      padding: .55rem .9rem;
+      font-weight: 700;
+      margin-bottom: .45rem;
+      display: flex; align-items: center; gap: .5rem;
+  }
+  .chat-head small { font-weight: 400; opacity: .75; font-size: .72rem; }
+  [data-testid="stChatMessage"] {
+      border-radius: 16px;
+      padding: .7rem .95rem;
+      margin-bottom: .3rem;
+      background: #ffffff;
+      border: 1px solid #eee7d8;
+      box-shadow: 0 1px 2px rgba(60,50,20,.04);
+  }
+  [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+      background: #f5edda;
+      border-color: #e8d9b4;
+  }
+  [data-testid^="stChatMessageAvatar"] { display: none; }
+  [data-testid="stChatMessage"] p { line-height: 1.55; }
+  [data-testid="stChatInput"] {
+      border-radius: 14px;
+      border: 1px solid #e0d8c4;
+  }
+  .st-key-chat_reopen button {
+      border-radius: 50%;
+      width: 52px; height: 52px;
+      font-size: 1.25rem;
+      border: 1px solid #c9a961;
+      background: #f7efdd;
+      box-shadow: 0 2px 8px rgba(60,50,20,.15);
+  }
+  .st-key-chat_close button {
+      border: none; background: transparent;
+      color: #f7efdd; font-size: .9rem;
+      padding: 0 .3rem; min-height: 0;
+  }
+
+  /* ---- Chips ---- */
   .chip {
       display: inline-block;
       padding: 1px 10px;
@@ -113,6 +212,23 @@ RTL_CSS = """
 
   .task-desc { font-weight: 600; line-height: 1.45; margin-bottom: 4px; }
   .card-meta { opacity: 0.65; font-size: 0.78rem; margin-top: 4px; }
+
+  /* ---- The phase stepper ---- */
+  .stepper { display: flex; align-items: flex-start; margin: .5rem 0 .3rem; }
+  .step { display: flex; flex-direction: column; align-items: center; gap: 3px;
+          flex: 0 0 auto; font-size: .7rem; color: #6a6455; min-width: 58px; }
+  .step .dot {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: #eeece7; border: 2px solid #ddd6c6; font-size: .95rem;
+  }
+  .step.done .dot    { background: #e6f4ea; border-color: #137333; }
+  .step.current .dot { background: #f5edda; border-color: #c9a961;
+                       box-shadow: 0 0 0 4px rgba(201,169,97,.2); }
+  .step.current { color: #2f2a1d; font-weight: 700; }
+  .step-bar { flex: 1 1 auto; height: 3px; background: #e4ddcb;
+              margin: 16px 2px 0; border-radius: 2px; min-width: 10px; }
+  .step-bar.done { background: #137333; }
 
   .kanban-card {
       background: var(--secondary-background-color, #f3f0e8);
@@ -1168,7 +1284,15 @@ def render_chat_panel() -> None:
     The panel is drawn AFTER the main column in code, which keeps the page
     visible while the answer streams in.
     """
-    st.markdown("#### 💬 שותף הבנייה")
+    head, close = st.columns([6, 1])
+    head.markdown(
+        "<div class='chat-head'>💬 שותף הבנייה"
+        "<small>מחובר ללוח החי</small></div>",
+        unsafe_allow_html=True,
+    )
+    if close.button("✕", key="chat_close", help="קפל את הצ׳אט"):
+        st.session_state["chat_open"] = False
+        st.rerun()
 
     mine = _my_mishmarim()
     if not mine:
@@ -1280,16 +1404,21 @@ NAV_SEARCH = "🔍 חיפוש מרצים"
 
 def show_sidebar() -> None:
     with st.sidebar:
-        st.markdown(f"### {st.session_state.user_name}")
-        st.caption("מדריך (אדמין)" if st.session_state.role == "admin" else "חניך")
+        name = st.session_state.user_name or ""
+        st.markdown(
+            f"<div class='side-avatar'>{_clean(name[:1]) or '·'}</div>"
+            f"<div style='font-weight:800;font-size:1.05rem'>{_clean(name)}</div>"
+            f"<div style='opacity:.6;font-size:.8rem'>"
+            f"{'מדריך · אדמין' if st.session_state.role == 'admin' else 'חניך · שנה ב׳'}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
         st.divider()
         home = "🎛️ לוח הבקרה" if st.session_state.role == "admin" else "🏠 מסך הבית שלי"
-        st.radio("ניווט", [home, NAV_WORKFILE, NAV_INDEX, NAV_SEARCH], key="nav")
+        st.radio("ניווט", [home, NAV_WORKFILE, NAV_INDEX, NAV_SEARCH],
+                 key="nav", label_visibility="collapsed")
         st.divider()
-        st.toggle("💬 שותף הבנייה", value=True, key="chat_open",
-                  help="הצ׳אט זמין בכל מסך. אפשר לקפל אותו כשצריך רוחב.")
-        st.divider()
-        st.caption('שנה ב׳ · תשפ״ז · 5787')
+        st.caption('🕯️ שנה ב׳ · תשפ״ז · 5787')
         if st.button("התנתק", width="stretch"):
             logout()
             st.rerun()
@@ -1345,17 +1474,23 @@ def main() -> None:
 
     # The global layout. Under RTL st.columns mirrors, so declaring
     # [main, chat] renders the MAIN column on the right — Hebrew reading
-    # order — and the chat as the fixed LEFT panel the redesign asked for.
-    if st.session_state.get("chat_open", True):
+    # order — and the chat as the fixed LEFT panel. Collapsed, the panel
+    # shrinks to a slim column holding only the reopen bubble, so the
+    # assistant is never more than one click away on any screen.
+    chat_open = st.session_state.setdefault("chat_open", True)
+    if chat_open:
         main_col, chat_col = st.columns([2.4, 1.1], gap="medium")
     else:
-        main_col, chat_col = st.container(), None
+        main_col, chat_col = st.columns([14, 1], gap="small")
 
     with main_col:
         _route_main()
-    if chat_col is not None:
-        with chat_col:
+    with chat_col:
+        if chat_open:
             render_chat_panel()
+        elif st.button("💬", key="chat_reopen", help="פתח את שותף הבנייה"):
+            st.session_state["chat_open"] = True
+            st.rerun()
 
 
 if __name__ == "__main__":
