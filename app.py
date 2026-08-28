@@ -393,33 +393,66 @@ def _clean(text: str) -> str:
     )
 
 
+def _pipeline_row(m: dict, progress: dict, overdue_count: int) -> None:
+    """One Mishmar in the instructor's pipeline: identity · phase · progress."""
+    cur = progress["phases"][progress["current"]]
+    phase_chip = _chip(f"{cur['icon']} {cur['label']}", "gold")
+    owners_chip = _chip("צוות" if m.get("is_staff_built") else "זוג חניכים", "gray")
+    over_chip = _chip(f"{overdue_count} באיחור", "red") if overdue_count else ""
+    topic = _clean(m.get("topic") or "") or "<span style='opacity:.5'>ללא נושא</span>"
+    with st.container(border=True):
+        c1, c2 = st.columns([2.6, 1.4])
+        c1.markdown(
+            f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
+            f"{topic}</div>"
+            f"<div>{_countdown_chip(m)}{phase_chip}{owners_chip}{over_chip}</div>",
+            unsafe_allow_html=True,
+        )
+        with c2:
+            if progress["total"]:
+                st.progress(progress["pct"],
+                            text=f"{progress['done']}/{progress['total']}")
+            else:
+                st.caption("ללא משימות")
+
+
 def show_admin_dashboard() -> None:
     st.title("🎛️ לוח הבקרה")
     st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
 
     mishmarim = dm.get_all_mishmarim()
     budget = dm.get_budget_summary()
-
     if not mishmarim:
         st.info("אין עדיין נתונים במסד. ודא שההגירה מ-`students_tasks.md` רצה.")
         return
 
+    # One query for every task; everything below derives from it in Python.
+    all_tasks = dm.get_all_tasks()
+    by_mid: dict[int, list[dict]] = {}
+    for t in all_tasks:
+        by_mid.setdefault(t["mishmar_id"], []).append(t)
+    progress = {m["id"]: dm.mishmar_progress(mishmar=m, tasks=by_mid.get(m["id"], []))
+                for m in mishmarim}
+
     with_topic = [m for m in mishmarim if m.get("topic")]
-    totals = dm.get_task_totals()
+    done_all = sum(p["done"] for p in progress.values())
+    total_all = sum(p["total"] for p in progress.values())
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🕯️ משמרים", len(mishmarim))
     c2.metric("🎯 עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
     c3.metric("💰 סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
     c4.metric("📊 אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
-
-    if totals["total"]:
-        st.progress(totals["done"] / totals["total"],
-                    text=f"התקדמות העונה: {totals['done']}/{totals['total']} משימות הושלמו")
+    if total_all:
+        st.progress(done_all / total_all,
+                    text=f"התקדמות העונה: {done_all}/{total_all} משימות הושלמו")
 
     st.divider()
     st.subheader("🔴 עבר את התאריך המומלץ")
     overdue = dm.get_overdue_tasks()
+    over_by_mid: dict[int, int] = {}
+    for t in overdue:
+        over_by_mid[t["mishmar_id"]] = over_by_mid.get(t["mishmar_id"], 0) + 1
     if not overdue:
         st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
     else:
@@ -427,11 +460,7 @@ def show_admin_dashboard() -> None:
             f"{len(overdue)} משימות פתוחות עברו את התאריך המומלץ. "
             "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
         )
-        cards = []
-        for t in overdue:
-            a = dm.annotate_deadline(t)
-            a["category"] = a.get("category") or ""
-            cards.append(a)
+        cards = [dm.annotate_deadline(t) for t in overdue]
         for i in range(0, len(cards), 2):
             cols = st.columns(2)
             for col, t in zip(cols, cards[i:i + 2]):
@@ -445,7 +474,7 @@ def show_admin_dashboard() -> None:
                             f"<div class='task-desc'>{_clean(t['task_description'])[:80]}</div>"
                             f"<div>{''.join(chips)}</div>"
                             f"<div class='card-meta'>{_clean(t.get('owners') or 'צוות')} · "
-                            f"{t['gregorian_date']} · {_clean(t.get('nudge') or '')}</div>",
+                            f"{_fmt_date(t['gregorian_date'])} · {_clean(t.get('nudge') or '')}</div>",
                             unsafe_allow_html=True,
                         )
                         # The instructor can advance a trainee's task directly,
@@ -457,57 +486,41 @@ def show_admin_dashboard() -> None:
                         if b2.button("▶ בתהליך", key=f"ov-ip-{t['id']}"):
                             dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
 
+    # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
-    st.subheader("👥 התקדמות החניכים")
-    progress = dm.get_student_progress()
-    prow = []
-    for r in progress:
-        total = r["tasks_total"] or 0
-        done = r["tasks_done"] or 0
-        # st.dataframe does NOT mirror under RTL — columns lay out left-to-right
-        # in insertion order, so the dict is written in reverse to put the name
-        # on the RIGHT, where a Hebrew reader starts.
-        prow.append({
-            "באיחור": r["overdue"] or 0,
-            "התקדמות": round(100 * done / total) if total else 0,
-            "משימות": f"{done}/{total}",
-            "משמרים": r["mishmarim"] or 0,
-            "חניך": r["name"],
-        })
-    st.dataframe(
-        prow, width="stretch", hide_index=True,
-        column_config={
-            "התקדמות": st.column_config.ProgressColumn(
-                "התקדמות", min_value=0, max_value=100, format="%d%%"),
-        },
-    )
-    behind = [r for r in progress if (r["overdue"] or 0) > 0]
-    if behind:
-        st.info(
-            "חניכים עם משימות שעברו את התאריך: "
-            + " · ".join(f"{r['name']} ({r['overdue']})" for r in behind)
-        )
+    st.subheader("📅 צינור המשמרים")
+    st.caption("כל משמר, איפה הוא עומד בבנייה, ומי מחזיק אותו. לפי סדר הערבים.")
+    today = _date_cls.today()
+    upcoming = [m for m in mishmarim
+                if (_parse_date(m.get("gregorian_date")) or today) >= today]
+    past = [m for m in mishmarim if m not in upcoming]
+    for m in upcoming:
+        _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0))
+    if past:
+        with st.expander(f"🌙 משמרים שהתקיימו ({len(past)})"):
+            for m in reversed(past):
+                _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0))
 
-    st.divider()
-    st.subheader("📅 כל המשמרים")
-    rows = []
-    for m in mishmarim:
-        rows.append(
-            {
-                "הוצאות": _fmt_nis(m.get("budget_used") or 0),
-                "אחראים": "צוות" if m.get("is_staff_built") else "זוג חניכים",
-                "נושא": m.get("topic") or "TBD",
-                "סוג": m.get("mishmar_type") or "—",
-                "עברי": m["hebrew_date"],
-                "תאריך": m["gregorian_date"],
-                "#": m["id"],
-            }
+    with st.expander("📊 התקדמות לפי חניך"):
+        st.caption("משימה של זוג נספרת לשני החניכים — במכוון. זה מבט אחריות, לא חשבונאות.")
+        prow = []
+        for r in dm.get_student_progress():
+            total = r["tasks_total"] or 0
+            done = r["tasks_done"] or 0
+            prow.append({
+                "באיחור": r["overdue"] or 0,
+                "התקדמות": round(100 * done / total) if total else 0,
+                "משימות": f"{done}/{total}",
+                "משמרים": r["mishmarim"] or 0,
+                "חניך": r["name"],
+            })
+        st.dataframe(
+            prow, width="stretch", hide_index=True,
+            column_config={
+                "התקדמות": st.column_config.ProgressColumn(
+                    "התקדמות", min_value=0, max_value=100, format="%d%%"),
+            },
         )
-    st.dataframe(rows, width="stretch", hide_index=True)
-    missing = [m for m in mishmarim if not m.get("topic")]
-    if missing:
-        st.caption("ממתין לנושא: " + " · ".join(
-            f"#{m['id']:02d} ({m['gregorian_date']})" for m in missing))
 
     with st.expander("💰 תקציב"):
         st.caption(
@@ -555,8 +568,18 @@ from datetime import date as _date_cls
 
 
 def _parse_date(value) -> Optional[_date_cls]:
+    """Both date shapes that live in this schema: tasks.due_date is a real DATE
+    (ISO out of PostgREST), but mishmarim.gregorian_date is TEXT in the repo's
+    d.m.Y convention ('15.10.2026') — an ISO-only parse silently returned None
+    for every Mishmar date and every countdown chip vanished."""
+    raw = str(value or "").strip()
     try:
-        return _date_cls.fromisoformat(str(value)[:10])
+        return _date_cls.fromisoformat(raw[:10])
+    except ValueError:
+        pass
+    try:
+        d, m, y = raw.split(".")
+        return _date_cls(int(y), int(m), int(d))
     except (ValueError, TypeError):
         return None
 
