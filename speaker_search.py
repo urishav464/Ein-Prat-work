@@ -131,7 +131,7 @@ def manual_search_links(query: str) -> dict:
     }
 
 
-def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[dict]:
+def _fetch(query: str, max_results: int = 8) -> list[dict]:
     """The single network seam. Cache -> cooldown gate -> throttle -> ddgs.
 
     Every search in this module goes through here, so caching, throttling and
@@ -139,7 +139,7 @@ def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[
     """
     global _net_calls, _cache_hits, _cooldown_step
 
-    cached = dm.cache_get(query, backend=BACKENDS, region=REGION, db_path=db_path)
+    cached = dm.cache_get(query, backend=BACKENDS, region=REGION)
     if cached is not None:
         _cache_hits += 1
         return cached
@@ -169,7 +169,7 @@ def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[
         _net_calls += 1
     except RatelimitException as exc:
         secs = _enter_cooldown()
-        dm.cache_put(query, [], ok=False, backend=BACKENDS, region=REGION, db_path=db_path)
+        dm.cache_put(query, [], ok=False, backend=BACKENDS, region=REGION)
         raise SearchUnavailable(
             f"מנוע החיפוש חסם אותנו זמנית. ממתינים {secs} שניות.",
             query=query,
@@ -179,7 +179,7 @@ def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[
         # KNOWN search/network failures only — this covers the proxy refusals
         # seen in sandboxed environments. Cached as a failure, which expires in
         # an hour rather than in 60 days.
-        dm.cache_put(query, [], ok=False, backend=BACKENDS, region=REGION, db_path=db_path)
+        dm.cache_put(query, [], ok=False, backend=BACKENDS, region=REGION)
         raise SearchUnavailable(
             f"החיפוש נכשל: {type(exc).__name__}. אפשר לחפש ידנית בקישור למטה.",
             query=query,
@@ -202,7 +202,7 @@ def _fetch(query: str, max_results: int = 8, db_path: str = dm.DB_PATH) -> list[
     _cooldown_step = 0
     dm.cache_put(
         query, normalised, ok=bool(normalised),
-        backend=BACKENDS, region=REGION, db_path=db_path,
+        backend=BACKENDS, region=REGION,
     )
     return normalised
 
@@ -370,7 +370,7 @@ def _flags_for(name: str, evidence: list[dict]) -> list[str]:
     return flags
 
 
-def _index_note(name: str, db_path: str = dm.DB_PATH) -> list[str]:
+def _index_note(name: str) -> list[str]:
     """Local-index notes for a name. No network — this is a free check.
 
     Answers the last line of the ⚠️ לאמת checklist ("have we already approached
@@ -378,7 +378,7 @@ def _index_note(name: str, db_path: str = dm.DB_PATH) -> list[str]:
     the index: the next pair must see what the previous pair already did.
     """
     notes = []
-    for row in dm.get_speaker_status(name, db_path=db_path):
+    for row in dm.get_speaker_status(name):
         status = (row.get("current_status") or "").strip()
         origin = "📗 מהמאגר" if row.get("source_type") == "original_44" else "📘 במאגר"
         notes.append(f"{origin} · {status or 'ללא סטטוס'}")
@@ -386,7 +386,7 @@ def _index_note(name: str, db_path: str = dm.DB_PATH) -> list[str]:
         if row.get("has_outreach"):
             # THE collision-prevention line. Without it two pairs approach the
             # same person a week apart and neither knows.
-            history = dm.get_outreach_for_speaker(row["speaker_id"], db_path=db_path)
+            history = dm.get_outreach_for_speaker(row["speaker_id"])
             for o in history[:3]:
                 who = o.get("student_name") or "מישהו מהצוות"
                 where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "ללא משמר"
@@ -404,7 +404,6 @@ def search_candidates(
     topic: str,
     lesson: str = "1",
     max_queries: int = 4,
-    db_path: str = dm.DB_PATH,
 ) -> dict:
     """DISCOVERY: find candidate speakers for a topic, from index AND from the web.
 
@@ -433,7 +432,7 @@ def search_candidates(
 
     profile = LESSON_PROFILES.get(lesson, LESSON_PROFILES["1"])
 
-    index_hits = dm.search_speakers_by_topic(topic, lesson=lesson, db_path=db_path)
+    index_hits = dm.search_speakers_by_topic(topic, lesson=lesson)
 
     raw: list[dict] = []
     queries: list[str] = []
@@ -443,7 +442,7 @@ def search_candidates(
         q = template.format(topic=topic)
         queries.append(q)
         try:
-            raw.extend(_fetch(q, db_path=db_path))
+            raw.extend(_fetch(q))
         except SearchUnavailable as exc:
             errors.append({"query": q, "error": str(exc), "manual": manual_search_links(q)})
             # Keep going: a later query may hit the cache even while the
@@ -456,7 +455,7 @@ def search_candidates(
     # the same person unaware of each other.
     known = {r["name"] for r in index_hits}
     for entry in web_names:
-        entry["index_notes"] = _index_note(entry["name"], db_path=db_path)
+        entry["index_notes"] = _index_note(entry["name"])
         entry["already_known"] = entry["name"] in known or bool(entry["index_notes"])
 
     return {
@@ -476,7 +475,6 @@ def verify_speaker(
     name: str,
     topic: Optional[str] = None,
     depth: int = 2,
-    db_path: str = dm.DB_PATH,
 ) -> dict:
     """VERIFICATION: mechanise the ⚠️ לאמת checklist for one name.
 
@@ -499,13 +497,13 @@ def verify_speaker(
     errors: list[dict] = []
     for q in checks:
         try:
-            evidence.extend(_fetch(q, max_results=6, db_path=db_path))
+            evidence.extend(_fetch(q, max_results=6))
         except SearchUnavailable as exc:
             errors.append({"query": q, "error": str(exc), "manual": manual_search_links(q)})
 
     blob = " ".join(f"{e.get('title','')} {e.get('body','')}" for e in evidence)
     recent_years = sorted(set(re.findall(r"\b(202[3-9])\b", blob)))
-    notes = _index_note(name, db_path=db_path)   # one lookup, used twice below
+    notes = _index_note(name)   # one lookup, used twice below
 
     return {
         "name": name,

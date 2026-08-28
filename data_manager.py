@@ -4,24 +4,26 @@ data_manager.py — the single data seam for the Mishmar management app.
 SCOPE IS HARDCODED: שנה ב' · תשפ"ז · 5787 · 2026-2027 · מדרשת עין פרת.
 21 Mishmarim, 10 trainees. There is no year-switcher and there must not be one.
 
-Everything that touches persistent state goes through this module. Nothing else
-in the codebase opens the database or reads the Markdown sources directly.
+STORAGE IS SUPABASE. Nothing else in the codebase talks to it. Credentials come
+from Streamlit Secrets (SUPABASE_URL, SUPABASE_KEY) — there is no .env file and
+no local database, because the app runs on Streamlit Cloud where the container
+disk is wiped on every redeploy.
 
-Why SQLite rather than .md/.csv: Streamlit runs every user session in its own
-thread and reruns the script on every interaction. Concurrent writes to a flat
-file lose data. SQLite in WAL mode gives us concurrent readers alongside a
-single writer, which is the actual access pattern here.
+TWO HALVES, and the split is forced by the platform: the REST API can read and
+write rows but CANNOT create tables. Structure therefore lives in
+`supabase_schema.sql`, pasted once into the Supabase SQL Editor, and this module
+only uses it. Anything needing a join or an aggregate is a VIEW in that file,
+because PostgREST cannot express one.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
-import shutil
-import sqlite3
-from contextlib import contextmanager
-from datetime import date as _date, timedelta as _timedelta
-from typing import Any, Iterable, Iterator, Optional
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+from typing import Any, Optional
 
 # --------------------------------------------------------------------------
 # Scope constants — do not generalise
@@ -35,381 +37,175 @@ INSTITUTION = "מדרשת עין פרת"
 
 TOTAL_MISHMARIM = 21
 TOTAL_STUDENTS = 10
-STAFF_BUILT_MISHMARIM = (1, 2)  # #01 משמר בוגרים, #02 — built by staff, not pairs
+STAFF_BUILT_MISHMARIM = (1, 2)
 
-# Budget: ₪500 per Mishmar is an *average indication* covering speakers and
-# refreshments together. Overspend on a single Mishmar is NOT an error — it is
-# drawn from the season-wide Mishmar budget line and balanced by cheaper nights.
-# Per the instructor's decision there is deliberately NO season ceiling here:
-# we track cumulative spend, we do not compare it to a cap.
+# ₪500 per Mishmar is an *average indication* covering speakers and refreshments
+# together. Overspend on one night is NOT an error — it is drawn from the
+# season-wide line and balanced by the many cheap nights. Deliberately no ceiling.
 PER_MISHMAR_BUDGET_NIS = 500
-SEASON_BUDGET_CEILING_NIS = None  # intentionally unset — tracking only
+SEASON_BUDGET_CEILING_NIS = None
 
 TASK_STATUSES = ("TO DO", "IN PROGRESS", "DONE")
 SPEAKER_SOURCE_TYPES = ("original_44", "web_search", "manual")
 
-# The outreach ladder, taken from templates/mishmar-workfile-template.md — the
-# format real Mishmarim are actually run in, and the one the opening deck
-# teaches on slide 11 ("לפני שפונים — בדקו במאגר המשותף").
-#
-# ⚠️ Three files word this ladder slightly differently: database.md says
-# "✅ אישר/לימד ❌ סירב", 2026-27/speakers.md says "✅ אישר", and the template
-# says "✅ סגור ❌ לא יכול/ה". Flagged, not silently rewritten — the wording in
-# those documents is Uri's to settle.
+# The outreach ladder, from templates/mishmar-workfile-template.md.
+# ⚠️ Three documents word this differently ("✅ אישר/לימד" vs "✅ אישר" vs
+# "✅ סגור"). The code follows the work-file template; reconciling the prose is
+# Uri's call, so it is flagged rather than silently rewritten.
 SPEAKER_STATUSES = (
-    "⬜ לא פנינו",
-    "📩 נשלחה פנייה",
-    "⏳ ממתין לתשובה",
-    "✅ סגור",
-    "❌ לא יכול/ה",
-    "⚠️ בתנאי",
+    "⬜ לא פנינו", "📩 נשלחה פנייה", "⏳ ממתין לתשובה",
+    "✅ סגור", "❌ לא יכול/ה", "⚠️ בתנאי",
 )
 
-# Task categories drive the recommended deadlines below. They come from the
-# opening deck (binyat-mishmar-mifgash-peticha.pptx, slide "מתי כדאי לסגור מה").
 TASK_CATEGORIES = (
     "נושא", "מרצים", "הזמנה", "כיבוד", "קישוט", "תוכן", "לוגיסטיקה", "אחרי",
 )
 
-# Days BEFORE the Mishmar that each category is recommended to be closed.
-# A negative value means "after the Mishmar".
-#
-# The deck frames these as "המלצה — לא חוק", and that framing is load-bearing:
-# a trainee sees a gentle nudge, never a failure state. Only the instructor
-# dashboard treats a passed date as something to act on.
+# Days BEFORE the Mishmar each category is recommended to close. Negative = after.
+# The opening deck calls these "המלצה — לא חוק", and that framing is load-bearing:
+# a trainee sees a nudge; only the instructor view treats a passed date as action.
 DEADLINE_OFFSETS_DAYS = {
-    "נושא": 21,
-    "מרצים": 14,
-    "הזמנה": 7,
-    "כיבוד": 7,
-    "קישוט": 7,
-    "תוכן": 7,
-    "לוגיסטיקה": 0,
-    "אחרי": -7,
+    "נושא": 21, "מרצים": 14, "הזמנה": 7, "כיבוד": 7,
+    "קישוט": 7, "תוכן": 7, "לוגיסטיקה": 0, "אחרי": -7,
 }
 
-# --------------------------------------------------------------------------
-# Paths
-# --------------------------------------------------------------------------
+CACHE_TTL_DAYS_OK = 60
+CACHE_TTL_HOURS_FAIL = 1
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(REPO_ROOT, "mishmar.db")
 TASKS_MD = os.path.join(REPO_ROOT, "students_tasks.md")
-TASKS_MD_ARCHIVED = os.path.join(REPO_ROOT, "students_tasks_ARCHIVED.md")
-SPEAKERS_MD = os.path.join(
-    REPO_ROOT, "Mishmer-section", "speakers", "database.md"
+SPEAKERS_MD = os.path.join(REPO_ROOT, "Mishmer-section", "speakers", "database.md")
+
+# Titles are NOT part of a name. Split out on the way in, joined for display.
+_TITLE_RE = re.compile(
+    r"^\s*(ד[״\"']ר|דר[׳']|פרופ[׳']?|פרופסור|הרב(?:נית)?|עו[״\"']ד)\s+(.+)$"
 )
 
 
 # --------------------------------------------------------------------------
-# Connection handling
+# Connection
 # --------------------------------------------------------------------------
 
 
-@contextmanager
-def get_connection(db_path: str = DB_PATH) -> Iterator[sqlite3.Connection]:
-    """Yield a configured connection, committing on success, rolling back on error.
+class StorageUnavailable(RuntimeError):
+    """No credentials, no client library, or the schema was never installed.
 
-    The three settings below are what make this safe under Streamlit:
-      * WAL              — readers do not block the writer, and vice versa.
-                           Without it, concurrent sessions hit "database is locked".
-      * check_same_thread=False — Streamlit serves each session on its own thread.
-      * timeout=10       — wait for a held lock instead of failing instantly.
+    Raised rather than returning empty so the UI can say what to fix instead of
+    rendering a convincingly empty app.
     """
-    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+
+
+_client = None
+
+
+def get_client():
+    """The Supabase client, built once per process from Streamlit Secrets."""
+    global _client
+    if _client is not None:
+        return _client
+
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        yield conn
-        conn.commit()
+        from supabase import create_client
+    except ImportError as exc:
+        raise StorageUnavailable(
+            "החבילה `supabase` לא מותקנת. הוסיפו אותה ל-requirements.txt."
+        ) from exc
+
+    url = key = None
+    try:
+        import streamlit as st
+
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
     except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        pass
+    # Env vars are a fallback for scripts and tests only. The deployed app is
+    # expected to use Streamlit Secrets.
+    url = url or os.environ.get("SUPABASE_URL")
+    key = key or os.environ.get("SUPABASE_KEY")
+
+    if not url or not key:
+        raise StorageUnavailable(
+            "חסרים SUPABASE_URL / SUPABASE_KEY ב-Secrets של Streamlit. "
+            "ראו DEPLOY.md."
+        )
+    _client = create_client(url, key)
+    return _client
 
 
-DQ = chr(34)   # "
-SQ = chr(39)   # '
+def set_client(client) -> None:
+    """Inject a client. Used by tests; the app never calls this."""
+    global _client
+    _client = client
 
 
-def _lit(value: str) -> str:
-    """Quote a value as a SQL string literal (single quotes doubled)."""
-    return SQ + value.replace(SQ, SQ + SQ) + SQ
+def _t(table: str):
+    return get_client().table(table)
 
 
-def _query(sql: str, params: Iterable[Any] = (), db_path: str = DB_PATH) -> list[dict]:
-    with get_connection(db_path) as conn:
-        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+def _rows(resp) -> list[dict]:
+    return list(getattr(resp, "data", None) or [])
 
 
-# --------------------------------------------------------------------------
-# Schema
-# --------------------------------------------------------------------------
+def _one(resp) -> Optional[dict]:
+    rows = _rows(resp)
+    return rows[0] if rows else None
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS Mishmarim (
-    id              INTEGER PRIMARY KEY,           -- 1..21, matches the folder number
-    gregorian_date  TEXT    NOT NULL,              -- '24.9.2026'
-    hebrew_date     TEXT    NOT NULL,              -- 'י״ג תשרי תשפ״ז'
-    mishmar_type    TEXT,                          -- 'פנימי' / 'חיצוני'
-    topic           TEXT,                          -- NULL = TBD. Never guessed.
-    note            TEXT,
-    workfile_path   TEXT,
-    is_staff_built  INTEGER NOT NULL DEFAULT 0     -- 1 for #01 and #02
-);
 
-CREATE TABLE IF NOT EXISTS Students (
-    id           INTEGER PRIMARY KEY,              -- 1..10
-    name         TEXT    NOT NULL UNIQUE,          -- 'חניך 1' until real names arrive
-    role         TEXT    NOT NULL DEFAULT 'student' -- 'student' | 'instructor'
-);
+def _now_iso() -> str:
+    return _datetime.utcnow().isoformat()
 
--- Ownership is a PAIR per Mishmar, so it is many-to-many. Without this table
--- there is no way to answer "which Mishmarim belong to חניך 4".
-CREATE TABLE IF NOT EXISTS Assignments (
-    mishmar_id  INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
-    student_id  INTEGER NOT NULL REFERENCES Students(id)  ON DELETE CASCADE,
-    PRIMARY KEY (mishmar_id, student_id)
-);
 
-CREATE TABLE IF NOT EXISTS Tasks (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    mishmar_id        INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
-    -- NULL = the task belongs to the Mishmar, i.e. to BOTH owners in the pair.
-    -- Non-NULL = personally assigned to one trainee.
-    student_id        INTEGER REFERENCES Students(id) ON DELETE SET NULL,
-    task_description  TEXT    NOT NULL,
-    status            TEXT    NOT NULL DEFAULT 'TO DO'
-                              CHECK (status IN ('TO DO', 'IN PROGRESS', 'DONE')),
-    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS Budget (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    mishmar_id   INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
-    expense_type TEXT    NOT NULL,                 -- 'מרצה' / 'כיבוד' / 'אחר'
-    description  TEXT,                             -- speaker name, what was bought
-    amount       REAL    DEFAULT 0,                -- planned / quoted
-    actual_cost  REAL    DEFAULT 0,                -- actually paid. 0 = came free.
-    created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS Speakers (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    name             TEXT    NOT NULL,
-    expertise_topics TEXT,                         -- free text, searched with LIKE
-    verification_url TEXT,                         -- faculty page, institute, podcast
-    -- 'original_44'  seeded from Mishmer-section/speakers/database.md
-    -- 'web_search'   discovered by speaker_search.py
-    -- 'manual'       typed in by a user
-    source_type      TEXT    NOT NULL DEFAULT 'manual'
-                             CHECK (source_type IN ('original_44','web_search','manual')),
-    status           TEXT    DEFAULT '⬜ לא פנינו',
-    lesson_fit       TEXT,                         -- '1', '2-3', ... maps to the 4-lesson arc
-    region           TEXT,                         -- '🟢 ירושלים' etc. A consideration, not a filter.
-    contact          TEXT,                         -- TBD unless a human filled it in
-    notes            TEXT,
-    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (name, source_type)
-);
-
--- Web-search response cache. All trainees share one machine and therefore one
--- IP, so the same query typed by two people must cost one network call, not
--- two. Keyed by a hash of query+backend+region.
-CREATE TABLE IF NOT EXISTS SearchCache (
-    query_hash   TEXT PRIMARY KEY,
-    query_text   TEXT NOT NULL,
-    results_json TEXT NOT NULL,
-    -- 0 = the call failed or came back empty. Cached too, but for an hour
-    -- rather than for weeks: without this a single blocked afternoon would
-    -- poison the cache with empty results for the rest of the season.
-    ok           INTEGER NOT NULL DEFAULT 1,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS _meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_mishmar  ON Tasks(mishmar_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_status   ON Tasks(status);
-CREATE INDEX IF NOT EXISTS idx_budget_mishmar ON Budget(mishmar_id);
-CREATE INDEX IF NOT EXISTS idx_speakers_src   ON Speakers(source_type);
-CREATE INDEX IF NOT EXISTS idx_cache_created  ON SearchCache(created_at);
-
--- budget_used is deliberately NOT a stored column on Mishmarim. A stored copy
--- drifts from the Budget rows it is derived from the moment anyone edits an
--- expense. Computing it in a view keeps one source of truth.
-CREATE VIEW IF NOT EXISTS v_mishmar_budget AS
-SELECT
-    m.id                                   AS mishmar_id,
-    m.gregorian_date                       AS gregorian_date,
-    COALESCE(SUM(b.actual_cost), 0)        AS budget_used,
-    ?                                      AS budget_nominal
-FROM Mishmarim m
-LEFT JOIN Budget b ON b.mishmar_id = m.id
-GROUP BY m.id;
-"""
+def storage_ready() -> dict:
+    """Cheap probe: are the credentials good and has the schema been installed?"""
+    try:
+        get_client()
+    except StorageUnavailable as exc:
+        return {"ok": False, "reason": str(exc)}
+    try:
+        _rows(_t("app_meta").select("key").limit(1).execute())
+        return {"ok": True, "reason": ""}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reason": (
+                "ההתחברות ל-Supabase עובדת אבל הטבלאות חסרות. הריצו את "
+                f"`supabase_schema.sql` ב-SQL Editor. ({type(exc).__name__})"
+            ),
+        }
 
 
 # --------------------------------------------------------------------------
-# Versioned migrations
-#
-# `CREATE TABLE IF NOT EXISTS` creates missing TABLES but never adds a missing
-# COLUMN to a table that already exists. Since the schema is changing weekly
-# right now, every change past the base schema goes in the numbered list below
-# and is applied exactly once, tracked in _meta.schema_version.
+# Names
 # --------------------------------------------------------------------------
 
-SCHEMA_VERSION = 3
-
-MIGRATIONS: dict[int, list[str]] = {
-    2: [
-        # Recommended-deadline support.
-        "ALTER TABLE Tasks ADD COLUMN category TEXT",
-        "ALTER TABLE Tasks ADD COLUMN due_date TEXT",
-        # Google identity, for when the app is deployed and 10 trainees sign in.
-        "ALTER TABLE Students ADD COLUMN email TEXT",
-
-        # The evening's actual running order. Deliberately NOT four fixed rows:
-        # real Mishmarim in the 2025-26 archive run a ceremony plus two
-        # lessons, or a song circle. slot_order is 1..N and lesson_role is free
-        # text so a ceremonial evening fits without being called malformed.
-        """CREATE TABLE IF NOT EXISTS Lessons (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            mishmar_id     INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
-            slot_order     INTEGER NOT NULL,
-            start_time     TEXT,
-            title          TEXT,
-            description    TEXT,
-            lesson_role    TEXT,
-            speaker_name   TEXT,
-            speaker_status TEXT DEFAULT '⬜ לא פנינו',
-            format         TEXT,
-            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-        )""",
-        "CREATE INDEX IF NOT EXISTS idx_lessons_mishmar ON Lessons(mishmar_id)",
-
-        # Post-Mishmar feedback. This is what turns the speaker index from a
-        # contact list into institutional memory: next year's trainee sees not
-        # just that someone taught here, but how it went.
-        """CREATE TABLE IF NOT EXISTS Feedback (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            mishmar_id   INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
-            student_id   INTEGER REFERENCES Students(id) ON DELETE SET NULL,
-            lesson_id    INTEGER REFERENCES Lessons(id)  ON DELETE SET NULL,
-            speaker_name TEXT,
-            rating       INTEGER CHECK (rating BETWEEN 1 AND 5),
-            what_worked  TEXT,
-            what_didnt   TEXT,
-            created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-        )""",
-        "CREATE INDEX IF NOT EXISTS idx_feedback_mishmar ON Feedback(mishmar_id)",
-
-        # Chat history, per trainee per Mishmar, so a planning conversation
-        # survives a page refresh and the instructor can see how it went.
-        """CREATE TABLE IF NOT EXISTS ChatMessages (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            mishmar_id INTEGER REFERENCES Mishmarim(id) ON DELETE CASCADE,
-            student_id INTEGER REFERENCES Students(id)  ON DELETE SET NULL,
-            role       TEXT NOT NULL CHECK (role IN ('user','assistant')),
-            content    TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )""",
-        "CREATE INDEX IF NOT EXISTS idx_chat_lookup ON ChatMessages(mishmar_id, student_id, id)",
-    ],
-    3: [
-        # Outreach is a LOG, not a field. Before this, a trainee closing a
-        # speaker wrote only Lessons.speaker_status — next to their own
-        # Mishmar — so the shared index never learned, and the next pair
-        # checking "have we approached them?" saw a stale answer. That is
-        # exactly the collision the opening deck's shared-database slide
-        # exists to prevent.
-        """CREATE TABLE IF NOT EXISTS SpeakerOutreach (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            speaker_id INTEGER NOT NULL REFERENCES Speakers(id)   ON DELETE CASCADE,
-            mishmar_id INTEGER          REFERENCES Mishmarim(id)  ON DELETE SET NULL,
-            student_id INTEGER          REFERENCES Students(id)   ON DELETE SET NULL,
-            status     TEXT    NOT NULL,
-            note       TEXT,
-            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-        )""",
-        "CREATE INDEX IF NOT EXISTS idx_outreach_speaker ON SpeakerOutreach(speaker_id, id)",
-        "CREATE INDEX IF NOT EXISTS idx_outreach_mishmar ON SpeakerOutreach(mishmar_id)",
-
-        # Current status is DERIVED from the newest log row, never stored — the
-        # same reasoning as v_mishmar_budget. A stored copy drifts from the log
-        # the moment anyone records an approach through a different path.
-        # Speakers.status keeps its seeded cross-year value ("✅ לימד פעמיים")
-        # and serves as the fallback until this season's first approach.
-        """CREATE VIEW IF NOT EXISTS v_speaker_status AS
-           SELECT s.id                          AS speaker_id,
-                  s.name                        AS name,
-                  COALESCE(o.status, s.status)  AS current_status,
-                  o.mishmar_id                  AS last_mishmar_id,
-                  o.student_id                  AS last_student_id,
-                  o.created_at                  AS last_contact_at,
-                  CASE WHEN o.id IS NULL THEN 0 ELSE 1 END AS has_outreach
-             FROM Speakers s
-             LEFT JOIN SpeakerOutreach o
-                    ON o.id = (SELECT id FROM SpeakerOutreach
-                                WHERE speaker_id = s.id ORDER BY id DESC LIMIT 1)""",
-    ],
-}
+GERSHAYIM = "״"
+GERESH = "׳"
 
 
-def _current_version(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        "SELECT value FROM _meta WHERE key = 'schema_version'"
-    ).fetchone()
-    if row:
-        return int(row["value"])
-    # No marker: a database created before migrations existed. Its tables match
-    # version 1, so start there rather than re-running the base schema blindly.
-    return 1
+def normalize_name(name: Optional[str]) -> str:
+    """Fold Hebrew gershayim/geresh to ASCII, matching the name_norm column.
 
-
-def _apply_migrations(conn: sqlite3.Connection) -> list[int]:
-    applied = []
-    current = _current_version(conn)
-    for version in sorted(MIGRATIONS):
-        if version <= current:
-            continue
-        for statement in MIGRATIONS[version]:
-            try:
-                conn.execute(statement)
-            except sqlite3.OperationalError as exc:
-                # A column added by hand, or a half-applied upgrade, should not
-                # wedge the app on every start. Anything else is a real error.
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-        applied.append(version)
-    conn.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)",
-        (str(SCHEMA_VERSION),),
-    )
-    return applied
-
-
-def init_db(db_path: str = DB_PATH) -> list[int]:
-    """Create the schema and bring it up to SCHEMA_VERSION. Safe on every start.
-
-    Returns the migration versions applied this call (empty when already current).
+    Without this a trainee typing ד"ר fails to find ד״ר — and then the write
+    path creates a SECOND row for the same human, splitting one person in two.
     """
-    # The view carries the nominal figure; sqlite has no parameter binding in
-    # DDL, so substitute it before executing.
-    schema = SCHEMA.replace("?", str(PER_MISHMAR_BUDGET_NIS))
-    with get_connection(db_path) as conn:
-        conn.executescript(schema)
-        return _apply_migrations(conn)
+    return (name or "").replace(GERSHAYIM, '"').replace(GERESH, "'").strip()
+
+
+def split_title(full: str) -> tuple[Optional[str], str]:
+    """('ד״ר', 'חגי בן ארצי') — a title is a credential, not part of the name."""
+    m = _TITLE_RE.match(full or "")
+    return (m.group(1), m.group(2).strip()) if m else (None, (full or "").strip())
+
+
+def display_name(row: dict) -> str:
+    title = (row or {}).get("title")
+    name = (row or {}).get("name") or ""
+    return f"{title} {name}".strip() if title else name
 
 
 # --------------------------------------------------------------------------
-# Markdown parsing (migration only — these run once, then never again)
+# Markdown parsing — seeding only
 # --------------------------------------------------------------------------
 
 _RE_INDEX_ROW = re.compile(r"^\|\s*(חניך\s*\d+)\s*\|(.+?)\|\s*\d+\s*\|\s*$")
@@ -418,14 +214,12 @@ _RE_META = re.compile(r"^\*\*סוג:\*\*\s*(.+?)\s*·\s*\*\*אחראים:\*\*\s*
 _RE_WORKFILE = re.compile(r"\*\*קובץ עבודה:\*\*\s*`([^`]+)`")
 _RE_SECTION = re.compile(r"^\*\*\[(TO DO|IN PROGRESS|DONE)\]\*\*\s*$")
 _RE_TASK = re.compile(r"^-\s*\[([ xX])\]\s*(.+?)\s*$")
+_RE_SPEAKER_ROW = re.compile(r"^\|(.+)\|\s*$")
 
 
-def parse_tasks_md(path: str) -> dict:
-    """Parse students_tasks.md into {students, mishmarim, assignments, tasks}.
-
-    The file carries dates, type and ownership as well as the task lists, so it
-    seeds the whole schema — no second parser for schedule.md is needed.
-    """
+def parse_tasks_md(path: str = TASKS_MD) -> dict:
+    """students_tasks.md carries dates, type, ownership AND tasks, so it seeds
+    the whole schema — there is no second parser for schedule.md."""
     with open(path, encoding="utf-8") as fh:
         lines = fh.read().split("\n")
 
@@ -433,7 +227,6 @@ def parse_tasks_md(path: str) -> dict:
     mishmarim: list[dict] = []
     assignments: list[tuple[int, str]] = []
     tasks: list[dict] = []
-
     current: Optional[dict] = None
     section = "TO DO"
 
@@ -451,9 +244,7 @@ def parse_tasks_md(path: str) -> dict:
                 "id": int(m.group(1)),
                 "gregorian_date": m.group(2).strip(),
                 "hebrew_date": m.group(3).strip(),
-                "mishmar_type": None,
-                "note": None,
-                "workfile_path": None,
+                "mishmar_type": None, "note": None, "workfile_path": None,
             }
             mishmarim.append(current)
             section = "TO DO"
@@ -466,7 +257,6 @@ def parse_tasks_md(path: str) -> dict:
         if m:
             current["mishmar_type"] = m.group(1).strip()
             owners_raw = m.group(2)
-            # trailing free-text note after the owners, separated by '·'
             if "·" in owners_raw:
                 owners_raw, _, note = owners_raw.partition("·")
                 current["note"] = note.strip().strip("*") or None
@@ -489,39 +279,29 @@ def parse_tasks_md(path: str) -> dict:
         m = _RE_TASK.match(line)
         if m:
             done = m.group(1).lower() == "x"
-            tasks.append(
-                {
-                    "mishmar_id": current["id"],
-                    "task_description": m.group(2).strip(),
-                    # A ticked box is DONE regardless of which block it sits in.
-                    "status": "DONE" if done else section,
-                }
-            )
+            tasks.append({
+                "mishmar_id": current["id"],
+                "task_description": m.group(2).strip(),
+                # A ticked box is DONE regardless of which block it sits in.
+                "status": "DONE" if done else section,
+            })
 
-    return {
-        "students": students,
-        "mishmarim": mishmarim,
-        "assignments": assignments,
-        "tasks": tasks,
-    }
+    return {"students": students, "mishmarim": mishmarim,
+            "assignments": assignments, "tasks": tasks}
 
 
-_RE_SPEAKER_ROW = re.compile(r"^\|(.+)\|\s*$")
-
-
-def parse_speakers_md(path: str) -> list[dict]:
-    """Parse the 8-column speaker table out of Mishmer-section/speakers/database.md."""
+def parse_speakers_md(path: str = SPEAKERS_MD) -> list[dict]:
+    """Parse the 8-column speaker table, splitting titles out of names."""
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
 
-    # Only the main table, which sits between '## הטבלה' and the status legend.
     start = text.find("## הטבלה")
-    end = text.find("**סטטוסים:**", start if start >= 0 else 0)
     if start < 0:
         return []
-    block = text[start : end if end > 0 else len(text)]
+    end = text.find("**סטטוסים:**", start)
+    block = text[start: end if end > 0 else len(text)]
 
     out: list[dict] = []
     for line in block.split("\n"):
@@ -531,563 +311,133 @@ def parse_speakers_md(path: str) -> list[dict]:
         cells = [c.strip() for c in m.group(1).split("|")]
         if len(cells) != 8:
             continue
-        name = cells[0]
-        if name in ("שם",) or set(name) <= set("-: "):
+        raw = cells[0].strip("*_ ")
+        if raw in ("שם",) or set(raw) <= set("-: "):
             continue
-        out.append(
-            {
-                "name": name.strip("*_ "),
-                "expertise_topics": cells[1],
-                "lesson_fit": cells[2],
-                "region": cells[3],
-                "status": cells[4],
-                "notes": " · ".join(x for x in (cells[5], cells[7]) if x and x != "—"),
-                "contact": cells[6],
-                "verification_url": None,
-                "source_type": "original_44",
-            }
-        )
+        title, name = split_title(raw)
+        out.append({
+            "name": name, "title": title,
+            "expertise_topics": cells[1], "lesson_fit": cells[2],
+            "region": cells[3], "status": cells[4],
+            "notes": " · ".join(x for x in (cells[5], cells[7]) if x and x != "—"),
+            "contact": cells[6], "verification_url": None,
+            "source_type": "original_44",
+        })
     return out
 
 
 # --------------------------------------------------------------------------
-# Migration & deprecation
+# Seeding
 # --------------------------------------------------------------------------
 
 
-def _flag(conn: sqlite3.Connection, key: str) -> bool:
-    row = conn.execute("SELECT value FROM _meta WHERE key = ?", (key,)).fetchone()
-    return row is not None
+def seed_from_markdown(force: bool = False) -> dict:
+    """Load students_tasks.md and the speaker database into Supabase, once.
 
-
-def migrate_and_archive_md(
-    db_path: str = DB_PATH,
-    tasks_md: str = TASKS_MD,
-    speakers_md: str = SPEAKERS_MD,
-    archived_md: str = TASKS_MD_ARCHIVED,
-) -> dict:
-    """Migrate students_tasks.md into SQLite, then archive the file.
-
-    After this runs, SQLite is the sole source of truth for tasks. The Markdown
-    file is *renamed*, not deleted — it holds 193 hand-written task lines and a
-    rename is reversible where a delete is not.
-
-    Idempotent: guarded by a _meta flag, and a no-op once the file is gone.
+    Guarded by app_meta so it is safe on every start. Unlike the SQLite era we
+    do NOT rename the Markdown afterwards: the database now lives off-container
+    and survives redeploys, while the checkout is recreated from git on every
+    one — renaming a file there would achieve nothing and would break the next
+    deploy's seed.
     """
-    init_db(db_path)
-    result = {
-        "migrated": False,
-        "reason": "",
-        "students": 0,
-        "mishmarim": 0,
-        "tasks": 0,
-        "speakers": 0,
-        "archived_to": None,
-    }
+    result = {"seeded": False, "reason": "", "students": 0, "mishmarim": 0,
+              "tasks": 0, "speakers": 0}
 
-    with get_connection(db_path) as conn:
-        if _flag(conn, "md_migrated"):
-            result["reason"] = "already migrated"
-            return result
-
-    if not os.path.exists(tasks_md):
-        result["reason"] = f"{os.path.basename(tasks_md)} not found — nothing to migrate"
+    existing = _one(_t("app_meta").select("*").eq("key", "seeded").execute())
+    if existing and not force:
+        result["reason"] = "already seeded"
         return result
 
-    parsed = parse_tasks_md(tasks_md)
-    speakers = parse_speakers_md(speakers_md)
+    if not os.path.exists(TASKS_MD):
+        result["reason"] = f"{os.path.basename(TASKS_MD)} not found"
+        return result
 
-    with get_connection(db_path) as conn:
-        for idx, name in enumerate(parsed["students"], start=1):
-            conn.execute(
-                "INSERT OR IGNORE INTO Students (id, name, role) VALUES (?,?,'student')",
-                (idx, name),
-            )
-        # The instructor is a first-class row so tasks can be reassigned to Uri.
-        conn.execute(
-            "INSERT OR IGNORE INTO Students (id, name, role) VALUES (?,?,'instructor')",
-            (100, "Uri"),
-        )
+    parsed = parse_tasks_md(TASKS_MD)
+    speakers = parse_speakers_md(SPEAKERS_MD)
 
-        for m in parsed["mishmarim"]:
-            conn.execute(
-                """INSERT OR IGNORE INTO Mishmarim
-                   (id, gregorian_date, hebrew_date, mishmar_type, note,
-                    workfile_path, is_staff_built)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (
-                    m["id"],
-                    m["gregorian_date"],
-                    m["hebrew_date"],
-                    m["mishmar_type"],
-                    m["note"],
-                    m["workfile_path"],
-                    1 if m["id"] in STAFF_BUILT_MISHMARIM else 0,
-                ),
-            )
+    students = [
+        {"id": i, "name": n, "role": "student"}
+        for i, n in enumerate(parsed["students"], start=1)
+    ]
+    # The instructor is a first-class row so tasks can be reassigned to Uri.
+    students.append({"id": 100, "name": "Uri", "role": "instructor"})
+    if students:
+        _t("students").upsert(students).execute()
 
-        name_to_id = {
-            r["name"]: r["id"]
-            for r in conn.execute("SELECT id, name FROM Students").fetchall()
-        }
-        for mishmar_id, student_name in parsed["assignments"]:
-            sid = name_to_id.get(student_name)
-            if sid:
-                conn.execute(
-                    "INSERT OR IGNORE INTO Assignments (mishmar_id, student_id) VALUES (?,?)",
-                    (mishmar_id, sid),
-                )
+    mishmarim = [{
+        "id": m["id"], "gregorian_date": m["gregorian_date"],
+        "hebrew_date": m["hebrew_date"], "mishmar_type": m["mishmar_type"],
+        "note": m["note"], "workfile_path": m["workfile_path"],
+        "is_staff_built": m["id"] in STAFF_BUILT_MISHMARIM,
+    } for m in parsed["mishmarim"]]
+    if mishmarim:
+        _t("mishmarim").upsert(mishmarim).execute()
 
-        for t in parsed["tasks"]:
-            conn.execute(
-                """INSERT INTO Tasks (mishmar_id, student_id, task_description, status)
-                   VALUES (?, NULL, ?, ?)""",
-                (t["mishmar_id"], t["task_description"], t["status"]),
-            )
+    name_to_id = {s["name"]: s["id"] for s in students}
+    links = [
+        {"mishmar_id": mid, "student_id": name_to_id[sn]}
+        for mid, sn in parsed["assignments"] if sn in name_to_id
+    ]
+    if links:
+        _t("assignments").upsert(links).execute()
 
-        for s in speakers:
-            conn.execute(
-                """INSERT OR IGNORE INTO Speakers
-                   (name, expertise_topics, verification_url, source_type,
-                    status, lesson_fit, region, contact, notes)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (
-                    s["name"], s["expertise_topics"], s["verification_url"],
-                    s["source_type"], s["status"], s["lesson_fit"],
-                    s["region"], s["contact"], s["notes"],
-                ),
-            )
+    by_id = {m["id"]: m for m in mishmarim}
+    task_rows = []
+    for t in parsed["tasks"]:
+        category = classify_task(t["task_description"])
+        greg = (by_id.get(t["mishmar_id"]) or {}).get("gregorian_date", "")
+        task_rows.append({
+            "mishmar_id": t["mishmar_id"], "student_id": None,
+            "task_description": t["task_description"], "status": t["status"],
+            "category": category, "due_date": compute_due_date(greg, category),
+        })
+    if task_rows:
+        _t("tasks").insert(task_rows).execute()
 
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('md_migrated', datetime('now'))"
-        )
+    if speakers:
+        _t("speakers").upsert(speakers, on_conflict="name,source_type").execute()
 
-        result.update(
-            migrated=True,
-            students=len(parsed["students"]),
-            mishmarim=len(parsed["mishmarim"]),
-            tasks=len(parsed["tasks"]),
-            speakers=len(speakers),
-        )
-
-    # Archive only after the transaction above committed successfully.
-    shutil.move(tasks_md, archived_md)
-    result["archived_to"] = archived_md
-    result["reason"] = "migrated and archived"
+    _t("app_meta").upsert({"key": "seeded", "value": _now_iso()}).execute()
+    result.update(seeded=True, reason="seeded",
+                  students=len(parsed["students"]),
+                  mishmarim=len(mishmarim), tasks=len(task_rows),
+                  speakers=len(speakers))
     return result
 
 
-# --------------------------------------------------------------------------
-# CRUD — everything the Streamlit layer needs
-# --------------------------------------------------------------------------
-
-
-def get_all_mishmarim(db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        """SELECT m.*, b.budget_used, b.budget_nominal
-           FROM Mishmarim m
-           LEFT JOIN v_mishmar_budget b ON b.mishmar_id = m.id
-           ORDER BY m.id""",
-        db_path=db_path,
-    )
-
-
-def get_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> Optional[dict]:
-    rows = _query(
-        """SELECT m.*, b.budget_used, b.budget_nominal
-           FROM Mishmarim m
-           LEFT JOIN v_mishmar_budget b ON b.mishmar_id = m.id
-           WHERE m.id = ?""",
-        (mishmar_id,),
-        db_path=db_path,
-    )
-    return rows[0] if rows else None
-
-
-def get_students(db_path: str = DB_PATH) -> list[dict]:
-    return _query("SELECT * FROM Students ORDER BY id", db_path=db_path)
-
-
-def get_mishmarim_for_student(student_id: int, db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        """SELECT m.* FROM Mishmarim m
-           JOIN Assignments a ON a.mishmar_id = m.id
-           WHERE a.student_id = ? ORDER BY m.id""",
-        (student_id,),
-        db_path=db_path,
-    )
-
-
-def get_tasks_for_student(student_id: int, db_path: str = DB_PATH) -> list[dict]:
-    """Every task on the Mishmarim this trainee owns.
-
-    Includes shared pair tasks (student_id IS NULL) and tasks assigned to them
-    personally — which together is what their Kanban board should show.
-    """
-    return _query(
-        """SELECT t.*, m.gregorian_date, m.hebrew_date, m.topic
-           FROM Tasks t
-           JOIN Mishmarim m   ON m.id = t.mishmar_id
-           JOIN Assignments a ON a.mishmar_id = t.mishmar_id
-           WHERE a.student_id = ?
-             AND (t.student_id IS NULL OR t.student_id = ?)
-           ORDER BY m.id, t.id""",
-        (student_id, student_id),
-        db_path=db_path,
-    )
-
-
-def get_tasks_for_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        "SELECT * FROM Tasks WHERE mishmar_id = ? ORDER BY id",
-        (mishmar_id,),
-        db_path=db_path,
-    )
-
-
-def update_task_status(task_id: int, new_status: str, db_path: str = DB_PATH) -> bool:
-    if new_status not in TASK_STATUSES:
-        raise ValueError(f"status must be one of {TASK_STATUSES}, got {new_status!r}")
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            "UPDATE Tasks SET status = ?, updated_at = datetime('now') WHERE id = ?",
-            (new_status, task_id),
-        )
-        return cur.rowcount > 0
-
-
-def add_task(
-    mishmar_id: int,
-    task_description: str,
-    student_id: Optional[int] = None,
-    status: str = "TO DO",
-    category: Optional[str] = None,
-    db_path: str = DB_PATH,
-) -> int:
-    if status not in TASK_STATUSES:
-        raise ValueError(f"status must be one of {TASK_STATUSES}, got {status!r}")
-    category = category or classify_task(task_description)
-    mishmar = get_mishmar(mishmar_id, db_path=db_path)
-    due = compute_due_date(mishmar["gregorian_date"], category) if mishmar else None
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO Tasks
-               (mishmar_id, student_id, task_description, status, category, due_date)
-               VALUES (?,?,?,?,?,?)""",
-            (mishmar_id, student_id, task_description, status, category, due),
-        )
-        return int(cur.lastrowid)
-
-
-def set_mishmar_topic(mishmar_id: int, topic: str, db_path: str = DB_PATH) -> bool:
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            "UPDATE Mishmarim SET topic = ? WHERE id = ?", (topic, mishmar_id)
-        )
-        return cur.rowcount > 0
-
-
-def add_budget_entry(
-    mishmar_id: int,
-    expense_type: str,
-    amount: float = 0,
-    actual_cost: float = 0,
-    description: Optional[str] = None,
-    db_path: str = DB_PATH,
-) -> int:
-    """Record one expense line. actual_cost=0 is meaningful: the speaker came free."""
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO Budget (mishmar_id, expense_type, description, amount, actual_cost)
-               VALUES (?,?,?,?,?)""",
-            (mishmar_id, expense_type, description, amount, actual_cost),
-        )
-        return int(cur.lastrowid)
-
-
-def get_budget_summary(db_path: str = DB_PATH) -> dict:
-    """Season-wide spend. There is no ceiling to compare against — by decision.
-
-    `over_nominal` flags Mishmarim above the ₪500 indication. That is
-    information, not an alarm: overspend is drawn from the season-wide line and
-    balanced out by the many cheap nights.
-    """
-    per = _query(
-        """SELECT m.id, m.gregorian_date, m.topic,
-                  COALESCE(SUM(b.actual_cost), 0) AS spent
-           FROM Mishmarim m LEFT JOIN Budget b ON b.mishmar_id = m.id
-           GROUP BY m.id ORDER BY m.id""",
-        db_path=db_path,
-    )
-    total = sum(r["spent"] for r in per)
-    return {
-        "per_mishmar": per,
-        "total_spent": total,
-        "nominal_per_mishmar": PER_MISHMAR_BUDGET_NIS,
-        "season_ceiling": SEASON_BUDGET_CEILING_NIS,  # None — tracking only
-        "over_nominal": [r["id"] for r in per if r["spent"] > PER_MISHMAR_BUDGET_NIS],
-    }
-
-
-def add_new_speaker(
-    name: str,
-    expertise_topics: Optional[str] = None,
-    verification_url: Optional[str] = None,
-    source_type: str = "web_search",
-    status: str = "⬜ לא פנינו",
-    lesson_fit: Optional[str] = None,
-    region: Optional[str] = None,
-    contact: Optional[str] = None,
-    notes: Optional[str] = None,
-    db_path: str = DB_PATH,
-) -> Optional[int]:
-    """Write a discovered speaker back to the index.
-
-    This is how the index grows past the original 44 toward a genuinely broad
-    pool. Contact details are never fabricated — leave them None unless a human
-    supplied them.
-    """
-    if source_type not in SPEAKER_SOURCE_TYPES:
-        raise ValueError(f"source_type must be one of {SPEAKER_SOURCE_TYPES}")
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            """INSERT OR IGNORE INTO Speakers
-               (name, expertise_topics, verification_url, source_type,
-                status, lesson_fit, region, contact, notes)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (name, expertise_topics, verification_url, source_type,
-             status, lesson_fit, region, contact, notes),
-        )
-        return int(cur.lastrowid) if cur.rowcount else None
-
-
-# Hebrew names in this repo are written with BOTH Hebrew gershayim (U+05F4)
-# and ASCII double quotes - 3 of the 46 seeded names use the Hebrew form. A
-# trainee typing the ASCII spelling when the index holds the Hebrew one failed
-# twice over: the "has anyone already approached them?" check came back empty,
-# and record_outreach then created a SECOND row for the same person, quietly
-# splitting one human into two index entries.
-GERSHAYIM = "\u05f4"
-GERESH = "\u05f3"
-
-
-def normalize_name(name: Optional[str]) -> str:
-    """Fold Hebrew punctuation to ASCII so both spellings compare equal."""
-    return (name or "").replace(GERSHAYIM, DQ).replace(GERESH, SQ).strip()
-
-
-def _norm_sql(col: str) -> str:
-    """The same folding expressed in SQL, for WHERE clauses."""
-    return (
-        "REPLACE(REPLACE(" + col
-        + ", " + _lit(GERSHAYIM) + ", " + _lit(DQ) + ")"
-        + ", " + _lit(GERESH) + ", " + _lit(SQ) + ")"
-    )
-
-
-class AmbiguousSpeaker(ValueError):
-    """More than one index row carries this exact name.
-
-    Not an edge case here: flag ה7 in Mishmer-section/speakers/database.md
-    records up to four different people called אורי, with the standing
-    instruction "אל תאחד אותם על דעתך". Recording outreach against a guessed
-    one would be exactly that merge, so the caller must pick.
-    """
-
-    def __init__(self, name: str, candidates: list[dict]):
-        super().__init__(f"{len(candidates)} speakers named {name!r} — pick one by id")
-        self.name = name
-        self.candidates = candidates
-
-
-def resolve_speaker(
-    name: Optional[str] = None,
-    speaker_id: Optional[int] = None,
-    create_if_missing: bool = False,
-    db_path: str = DB_PATH,
-) -> Optional[dict]:
-    """Find exactly one speaker row, or raise AmbiguousSpeaker."""
-    if speaker_id is not None:
-        rows = _query("SELECT * FROM Speakers WHERE id = ?", (speaker_id,), db_path=db_path)
-        return rows[0] if rows else None
-
-    name = (name or "").strip()
-    if not name:
-        return None
-    exact = _query(
-        "SELECT * FROM Speakers WHERE " + _norm_sql("name") + " = ?",
-        (normalize_name(name),),
-        db_path=db_path,
-    )
-    if len(exact) > 1:
-        raise AmbiguousSpeaker(name, exact)
-    if exact:
-        return exact[0]
-
-    if not create_if_missing:
-        return None
-    # A name typed into a work-file that is not in the index yet is a real
-    # person we are about to approach — add them so the next pair sees it.
-    new_id = add_new_speaker(name=name, source_type="manual", db_path=db_path)
-    rows = _query(
-        "SELECT * FROM Speakers WHERE id = ?", (new_id,), db_path=db_path
-    ) if new_id else _query("SELECT * FROM Speakers WHERE name = ?", (name,), db_path=db_path)
-    return rows[0] if rows else None
-
-
-def record_outreach(
-    status: str,
-    name: Optional[str] = None,
-    speaker_id: Optional[int] = None,
-    mishmar_id: Optional[int] = None,
-    student_id: Optional[int] = None,
-    note: Optional[str] = None,
-    db_path: str = DB_PATH,
-) -> dict:
-    """THE single writer for speaker outreach. Every path goes through here.
-
-    Writes one row to the log, which the v_speaker_status view derives current
-    status from, and mirrors the status onto any matching Lessons row so the
-    work-file and the shared index cannot disagree.
-
-    Before this existed, closing a speaker wrote only Lessons.speaker_status,
-    so the shared index never learned and the next pair checking "did anyone
-    approach them?" got a stale answer.
-    """
-    if status not in SPEAKER_STATUSES:
-        raise ValueError(f"status must be one of {SPEAKER_STATUSES}, got {status!r}")
-
-    speaker = resolve_speaker(
-        name=name, speaker_id=speaker_id, create_if_missing=True, db_path=db_path
-    )
-    if not speaker:
-        raise ValueError("no speaker name or id supplied")
-
-    with get_connection(db_path) as conn:
-        conn.execute(
-            """INSERT INTO SpeakerOutreach
-               (speaker_id, mishmar_id, student_id, status, note)
-               VALUES (?,?,?,?,?)""",
-            (speaker["id"], mishmar_id, student_id, status, note),
-        )
-        # Keep the work-file's own display in step. This is a mirror of the
-        # log, never an independent source — the log is what the view reads.
-        if mishmar_id is not None:
-            conn.execute(
-                """UPDATE Lessons SET speaker_status = ?
-                   WHERE mishmar_id = ? AND speaker_name = ?""",
-                (status, mishmar_id, speaker["name"]),
-            )
-    return {"speaker_id": speaker["id"], "name": speaker["name"], "status": status}
-
-
-def get_outreach_for_speaker(
-    speaker_id: int, db_path: str = DB_PATH
-) -> list[dict]:
-    """Full approach history for one speaker, newest first."""
-    return _query(
-        """SELECT o.*, m.gregorian_date, m.topic, s.name AS student_name
-             FROM SpeakerOutreach o
-             LEFT JOIN Mishmarim m ON m.id = o.mishmar_id
-             LEFT JOIN Students  s ON s.id = o.student_id
-            WHERE o.speaker_id = ? ORDER BY o.id DESC""",
-        (speaker_id,),
-        db_path=db_path,
-    )
-
-
-def get_outreach_for_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        """SELECT o.*, sp.name AS speaker_name
-             FROM SpeakerOutreach o JOIN Speakers sp ON sp.id = o.speaker_id
-            WHERE o.mishmar_id = ? ORDER BY o.id DESC""",
-        (mishmar_id,),
-        db_path=db_path,
-    )
-
-
-def get_speaker_status(name: str, db_path: str = DB_PATH) -> list[dict]:
-    """Current status for every index row carrying this name.
-
-    A list, again because of ה7 — the caller shows all matches rather than
-    silently merging people who happen to share a name.
-    """
-    norm = normalize_name(name)
-    return _query(
-        "SELECT v.*, sp.expertise_topics, sp.region, sp.notes, sp.source_type "
-        "FROM v_speaker_status v JOIN Speakers sp ON sp.id = v.speaker_id "
-        "WHERE " + _norm_sql("v.name") + " = ? OR " + _norm_sql("v.name") + " LIKE ?",
-        (norm, f"%{norm}%"),
-        db_path=db_path,
-    )
-
-
-def get_speakers_with_status(
-    only_contacted: bool = False, db_path: str = DB_PATH
-) -> list[dict]:
-    """The whole index with current status — what the shared board renders."""
-    sql = """SELECT v.*, sp.expertise_topics, sp.lesson_fit, sp.region,
-                    sp.contact, sp.notes, sp.source_type,
-                    m.gregorian_date AS last_mishmar_date
-               FROM v_speaker_status v
-               JOIN Speakers sp ON sp.id = v.speaker_id
-               LEFT JOIN Mishmarim m ON m.id = v.last_mishmar_id"""
-    if only_contacted:
-        sql += " WHERE v.has_outreach = 1"
-    return _query(sql + " ORDER BY v.has_outreach DESC, v.name", db_path=db_path)
-
-
-def search_speakers_by_topic(
-    topic: str, lesson: Optional[str] = None, db_path: str = DB_PATH
-) -> list[dict]:
-    """Look up the local index. This is a STARTING POINT, not the candidate set.
-
-    speaker_search.py must still run a live web search alongside this. If every
-    name proposed came out of this function, the search was too narrow.
-    """
-    # `notes` is searched too, and that is load-bearing rather than generous:
-    # the parser puts "מה העביר אצלנו" there, which is often the strongest
-    # topical signal we hold. גדי תורג'מן is filed under "הלכה, מחשבת הרמב"ם"
-    # but his notes read "הלכות תשובה ברמב״ם · מועמד טבעי לכל משמר תשובה" —
-    # searching topics alone hides exactly the person we most wanted.
-    sql = """SELECT * FROM Speakers
-             WHERE (expertise_topics LIKE ? OR name LIKE ? OR notes LIKE ?)"""
-    params: list[Any] = [f"%{topic}%", f"%{topic}%", f"%{topic}%"]
-    if lesson:
-        # An unrecorded lesson_fit means "we never wrote it down", not "not
-        # suitable" — dropping those silently would bury real candidates.
-        sql += " AND (lesson_fit LIKE ? OR lesson_fit IS NULL OR lesson_fit = 'TBD')"
-        params.append(f"%{lesson}%")
-    return _query(sql + " ORDER BY source_type, name", params, db_path=db_path)
+def bootstrap() -> dict:
+    """Called once at app start."""
+    ready = storage_ready()
+    if not ready["ok"]:
+        return {"seeded": False, "reason": ready["reason"], "storage_ok": False}
+    out = seed_from_markdown()
+    out["storage_ok"] = True
+    return out
 
 
 # --------------------------------------------------------------------------
-# Task categories and recommended deadlines
+# Deadlines — pure Python, no storage
 # --------------------------------------------------------------------------
 
-# First match wins, so order matters. Two rules must stay at the top:
+# First match wins, so order matters. Two rules carry the weight:
 #   * "אחרי" before "מרצים", or "עדכון מאגר המרצים" (an after-the-night task)
-#     would be filed as speaker work and get a due date two weeks too early.
+#     is filed as speaker work and dated two weeks too early.
 #   * "לוגיסטיקה" before "תוכן", so "סידור חדרי חבורות (ביום המשמר)" is not
-#     read as content work because it mentions חבורות.
+#     read as content work merely because it mentions חבורות.
 _CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("אחרי",       ("(אחרי)", "סיכום ולקחים", "תודות", "עדכון מאגר")),
-    ("לוגיסטיקה",  ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני")),
-    ("נושא",       ("סגירת נושא", "בחירת נושא", "נושא המשמר")),
-    ("מרצים",      ("מרצים", "מרצה")),
-    ("הזמנה",      ("הזמנה", "הזמנת", "קנבה", "הדפסה", "הפצה")),
-    ("כיבוד",      ("כיבוד", "רשימת קניות", "ארוחת", "קניות")),
-    ("קישוט",      ("קישוט",)),
-    ("תוכן",       ("חברותות", "חבורות", "מקורות", "טקסט", "לוח זמנים", "לוז", "שיעור")),
+    ("אחרי",      ("(אחרי)", "סיכום ולקחים", "תודות", "עדכון מאגר", "משוב")),
+    ("לוגיסטיקה", ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני")),
+    ("נושא",      ("סגירת נושא", "בחירת נושא", "נושא המשמר")),
+    ("מרצים",     ("מרצים", "מרצה")),
+    ("הזמנה",     ("הזמנה", "הזמנת", "קנבה", "הדפסה", "הפצה")),
+    ("כיבוד",     ("כיבוד", "רשימת קניות", "ארוחת", "קניות")),
+    ("קישוט",     ("קישוט",)),
+    ("תוכן",      ("חברותות", "חבורות", "מקורות", "טקסט", "לוח זמנים", "לוז", "שיעור")),
 )
 
 
 def classify_task(description: str) -> Optional[str]:
-    """Map a free-text task line to one of TASK_CATEGORIES, or None if unclear.
-
-    None is a legitimate answer: an unclassified task simply carries no
-    recommended date, which is better than inventing a deadline for it.
-    """
+    """None is a legitimate answer — better than inventing a deadline."""
     text = description or ""
     for category, needles in _CATEGORY_RULES:
         if any(n in text for n in needles):
@@ -1096,19 +446,17 @@ def classify_task(description: str) -> Optional[str]:
 
 
 def parse_gregorian(date_str: str) -> Optional[_date]:
-    """Parse the repo's 'D.M.YYYY' date format (e.g. '24.9.2026')."""
     m = re.match(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$", date_str or "")
     if not m:
         return None
-    day, month, year = (int(g) for g in m.groups())
+    d, mo, y = (int(g) for g in m.groups())
     try:
-        return _date(year, month, day)
+        return _date(y, mo, d)
     except ValueError:
         return None
 
 
 def compute_due_date(gregorian_date: str, category: Optional[str]) -> Optional[str]:
-    """Recommended closing date as ISO 'YYYY-MM-DD', or None if not derivable."""
     if not category or category not in DEADLINE_OFFSETS_DAYS:
         return None
     base = parse_gregorian(gregorian_date)
@@ -1117,50 +465,14 @@ def compute_due_date(gregorian_date: str, category: Optional[str]) -> Optional[s
     return (base - _timedelta(days=DEADLINE_OFFSETS_DAYS[category])).isoformat()
 
 
-def backfill_task_metadata(db_path: str = DB_PATH) -> dict:
-    """Fill category and due_date on tasks that have none. Never overwrites.
-
-    Runs on every start. Tasks migrated from the Markdown carry neither field,
-    and a trainee opening the app should see recommended dates immediately.
-    """
-    rows = _query(
-        """SELECT t.id, t.task_description, t.category, m.gregorian_date
-           FROM Tasks t JOIN Mishmarim m ON m.id = t.mishmar_id
-           WHERE t.category IS NULL OR t.due_date IS NULL""",
-        db_path=db_path,
-    )
-    filled, unclassified = 0, 0
-    with get_connection(db_path) as conn:
-        for r in rows:
-            category = r["category"] or classify_task(r["task_description"])
-            if not category:
-                unclassified += 1
-                continue
-            due = compute_due_date(r["gregorian_date"], category)
-            conn.execute(
-                "UPDATE Tasks SET category = ?, due_date = ? WHERE id = ?",
-                (category, due, r["id"]),
-            )
-            filled += 1
-    return {"examined": len(rows), "filled": filled, "unclassified": unclassified}
-
-
 def _he_days(n: int) -> str:
-    """Hebrew day counts. '1 ימים' reads as broken Hebrew to every trainee."""
-    if n == 1:
-        return "יום"
-    if n == 2:
-        return "יומיים"
-    return f"{n} ימים"
+    """'1 ימים' reads as broken Hebrew to every trainee."""
+    return "יום" if n == 1 else ("יומיים" if n == 2 else f"{n} ימים")
 
 
 def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
-    """Attach days_left and a nudge label to a task row.
-
-    The opening deck calls these dates "המלצה — לא חוק", so the wording here
-    stays soft. `overdue` is a fact the instructor dashboard can act on; what
-    the trainee sees is a nudge, never a failure state.
-    """
+    """Attach days_left and a nudge. The deck calls these dates a
+    recommendation, so the wording stays soft and a DONE task never nags."""
     today = today or _date.today()
     out = dict(task)
     out["days_left"] = None
@@ -1169,9 +481,8 @@ def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
 
     if task.get("status") == "DONE" or not task.get("due_date"):
         return out
-
     try:
-        due = _date.fromisoformat(task["due_date"])
+        due = _date.fromisoformat(str(task["due_date"])[:10])
     except (ValueError, TypeError):
         return out
 
@@ -1187,396 +498,525 @@ def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
     return out
 
 
-def get_student_by_email(email: str, db_path: str = DB_PATH) -> Optional[dict]:
-    """Map a Google identity to a trainee row. Case-insensitive."""
+def backfill_task_metadata() -> dict:
+    """Fill category/due_date on tasks missing them. Never overwrites."""
+    rows = _rows(_t("tasks").select("id,task_description,category,due_date,mishmar_id")
+                 .is_("category", "null").execute())
+    dates = {m["id"]: m["gregorian_date"] for m in get_all_mishmarim()}
+    filled = 0
+    for r in rows:
+        category = classify_task(r["task_description"])
+        if not category:
+            continue
+        _t("tasks").update({
+            "category": category,
+            "due_date": compute_due_date(dates.get(r["mishmar_id"], ""), category),
+        }).eq("id", r["id"]).execute()
+        filled += 1
+    return {"examined": len(rows), "filled": filled,
+            "unclassified": len(rows) - filled}
+
+
+# --------------------------------------------------------------------------
+# Mishmarim, students, tasks
+# --------------------------------------------------------------------------
+
+
+def get_all_mishmarim() -> list[dict]:
+    mishmarim = _rows(_t("mishmarim").select("*").order("id").execute())
+    spend = {b["mishmar_id"]: b["budget_used"]
+             for b in _rows(_t("v_mishmar_budget").select("*").execute())}
+    for m in mishmarim:
+        m["budget_used"] = float(spend.get(m["id"], 0) or 0)
+        m["budget_nominal"] = PER_MISHMAR_BUDGET_NIS
+    return mishmarim
+
+
+def get_mishmar(mishmar_id: int) -> Optional[dict]:
+    m = _one(_t("mishmarim").select("*").eq("id", mishmar_id).execute())
+    if not m:
+        return None
+    b = _one(_t("v_mishmar_budget").select("*").eq("mishmar_id", mishmar_id).execute())
+    m["budget_used"] = float((b or {}).get("budget_used") or 0)
+    m["budget_nominal"] = PER_MISHMAR_BUDGET_NIS
+    return m
+
+
+def set_mishmar_topic(mishmar_id: int, topic: str) -> bool:
+    resp = _t("mishmarim").update({"topic": topic}).eq("id", mishmar_id).execute()
+    return bool(_rows(resp))
+
+
+def get_students() -> list[dict]:
+    return _rows(_t("students").select("*").order("id").execute())
+
+
+def get_student_by_email(email: str) -> Optional[dict]:
     if not (email or "").strip():
         return None
-    rows = _query(
-        "SELECT * FROM Students WHERE LOWER(email) = LOWER(?)",
-        (email.strip(),),
-        db_path=db_path,
-    )
+    rows = _rows(_t("students").select("*").ilike("email", email.strip()).execute())
     return rows[0] if rows else None
 
 
-def set_student_email(
-    student_id: int, email: Optional[str], db_path: str = DB_PATH
-) -> bool:
-    """Attach (or clear) the Google address a trainee signs in with."""
+def set_student_email(student_id: int, email: Optional[str]) -> bool:
     value = (email or "").strip() or None
-    with get_connection(db_path) as conn:
-        return conn.execute(
-            "UPDATE Students SET email = ? WHERE id = ?", (value, student_id)
-        ).rowcount > 0
+    resp = _t("students").update({"email": value}).eq("id", student_id).execute()
+    return bool(_rows(resp))
 
 
-def get_overdue_tasks(today: Optional[_date] = None, db_path: str = DB_PATH) -> list[dict]:
-    """Open tasks whose recommended closing date has passed, soonest first.
-
-    This is the instructor's view of the deadline model. The trainee sees the
-    same fact as a nudge; here it is something to act on.
-    """
-    stamp = (today or _date.today()).isoformat()
-    return _query(
-        """SELECT t.*, m.gregorian_date, m.hebrew_date, m.topic,
-                  -- #01 and #02 are staff-built and have no Assignments rows,
-                  -- so this would be NULL and blow up any caller formatting it.
-                  COALESCE((SELECT GROUP_CONCAT(s.name, ' + ')
-                     FROM Assignments a JOIN Students s ON s.id = a.student_id
-                    WHERE a.mishmar_id = m.id), 'צוות') AS owners
-           FROM Tasks t JOIN Mishmarim m ON m.id = t.mishmar_id
-           WHERE t.status != 'DONE'
-             AND t.due_date IS NOT NULL
-             AND t.due_date < ?
-           ORDER BY t.due_date""",
-        (stamp,),
-        db_path=db_path,
-    )
+def get_mishmarim_for_student(student_id: int) -> list[dict]:
+    links = _rows(_t("assignments").select("mishmar_id")
+                  .eq("student_id", student_id).execute())
+    ids = [l["mishmar_id"] for l in links]
+    if not ids:
+        return []
+    return [m for m in get_all_mishmarim() if m["id"] in ids]
 
 
-def get_student_progress(
-    today: Optional[_date] = None, db_path: str = DB_PATH
-) -> list[dict]:
-    """Per-trainee: how many Mishmarim, how many tasks done, how many overdue.
-
-    A trainee's tasks are those on the Mishmarim they own — both the shared
-    pair tasks (student_id IS NULL) and anything assigned to them personally.
-    """
-    stamp = (today or _date.today()).isoformat()
-    return _query(
-        """SELECT s.id, s.name,
-                  COUNT(DISTINCT a.mishmar_id)                        AS mishmarim,
-                  COUNT(t.id)                                         AS tasks_total,
-                  SUM(CASE WHEN t.status = 'DONE' THEN 1 ELSE 0 END)  AS tasks_done,
-                  SUM(CASE WHEN t.status != 'DONE'
-                            AND t.due_date IS NOT NULL
-                            AND t.due_date < ? THEN 1 ELSE 0 END)     AS overdue
-           FROM Students s
-           LEFT JOIN Assignments a ON a.student_id = s.id
-           LEFT JOIN Tasks t
-                  ON t.mishmar_id = a.mishmar_id
-                 AND (t.student_id IS NULL OR t.student_id = s.id)
-           WHERE s.role = 'student'
-           GROUP BY s.id, s.name
-           ORDER BY s.id""",
-        (stamp,),
-        db_path=db_path,
-    )
+def get_partners(mishmar_id: int, exclude_student_id: Optional[int] = None) -> list[dict]:
+    links = _rows(_t("assignments").select("student_id")
+                  .eq("mishmar_id", mishmar_id).execute())
+    ids = [l["student_id"] for l in links if l["student_id"] != exclude_student_id]
+    if not ids:
+        return []
+    return _rows(_t("students").select("id,name").in_("id", ids).execute())
 
 
-def get_speaker_by_name(name: str, db_path: str = DB_PATH) -> list[dict]:
-    """Every index row matching this name.
+def get_tasks_for_mishmar(mishmar_id: int) -> list[dict]:
+    return _rows(_t("v_tasks_full").select("*")
+                 .eq("mishmar_id", mishmar_id).order("id").execute())
 
-    Returns a LIST, not a single row, and that is deliberate: flag ה7 in
-    Mishmer-section/speakers/database.md records up to four different people
-    called אורי, with the standing instruction "אל תאחד אותם על דעתך". Handing
-    back one row would be exactly that merge. The caller shows all of them.
-    """
-    norm = normalize_name(name)
-    return _query(
-        "SELECT * FROM Speakers WHERE " + _norm_sql("name") + " = ? OR "
-        + _norm_sql("name") + " LIKE ? ORDER BY source_type",
-        (norm, f"%{norm}%"),
-        db_path=db_path,
-    )
+
+def get_tasks_for_student(student_id: int) -> list[dict]:
+    """Every task on this trainee's Mishmarim — shared pair tasks included."""
+    mine = [m["id"] for m in get_mishmarim_for_student(student_id)]
+    if not mine:
+        return []
+    rows = _rows(_t("v_tasks_full").select("*").in_("mishmar_id", mine)
+                 .order("mishmar_id").order("id").execute())
+    return [r for r in rows
+            if r.get("student_id") is None or r.get("student_id") == student_id]
+
+
+def update_task_status(task_id: int, new_status: str) -> bool:
+    if new_status not in TASK_STATUSES:
+        raise ValueError(f"status must be one of {TASK_STATUSES}, got {new_status!r}")
+    resp = _t("tasks").update(
+        {"status": new_status, "updated_at": _now_iso()}
+    ).eq("id", task_id).execute()
+    return bool(_rows(resp))
+
+
+def add_task(mishmar_id: int, task_description: str,
+             student_id: Optional[int] = None, status: str = "TO DO",
+             category: Optional[str] = None) -> Optional[int]:
+    if status not in TASK_STATUSES:
+        raise ValueError(f"status must be one of {TASK_STATUSES}, got {status!r}")
+    category = category or classify_task(task_description)
+    m = get_mishmar(mishmar_id)
+    resp = _t("tasks").insert({
+        "mishmar_id": mishmar_id, "student_id": student_id,
+        "task_description": task_description, "status": status,
+        "category": category,
+        "due_date": compute_due_date(m["gregorian_date"], category) if m else None,
+    }).execute()
+    row = _one(resp)
+    return row.get("id") if row else None
+
+
+def get_student(student_id: int) -> Optional[dict]:
+    return _one(_t("students").select("*").eq("id", student_id).execute())
+
+
+def get_task(task_id: int) -> Optional[dict]:
+    return _one(_t("tasks").select("*").eq("id", task_id).execute())
+
+
+def find_mishmarim_by_topic(topic: str) -> list[dict]:
+    """Mishmarim this season whose topic resembles the given one."""
+    t = (topic or "").strip()
+    if not t:
+        return []
+    return _rows(_t("mishmarim").select("id,gregorian_date,hebrew_date,topic")
+                 .ilike("topic", f"%{t}%").order("id").execute())
+
+
+def get_budget_speaker_names(mishmar_id: int) -> list[str]:
+    """Speakers recorded on budget lines — people who came but may never have
+    been added to the running order, and who must still be reviewable."""
+    rows = _rows(_t("budget").select("description")
+                 .eq("mishmar_id", mishmar_id).eq("expense_type", "מרצה").execute())
+    seen, out = set(), []
+    for r in rows:
+        name = (r.get("description") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def get_overdue_tasks() -> list[dict]:
+    """Open tasks past their recommended date. CURRENT_DATE is evaluated in
+    Postgres, so this does not drift with the app server's clock."""
+    return _rows(_t("v_overdue_tasks").select("*").order("due_date").execute())
+
+
+def get_student_progress() -> list[dict]:
+    return _rows(_t("v_student_progress").select("*").order("id").execute())
 
 
 # --------------------------------------------------------------------------
-# Search cache — used by speaker_search.py
+# Budget
 # --------------------------------------------------------------------------
 
-CACHE_TTL_DAYS_OK = 60      # speaker facts are stable for months
-CACHE_TTL_HOURS_FAIL = 1    # a failure is transient; do not cache it for weeks
+
+def add_budget_entry(mishmar_id: int, expense_type: str, amount: float = 0,
+                     actual_cost: float = 0,
+                     description: Optional[str] = None) -> Optional[int]:
+    """actual_cost=0 is meaningful: the speaker came free."""
+    row = _one(_t("budget").insert({
+        "mishmar_id": mishmar_id, "expense_type": expense_type,
+        "description": description, "amount": amount, "actual_cost": actual_cost,
+    }).execute())
+    return row.get("id") if row else None
 
 
-def _cache_key(query: str, backend: str = "", region: str = "") -> str:
-    import hashlib
-
-    return hashlib.sha256(f"{query}|{backend}|{region}".encode("utf-8")).hexdigest()
-
-
-def cache_get(
-    query: str,
-    backend: str = "",
-    region: str = "",
-    db_path: str = DB_PATH,
-) -> Optional[list[dict]]:
-    """Return cached results, or None on a miss or an expired entry."""
-    import json
-
-    rows = _query(
-        "SELECT results_json, ok, created_at FROM SearchCache WHERE query_hash = ?",
-        (_cache_key(query, backend, region),),
-        db_path=db_path,
-    )
-    if not rows:
-        return None
-
-    row = rows[0]
-    # Two different lifetimes, chosen by whether the call actually worked.
-    if row["ok"]:
-        expiry = f"-{CACHE_TTL_DAYS_OK} days"
-    else:
-        expiry = f"-{CACHE_TTL_HOURS_FAIL} hours"
-
-    fresh = _query(
-        "SELECT 1 AS ok FROM SearchCache WHERE query_hash = ? AND created_at > datetime('now', ?)",
-        (_cache_key(query, backend, region), expiry),
-        db_path=db_path,
-    )
-    if not fresh:
-        return None
-    return json.loads(row["results_json"])
-
-
-def cache_put(
-    query: str,
-    results: list[dict],
-    ok: bool = True,
-    backend: str = "",
-    region: str = "",
-    db_path: str = DB_PATH,
-) -> None:
-    import json
-
-    with get_connection(db_path) as conn:
-        conn.execute(
-            """INSERT OR REPLACE INTO SearchCache
-               (query_hash, query_text, results_json, ok, created_at)
-               VALUES (?,?,?,?, datetime('now'))""",
-            (
-                _cache_key(query, backend, region),
-                query,
-                json.dumps(results, ensure_ascii=False),
-                1 if ok else 0,
-            ),
-        )
-
-
-def cache_stats(db_path: str = DB_PATH) -> dict:
-    rows = _query(
-        """SELECT COUNT(*) AS total,
-                  SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS ok_rows,
-                  MAX(created_at) AS newest
-           FROM SearchCache""",
-        db_path=db_path,
-    )
-    r = rows[0] if rows else {}
+def get_budget_summary() -> dict:
+    """Season-wide spend. There is no ceiling to compare against, by decision:
+    `over_nominal` is information, not an alarm."""
+    per = []
+    for m in get_all_mishmarim():
+        per.append({"id": m["id"], "gregorian_date": m["gregorian_date"],
+                    "topic": m.get("topic"), "spent": m.get("budget_used") or 0})
     return {
-        "total": r.get("total") or 0,
-        "ok": r.get("ok_rows") or 0,
-        "newest": r.get("newest"),
+        "per_mishmar": per,
+        "total_spent": sum(r["spent"] for r in per),
+        "nominal_per_mishmar": PER_MISHMAR_BUDGET_NIS,
+        "season_ceiling": SEASON_BUDGET_CEILING_NIS,
+        "over_nominal": [r["id"] for r in per if r["spent"] > PER_MISHMAR_BUDGET_NIS],
     }
 
 
-def get_speaker_stats(db_path: str = DB_PATH) -> dict:
-    rows = _query(
-        "SELECT source_type, COUNT(*) AS n FROM Speakers GROUP BY source_type",
-        db_path=db_path,
+# --------------------------------------------------------------------------
+# Speakers
+# --------------------------------------------------------------------------
+
+
+class AmbiguousSpeaker(ValueError):
+    """Several index rows carry this name.
+
+    Not hypothetical: flag ה7 recorded up to four people called אורי, with the
+    standing instruction "אל תאחד אותם על דעתך". Guessing would be that merge.
+    """
+
+    def __init__(self, name: str, candidates: list[dict]):
+        super().__init__(f"{len(candidates)} speakers named {name!r} — pick one by id")
+        self.name = name
+        self.candidates = candidates
+
+
+def add_new_speaker(name: str, expertise_topics: Optional[str] = None,
+                    verification_url: Optional[str] = None,
+                    source_type: str = "web_search",
+                    status: str = "⬜ לא פנינו",
+                    lesson_fit: Optional[str] = None,
+                    region: Optional[str] = None, contact: Optional[str] = None,
+                    notes: Optional[str] = None,
+                    title: Optional[str] = None) -> Optional[int]:
+    """Grow the index. Contact details are never fabricated — leave them None."""
+    if source_type not in SPEAKER_SOURCE_TYPES:
+        raise ValueError(f"source_type must be one of {SPEAKER_SOURCE_TYPES}")
+    if title is None:
+        title, name = split_title(name)
+    row = _one(_t("speakers").upsert({
+        "name": name, "title": title, "expertise_topics": expertise_topics,
+        "verification_url": verification_url, "source_type": source_type,
+        "status": status, "lesson_fit": lesson_fit, "region": region,
+        "contact": contact, "notes": notes,
+    }, on_conflict="name,source_type").execute())
+    return row.get("id") if row else None
+
+
+def get_speaker_by_name(name: str) -> list[dict]:
+    """A LIST, deliberately — see AmbiguousSpeaker. Never silently merges."""
+    norm = normalize_name(name)
+    if not norm:
+        return []
+    return _rows(_t("speakers").select("*").ilike("name_norm", f"%{norm}%")
+                 .order("source_type").execute())
+
+
+def get_speaker_status(name: str) -> list[dict]:
+    norm = normalize_name(name)
+    if not norm:
+        return []
+    return _rows(_t("v_speaker_status").select("*")
+                 .ilike("name_norm", f"%{norm}%").execute())
+
+
+def get_speakers_with_status(only_contacted: bool = False) -> list[dict]:
+    q = _t("v_speaker_status").select("*")
+    if only_contacted:
+        q = q.eq("has_outreach", True)
+    return sorted(_rows(q.execute()),
+                  key=lambda r: (not r.get("has_outreach"), r.get("name") or ""))
+
+
+def search_speakers_by_topic(topic: str, lesson: Optional[str] = None) -> list[dict]:
+    """A STARTING POINT, not the candidate set — speaker_search must still run
+    a live web search alongside this.
+
+    `notes` is searched too, and that is load-bearing: the parser files
+    "מה העביר אצלנו" there, and גדי תורג'מן is filed under "הלכה, מחשבת הרמב"ם"
+    while his notes read "מועמד טבעי לכל משמר תשובה". Topics alone hid exactly
+    the person a תשובה search most wanted.
+    """
+    t = (topic or "").strip()
+    if not t:
+        return []
+    rows = _rows(
+        _t("speakers").select("*")
+        .or_(f"expertise_topics.ilike.%{t}%,name.ilike.%{t}%,notes.ilike.%{t}%")
+        .execute()
     )
-    return {r["source_type"]: r["n"] for r in rows}
+    if lesson:
+        # An unrecorded lesson_fit means "never written down", not "unsuitable" —
+        # dropping those silently would bury real candidates.
+        rows = [r for r in rows
+                if not r.get("lesson_fit")
+                or r["lesson_fit"] == "TBD"
+                or lesson in r["lesson_fit"]]
+    return sorted(rows, key=lambda r: (r.get("source_type") or "", r.get("name") or ""))
+
+
+def get_speaker_stats() -> dict:
+    out: dict[str, int] = {}
+    for r in _rows(_t("speakers").select("source_type").execute()):
+        out[r["source_type"]] = out.get(r["source_type"], 0) + 1
+    return out
+
+
+def resolve_speaker(name: Optional[str] = None, speaker_id: Optional[int] = None,
+                    create_if_missing: bool = False) -> Optional[dict]:
+    """Exactly one speaker row, or AmbiguousSpeaker."""
+    if speaker_id is not None:
+        return _one(_t("speakers").select("*").eq("id", speaker_id).execute())
+
+    norm = normalize_name(name)
+    if not norm:
+        return None
+    exact = _rows(_t("speakers").select("*").eq("name_norm", norm).execute())
+    if len(exact) > 1:
+        raise AmbiguousSpeaker(norm, exact)
+    if exact:
+        return exact[0]
+    if not create_if_missing:
+        return None
+    new_id = add_new_speaker(name=name, source_type="manual")
+    return _one(_t("speakers").select("*").eq("id", new_id).execute()) if new_id else None
+
+
+def record_outreach(status: str, name: Optional[str] = None,
+                    speaker_id: Optional[int] = None,
+                    mishmar_id: Optional[int] = None,
+                    student_id: Optional[int] = None,
+                    note: Optional[str] = None) -> dict:
+    """THE single writer for outreach.
+
+    Current status is derived from this log by v_speaker_status. Before it
+    existed, closing a speaker wrote only lessons.speaker_status, so the shared
+    index never learned and the next pair got a stale answer — defeating the one
+    mechanism that stops two pairs approaching the same person.
+    """
+    if status not in SPEAKER_STATUSES:
+        raise ValueError(f"status must be one of {SPEAKER_STATUSES}, got {status!r}")
+
+    speaker = resolve_speaker(name=name, speaker_id=speaker_id, create_if_missing=True)
+    if not speaker:
+        raise ValueError("no speaker name or id supplied")
+
+    _t("speaker_outreach").insert({
+        "speaker_id": speaker["id"], "mishmar_id": mishmar_id,
+        "student_id": student_id, "status": status, "note": note,
+    }).execute()
+
+    # Keep the work-file's display in step. A mirror of the log, never a source.
+    if mishmar_id is not None:
+        _t("lessons").update({"speaker_status": status}) \
+            .eq("mishmar_id", mishmar_id).eq("speaker_name", speaker["name"]).execute()
+
+    return {"speaker_id": speaker["id"], "name": speaker["name"], "status": status}
+
+
+def get_outreach_for_speaker(speaker_id: int) -> list[dict]:
+    return _rows(_t("v_outreach_full").select("*").eq("speaker_id", speaker_id)
+                 .order("id", desc=True).execute())
+
+
+def get_outreach_for_mishmar(mishmar_id: int) -> list[dict]:
+    return _rows(_t("v_outreach_full").select("*").eq("mishmar_id", mishmar_id)
+                 .order("id", desc=True).execute())
 
 
 # --------------------------------------------------------------------------
-
-
-
-
-# --------------------------------------------------------------------------
-# Lessons — the evening's running order
-#
-# Deliberately not fixed at four. The 2025-26 archive holds a ceremony plus two
-# lessons, and a song circle; the four-lesson arc is the strong default the
-# generator emits, not a constraint the data model should enforce.
+# Lessons, feedback, chat
 # --------------------------------------------------------------------------
 
 
-def get_lessons(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        "SELECT * FROM Lessons WHERE mishmar_id = ? ORDER BY slot_order",
-        (mishmar_id,),
-        db_path=db_path,
-    )
+def get_lessons(mishmar_id: int) -> list[dict]:
+    return _rows(_t("lessons").select("*").eq("mishmar_id", mishmar_id)
+                 .order("slot_order").execute())
 
 
-def upsert_lesson(
-    mishmar_id: int,
-    slot_order: int,
-    title: Optional[str] = None,
-    start_time: Optional[str] = None,
-    description: Optional[str] = None,
-    lesson_role: Optional[str] = None,
-    speaker_name: Optional[str] = None,
-    speaker_status: Optional[str] = None,
-    fmt: Optional[str] = None,
-    student_id: Optional[int] = None,
-    db_path: str = DB_PATH,
-) -> int:
+def upsert_lesson(mishmar_id: int, slot_order: int, title: Optional[str] = None,
+                  start_time: Optional[str] = None, description: Optional[str] = None,
+                  lesson_role: Optional[str] = None, speaker_name: Optional[str] = None,
+                  speaker_status: Optional[str] = None, fmt: Optional[str] = None,
+                  student_id: Optional[int] = None) -> Optional[int]:
     """Insert or update one slot. Only non-None fields are written."""
-    existing = _query(
-        "SELECT id FROM Lessons WHERE mishmar_id = ? AND slot_order = ?",
-        (mishmar_id, slot_order),
-        db_path=db_path,
-    )
-    fields = {
-        "start_time": start_time, "title": title, "description": description,
-        "lesson_role": lesson_role, "speaker_name": speaker_name,
-        "speaker_status": speaker_status, "format": fmt,
-    }
+    existing = _one(_t("lessons").select("*").eq("mishmar_id", mishmar_id)
+                    .eq("slot_order", slot_order).execute())
+
+    fields = {"start_time": start_time, "title": title, "description": description,
+              "lesson_role": lesson_role, "speaker_name": speaker_name,
+              "format": fmt}
     given = {k: v for k, v in fields.items() if v is not None}
 
-    # speaker_status is NOT written here. It is a mirror of the outreach log,
-    # and letting this function set it directly would recreate the second
-    # writer this whole change exists to remove: the work-file would say
-    # "closed" while the shared index still said "not approached".
-    status_request = given.pop("speaker_status", None)
+    # speaker_status is NOT written here. It mirrors the outreach log, and
+    # setting it directly would recreate the second writer this design removes.
+    status_request = speaker_status
 
-    with get_connection(db_path) as conn:
-        if existing:
-            lesson_id = int(existing[0]["id"])
-            if given:
-                sets = ", ".join(f"{k} = ?" for k in given)
-                conn.execute(
-                    f"UPDATE Lessons SET {sets} WHERE id = ?",
-                    (*given.values(), lesson_id),
-                )
-        else:
-            cols = ["mishmar_id", "slot_order", *given.keys()]
-            cur = conn.execute(
-                f"INSERT INTO Lessons ({', '.join(cols)}) "
-                f"VALUES ({', '.join('?' * len(cols))})",
-                (mishmar_id, slot_order, *given.values()),
-            )
-            lesson_id = int(cur.lastrowid)
+    if existing:
+        lesson_id = existing["id"]
+        if given:
+            _t("lessons").update(given).eq("id", lesson_id).execute()
+    else:
+        row = _one(_t("lessons").insert(
+            {"mishmar_id": mishmar_id, "slot_order": slot_order, **given}).execute())
+        lesson_id = row.get("id") if row else None
 
-    # Route the status through the one writer, AFTER the lesson row exists so
-    # its mirror-update can match on speaker_name.
     if status_request:
-        who = speaker_name or (existing[0].get("speaker_name") if existing else None)
+        who = speaker_name or (existing or {}).get("speaker_name")
         if who:
             try:
-                record_outreach(
-                    status_request, name=who, mishmar_id=mishmar_id,
-                    student_id=student_id, db_path=db_path,
-                )
+                record_outreach(status_request, name=who, mishmar_id=mishmar_id,
+                                student_id=student_id)
             except AmbiguousSpeaker:
-                # Several people share this name (flag ה7). Record nothing
-                # rather than pick one; the UI asks which person is meant.
+                # Several people share this name (ה7). Record nothing rather
+                # than pick one; the UI asks which person is meant.
                 pass
     return lesson_id
 
 
-def delete_lesson(lesson_id: int, db_path: str = DB_PATH) -> bool:
-    with get_connection(db_path) as conn:
-        return conn.execute("DELETE FROM Lessons WHERE id = ?", (lesson_id,)).rowcount > 0
+def delete_lesson(lesson_id: int) -> bool:
+    return bool(_rows(_t("lessons").delete().eq("id", lesson_id).execute()))
 
 
-# --------------------------------------------------------------------------
-# Feedback — what turns the speaker index into institutional memory
-# --------------------------------------------------------------------------
-
-
-def add_feedback(
-    mishmar_id: int,
-    rating: Optional[int] = None,
-    speaker_name: Optional[str] = None,
-    lesson_id: Optional[int] = None,
-    student_id: Optional[int] = None,
-    what_worked: Optional[str] = None,
-    what_didnt: Optional[str] = None,
-    db_path: str = DB_PATH,
-) -> int:
+def add_feedback(mishmar_id: int, rating: Optional[int] = None,
+                 speaker_name: Optional[str] = None, lesson_id: Optional[int] = None,
+                 student_id: Optional[int] = None, what_worked: Optional[str] = None,
+                 what_didnt: Optional[str] = None) -> Optional[int]:
     if rating is not None and not 1 <= int(rating) <= 5:
         raise ValueError("rating must be between 1 and 5")
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO Feedback
-               (mishmar_id, student_id, lesson_id, speaker_name, rating,
-                what_worked, what_didnt)
-               VALUES (?,?,?,?,?,?,?)""",
-            (mishmar_id, student_id, lesson_id, speaker_name, rating,
-             what_worked, what_didnt),
-        )
-        return int(cur.lastrowid)
+    row = _one(_t("feedback").insert({
+        "mishmar_id": mishmar_id, "student_id": student_id, "lesson_id": lesson_id,
+        "speaker_name": speaker_name, "rating": rating,
+        "what_worked": what_worked, "what_didnt": what_didnt,
+    }).execute())
+    return row.get("id") if row else None
 
 
-def get_feedback_for_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
-    return _query(
-        "SELECT * FROM Feedback WHERE mishmar_id = ? ORDER BY id",
-        (mishmar_id,),
-        db_path=db_path,
-    )
+def get_feedback_for_mishmar(mishmar_id: int) -> list[dict]:
+    return _rows(_t("feedback").select("*").eq("mishmar_id", mishmar_id)
+                 .order("id").execute())
 
 
-def get_feedback_for_speaker(name: str, db_path: str = DB_PATH) -> list[dict]:
-    """Every past rating and note for a speaker — the 'how did it go' half.
-
-    This is what a trainee two years from now gets that today's trainee does
-    not: not just that someone taught here, but whether it worked.
-    """
-    return _query(
-        """SELECT f.*, m.gregorian_date, m.topic
-           FROM Feedback f JOIN Mishmarim m ON m.id = f.mishmar_id
-           WHERE f.speaker_name = ? ORDER BY f.id DESC""",
-        (name,),
-        db_path=db_path,
-    )
+def get_feedback_for_speaker(name: str) -> list[dict]:
+    """What a trainee two years from now gets that today's trainee does not:
+    not just that someone taught here, but whether it worked."""
+    return _rows(_t("feedback").select("*").eq("speaker_name", name)
+                 .order("id", desc=True).execute())
 
 
-# --------------------------------------------------------------------------
-# Chat history
-# --------------------------------------------------------------------------
-
-
-def add_chat_message(
-    role: str, content: str, mishmar_id: Optional[int] = None,
-    student_id: Optional[int] = None, db_path: str = DB_PATH,
-) -> int:
+def add_chat_message(role: str, content: str, mishmar_id: Optional[int] = None,
+                     student_id: Optional[int] = None) -> Optional[int]:
     if role not in ("user", "assistant"):
         raise ValueError("role must be 'user' or 'assistant'")
-    with get_connection(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO ChatMessages (mishmar_id, student_id, role, content)
-               VALUES (?,?,?,?)""",
-            (mishmar_id, student_id, role, content),
-        )
-        return int(cur.lastrowid)
+    row = _one(_t("chat_messages").insert({
+        "mishmar_id": mishmar_id, "student_id": student_id,
+        "role": role, "content": content,
+    }).execute())
+    return row.get("id") if row else None
 
 
-def get_chat_history(
-    mishmar_id: Optional[int] = None, student_id: Optional[int] = None,
-    limit: int = 100, db_path: str = DB_PATH,
-) -> list[dict]:
-    sql = "SELECT * FROM ChatMessages WHERE 1=1"
-    params: list[Any] = []
+def get_chat_history(mishmar_id: Optional[int] = None,
+                     student_id: Optional[int] = None, limit: int = 100) -> list[dict]:
+    q = _t("chat_messages").select("*")
     if mishmar_id is not None:
-        sql += " AND mishmar_id = ?"; params.append(mishmar_id)
+        q = q.eq("mishmar_id", mishmar_id)
     if student_id is not None:
-        sql += " AND student_id = ?"; params.append(student_id)
-    rows = _query(sql + " ORDER BY id DESC LIMIT ?", (*params, limit), db_path=db_path)
-    return list(reversed(rows))
+        q = q.eq("student_id", student_id)
+    return list(reversed(_rows(q.order("id", desc=True).limit(limit).execute())))
 
 
-def clear_chat_history(
-    mishmar_id: int, student_id: int, db_path: str = DB_PATH
-) -> int:
-    with get_connection(db_path) as conn:
-        return conn.execute(
-            "DELETE FROM ChatMessages WHERE mishmar_id = ? AND student_id = ?",
-            (mishmar_id, student_id),
-        ).rowcount
+def clear_chat_history(mishmar_id: int, student_id: int) -> int:
+    return len(_rows(_t("chat_messages").delete()
+                     .eq("mishmar_id", mishmar_id)
+                     .eq("student_id", student_id).execute()))
 
 
-def bootstrap(db_path: str = DB_PATH) -> dict:
-    """Call once at app start: create the schema, migrate the Markdown if present."""
-    init_db(db_path)
-    result = migrate_and_archive_md(db_path=db_path)
-    result["deadlines"] = backfill_task_metadata(db_path=db_path)
-    return result
+# --------------------------------------------------------------------------
+# Search cache
+# --------------------------------------------------------------------------
 
+
+def _cache_key(query: str, backend: str = "", region: str = "") -> str:
+    return hashlib.sha256(f"{query}|{backend}|{region}".encode("utf-8")).hexdigest()
+
+
+def cache_get(query: str, backend: str = "", region: str = "") -> Optional[list[dict]]:
+    row = _one(_t("search_cache").select("*")
+               .eq("query_hash", _cache_key(query, backend, region)).execute())
+    if not row:
+        return None
+    try:
+        created = _datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
+    except (ValueError, KeyError, TypeError):
+        return None
+    age = _datetime.now(created.tzinfo) - created
+    # Two lifetimes, chosen by whether the call worked. Without the short one a
+    # single blocked afternoon poisons the cache for the rest of the season.
+    limit = (_timedelta(days=CACHE_TTL_DAYS_OK) if row.get("ok")
+             else _timedelta(hours=CACHE_TTL_HOURS_FAIL))
+    if age > limit:
+        return None
+    payload = row.get("results_json")
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def cache_put(query: str, results: list[dict], ok: bool = True,
+              backend: str = "", region: str = "") -> None:
+    _t("search_cache").upsert({
+        "query_hash": _cache_key(query, backend, region),
+        "query_text": query, "results_json": results,
+        "ok": bool(ok), "created_at": _now_iso(),
+    }).execute()
+
+
+def cache_stats() -> dict:
+    rows = _rows(_t("search_cache").select("ok,created_at").execute())
+    return {
+        "total": len(rows),
+        "ok": sum(1 for r in rows if r.get("ok")),
+        "newest": max((str(r.get("created_at") or "") for r in rows), default=None),
+    }
+
+
+# --------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    info = bootstrap()
-    print(f"DB: {DB_PATH}")
-    print(f"scope: {PROGRAMME} {ACADEMIC_YEAR_HE} ({ACADEMIC_YEAR_NUM}) — {INSTITUTION}")
-    print(info)
+    ready = storage_ready()
+    print("storage:", ready)
+    if ready["ok"]:
+        print(bootstrap())
+        print("scope:", PROGRAMME, ACADEMIC_YEAR_HE, "—", INSTITUTION)

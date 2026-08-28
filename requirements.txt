@@ -8,7 +8,10 @@ pyluach>=2.2          # Hebrew/Gregorian dates
 # back off and fall back to showing the query rather than failing the page.
 ddgs>=9.0
 
-# sqlite3 is in the Python standard library — nothing to install.
+# Storage. The app talks to Supabase over its REST API; there is no local
+# database, because Streamlit Cloud wipes the container disk on every redeploy.
+# Table creation is NOT done from Python — see supabase_schema.sql.
+supabase>=2.0
 # The chat layer. Note the SDK went 0.x -> 1.x; this code targets 1.x
 # (httpx2-based, and `budget_tokens` is rejected on current models).
 anthropic>=1.0

@@ -57,19 +57,20 @@ def get_client():
             "החבילה `anthropic` לא מותקנת. הריצו: pip install -r requirements.txt"
         ) from exc
 
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        # Streamlit secrets are the deployment path; the env var is the local one.
-        try:
-            import streamlit as st
+    # Streamlit Secrets is the deployment path and the only one that exists in
+    # production; the env var is a convenience for scripts.
+    key = None
+    try:
+        import streamlit as st
 
-            key = st.secrets.get("ANTHROPIC_API_KEY")  # type: ignore[attr-defined]
-        except Exception:
-            key = None
+        key = st.secrets.get("ANTHROPIC_API_KEY")  # type: ignore[attr-defined]
+    except Exception:
+        key = None
+    key = key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise ChatUnavailable(
-            "לא נמצא מפתח API. הגדירו ANTHROPIC_API_KEY בסביבה, "
-            "או ANTHROPIC_API_KEY ב-secrets של Streamlit."
+            "לא נמצא מפתח API. הוסיפו ANTHROPIC_API_KEY ל-Secrets של Streamlit "
+            "(Settings → Secrets). ראו DEPLOY.md."
         )
     return anthropic.Anthropic(api_key=key)
 
@@ -131,28 +132,20 @@ def build_stable_prompt() -> str:
     return "".join(parts)
 
 
-def build_context(student_id: Optional[int], mishmar_id: Optional[int],
-                  db_path: str = dm.DB_PATH) -> dict:
+def build_context(student_id: Optional[int], mishmar_id: Optional[int]) -> dict:
     """Everything the agent needs to know about who it is talking to, right now."""
     ctx: dict[str, Any] = {"student_id": student_id, "mishmar_id": mishmar_id}
 
     if student_id:
-        rows = dm._query("SELECT * FROM Students WHERE id = ?", (student_id,), db_path=db_path)
-        ctx["student"] = rows[0] if rows else None
-        ctx["my_mishmarim"] = dm.get_mishmarim_for_student(student_id, db_path=db_path)
+        ctx["student"] = dm.get_student(student_id)
+        ctx["my_mishmarim"] = dm.get_mishmarim_for_student(student_id)
 
     if mishmar_id:
-        ctx["mishmar"] = dm.get_mishmar(mishmar_id, db_path=db_path)
-        ctx["lessons"] = dm.get_lessons(mishmar_id, db_path=db_path)
-        tasks = dm.get_tasks_for_mishmar(mishmar_id, db_path=db_path)
+        ctx["mishmar"] = dm.get_mishmar(mishmar_id)
+        ctx["lessons"] = dm.get_lessons(mishmar_id)
+        tasks = dm.get_tasks_for_mishmar(mishmar_id)
         ctx["tasks"] = [dm.annotate_deadline(t) for t in tasks]
-        partners = dm._query(
-            """SELECT s.id, s.name FROM Students s
-               JOIN Assignments a ON a.student_id = s.id
-               WHERE a.mishmar_id = ?""",
-            (mishmar_id,), db_path=db_path,
-        )
-        ctx["partners"] = [p for p in partners if p["id"] != student_id]
+        ctx["partners"] = dm.get_partners(mishmar_id, exclude_student_id=student_id)
     return ctx
 
 
@@ -362,7 +355,7 @@ TOOLS: list[dict] = [
 ]
 
 
-def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dict:
+def run_tool(name: str, args: dict, ctx: dict) -> dict:
     """Execute one tool. mishmar_id comes from ctx, NEVER from the model."""
     mishmar_id = ctx.get("mishmar_id")
     student_id = ctx.get("student_id")
@@ -376,11 +369,11 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
             topic = (args.get("topic") or "").strip()
             if not topic:
                 return {"error": "topic ריק"}
-            dm.set_mishmar_topic(mishmar_id, topic, db_path=db_path)
+            dm.set_mishmar_topic(mishmar_id, topic)
             closed = []
-            for t in dm.get_tasks_for_mishmar(mishmar_id, db_path=db_path):
+            for t in dm.get_tasks_for_mishmar(mishmar_id):
                 if t.get("category") == "נושא" and t["status"] != "DONE":
-                    dm.update_task_status(t["id"], "DONE", db_path=db_path)
+                    dm.update_task_status(t["id"], "DONE")
                     closed.append(t["task_description"])
             return {"ok": True, "topic": topic, "tasks_marked_done": closed}
 
@@ -394,41 +387,38 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
                 lesson_role=args.get("lesson_role"),
                 speaker_name=args.get("speaker_name"),
                 fmt=args.get("format"),
-                db_path=db_path,
             )
             return {"ok": True, "lesson_id": lesson_id,
-                    "lessons": dm.get_lessons(mishmar_id, db_path=db_path)}
+                    "lessons": dm.get_lessons(mishmar_id)}
 
         if name == "add_task":
             tid = dm.add_task(
                 mishmar_id, args["description"],
-                category=args.get("category"), db_path=db_path,
+                category=args.get("category"),
             )
-            rows = dm._query("SELECT * FROM Tasks WHERE id = ?", (tid,), db_path=db_path)
-            return {"ok": True, "task": rows[0] if rows else {"id": tid}}
+            return {"ok": True, "task": dm.get_task(tid) or {"id": tid}}
 
         if name == "update_task":
             # Guard: a trainee's chat may only touch tasks on their own Mishmar.
-            rows = dm._query("SELECT mishmar_id FROM Tasks WHERE id = ?",
-                             (int(args["task_id"]),), db_path=db_path)
-            if not rows:
+            task = dm.get_task(int(args["task_id"]))
+            if not task:
                 return {"error": f"אין משימה עם מזהה {args['task_id']}"}
-            if mishmar_id and rows[0]["mishmar_id"] != mishmar_id:
+            if mishmar_id and task["mishmar_id"] != mishmar_id:
                 return {"error": "המשימה הזו שייכת למשמר אחר."}
-            ok = dm.update_task_status(int(args["task_id"]), args["status"], db_path=db_path)
+            ok = dm.update_task_status(int(args["task_id"]), args["status"])
             return {"ok": ok, "task_id": args["task_id"], "status": args["status"]}
 
         if name == "search_speaker_index":
             found = dm.search_speakers_by_topic(
-                args["topic"], lesson=args.get("lesson"), db_path=db_path)
+                args["topic"], lesson=args.get("lesson"))
             # Attach live outreach state, so the model can say "someone already
             # contacted them" instead of proposing a name that is already taken.
             enriched = []
             for r in found:
-                status = dm.get_speaker_status(r["name"], db_path=db_path)
+                status = dm.get_speaker_status(r["name"])
                 current = status[0] if status else {}
                 out = dm.get_outreach_for_speaker(
-                    current["speaker_id"], db_path=db_path) if current else []
+                    current["speaker_id"]) if current else []
                 enriched.append({
                     **r,
                     "current_status": current.get("current_status") or r.get("status"),
@@ -444,7 +434,7 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
 
         if name == "discover_speakers_online":
             res = ss.search_candidates(
-                args["topic"], lesson=args.get("lesson", "1"), db_path=db_path)
+                args["topic"], lesson=args.get("lesson", "1"))
             return {
                 "index_hits": res["index_hits"],
                 "web_names": res["web_names"][:12],
@@ -455,7 +445,7 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
             }
 
         if name == "verify_speaker":
-            return ss.verify_speaker(args["name"], topic=args.get("topic"), db_path=db_path)
+            return ss.verify_speaker(args["name"], topic=args.get("topic"))
 
         if name == "record_speaker_outreach":
             try:
@@ -466,7 +456,6 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
                     mishmar_id=mishmar_id,
                     student_id=student_id,
                     note=args.get("note"),
-                    db_path=db_path,
                 )
             except dm.AmbiguousSpeaker as exc:
                 # Flag ה7: several real people share this name. Hand the
@@ -484,10 +473,10 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
                     "visible_to": "כל הזוגות רואים את זה מעכשיו במאגר המשותף"}
 
         if name == "check_archive":
-            return archive.summarise_for_topic(args["topic"], db_path=db_path)
+            return archive.summarise_for_topic(args["topic"])
 
         if name == "speaker_history":
-            return archive.speaker_history(args["name"], db_path=db_path)
+            return archive.speaker_history(args["name"])
 
     except ss.SearchUnavailable as exc:
         return {"error": str(exc), "manual_search": ss.manual_search_links(exc.query)}
@@ -503,7 +492,7 @@ def run_tool(name: str, args: dict, ctx: dict, db_path: str = dm.DB_PATH) -> dic
 
 
 def stream_turn(
-    history: list[dict], ctx: dict, db_path: str = dm.DB_PATH, max_rounds: int = 6,
+    history: list[dict], ctx: dict, max_rounds: int = 6,
 ) -> Iterator[dict]:
     """Run one conversational turn, yielding events as they happen.
 
@@ -547,7 +536,7 @@ def stream_turn(
             if block.type != "tool_use":
                 continue
             yield {"type": "tool", "name": block.name, "input": block.input}
-            output = run_tool(block.name, dict(block.input), ctx, db_path=db_path)
+            output = run_tool(block.name, dict(block.input), ctx)
             yield {"type": "tool_result", "name": block.name, "output": output}
             results.append({
                 "type": "tool_result",

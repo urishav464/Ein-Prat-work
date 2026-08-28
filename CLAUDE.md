@@ -45,12 +45,16 @@ streamlit run app.py --server.headless true --server.port 8555 &
 
 ## Application architecture
 
-**`data_manager.py` is the only data seam.** Nothing else opens the database or reads the Markdown sources. It owns the schema, the migration, and every query.
+**`data_manager.py` is the only data seam.** Nothing else talks to storage. **Storage is Supabase**, reached over its REST API; credentials come from `st.secrets` (`SUPABASE_URL`, `SUPABASE_KEY`). There is no local database and no `.env` — Streamlit Cloud wipes the container disk on every redeploy, which is why the data lives off-container.
 
-- **SQLite in WAL mode**, `check_same_thread=False`, `timeout=10`. Not incidental: Streamlit serves each session on its own thread and reruns the whole script on every interaction, so without WAL the app hits "database is locked" as soon as two people use it.
+**The split is forced by the platform: the REST API can read and write rows but cannot CREATE TABLES.** Structure therefore lives in `supabase_schema.sql`, pasted once into the Supabase SQL Editor. Verify changes to it by running it against a real Postgres, not by inspection.
+
+**Anything needing a join or an aggregate is a VIEW in that file** — PostgREST cannot express one. `v_speaker_status`, `v_mishmar_budget`, `v_overdue_tasks`, `v_student_progress`, `v_outreach_full`, `v_tasks_full`. This also keeps derived values underivable-from-stale-copies.
+
 - **Eleven tables**: `Mishmarim`, `Students`, `Tasks`, `Budget`, `Speakers`, `Lessons`, `Feedback`, `ChatMessages`, plus `Assignments` (Mishmar ownership is a *pair*, so it is many-to-many), `_meta` (migration guard + schema version) and `SearchCache`.
 
-- **Schema changes go in `MIGRATIONS`, never into `SCHEMA`.** `CREATE TABLE IF NOT EXISTS` adds a missing table but never a missing *column*, so anything past the base schema is a numbered step applied once and recorded in `_meta.schema_version`. Bump `SCHEMA_VERSION` with it.
+- **A title is not part of a name.** `speakers.title` holds ד״ר / הרב / פרופ׳; `split_title()` separates them on the way in and `display_name()` rejoins them for display. Uri's correction, and it matters for matching.
+- **`name_norm` is a generated column, not Python.** A PostgREST filter cannot call `REPLACE`, and without the folding a trainee typing `ד"ר` misses `ד״ר` *and* the write path creates a second row for the same human.
 - **`Lessons` is deliberately not four rows.** `slot_order` is 1..N and `lesson_role` is free text, because the 2025-26 archive holds a ceremony plus two lessons, and a song circle. The four-lesson arc is the default the generator emits, not a constraint the schema enforces.
 - **Task deadlines are derived, never stored by hand** — `classify_task()` maps the text to a category, `compute_due_date()` offsets from the Mishmar date (topic −21d, speakers −14d, invitation/refreshments/decoration −7d). The opening deck calls these *"המלצה — לא חוק"*, so `annotate_deadline()` phrases them as nudges; only the instructor dashboard treats a passed date as actionable.
 - **`budget_used` is a view**, never a stored column — a stored copy drifts from the `Budget` rows it derives from.

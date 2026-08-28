@@ -42,15 +42,14 @@ ADMIN_NAMES = {"uri", "אורי", "ori"}
 
 @st.cache_resource
 def bootstrap() -> dict:
-    """Create the schema and migrate the Markdown, once per process.
+    """Check storage and seed it once, per process.
 
-    Streamlit reruns this whole script on every interaction, so this must be
-    cached — otherwise every click reopens the database. The migration itself
-    is additionally guarded by a _meta flag inside data_manager, so it can
-    never run twice even if the cache is cleared.
+    Streamlit reruns this whole script on every interaction, so this is cached
+    — otherwise every click would re-probe Supabase. The seed itself is
+    additionally guarded by an app_meta flag, so it cannot run twice even if
+    the cache is cleared.
     """
-    dm.init_db()
-    return dm.migrate_and_archive_md()
+    return dm.bootstrap()
 
 
 # --------------------------------------------------------------------------
@@ -834,12 +833,8 @@ def _after_tab(mid: int) -> None:
     # A speaker recorded only on a budget line — someone who came but was never
     # added to the running order — must still be reviewable, or their feedback
     # is unreachable and never reaches the index.
-    for row in dm._query(
-        "SELECT DISTINCT description FROM Budget WHERE mishmar_id = ? AND expense_type = 'מרצה'",
-        (mid,),
-    ):
-        name = (row.get("description") or "").strip()
-        if name and name not in speakers:
+    for name in dm.get_budget_speaker_names(mid):
+        if name not in speakers:
             speakers.append(name)
 
     st.subheader("סיכום תקציב")
@@ -1101,7 +1096,17 @@ def main() -> None:
     _init_session()
 
     info = bootstrap()
-    if info.get("migrated"):
+    if not info.get("storage_ok"):
+        st.title("🕯️ ניהול משמרים")
+        st.error(info.get("reason") or "אין חיבור לאחסון.")
+        st.markdown(
+            "**מה צריך לקרות:**\n"
+            "1. להריץ את `supabase_schema.sql` ב-Supabase → SQL Editor.\n"
+            "2. להגדיר `SUPABASE_URL` ו-`SUPABASE_KEY` ב-Secrets של Streamlit.\n\n"
+            "ההוראות המלאות ב-`DEPLOY.md`."
+        )
+        return
+    if info.get("seeded"):
         st.toast(
             f"הועברו למסד: {info['tasks']} משימות · {info['mishmarim']} משמרים. "
             f"הקובץ נגנז."

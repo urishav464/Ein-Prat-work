@@ -122,13 +122,13 @@ def search_past_mishmarim(query: str, limit: int = 5) -> list[dict]:
     return results[:limit]
 
 
-def speaker_history(name: str, db_path: str = dm.DB_PATH) -> dict:
+def speaker_history(name: str) -> dict:
     """Everything we know about how this speaker went, across years.
 
     Combines the index row (what they teach, status) with any feedback rows.
     """
-    rows = dm.get_speaker_by_name(name, db_path=db_path)
-    feedback = dm.get_feedback_for_speaker(name, db_path=db_path)
+    rows = dm.get_speaker_by_name(name)
+    feedback = dm.get_feedback_for_speaker(name)
     ratings = [f["rating"] for f in feedback if f.get("rating")]
     return {
         "name": name,
@@ -144,22 +144,17 @@ def speaker_history(name: str, db_path: str = dm.DB_PATH) -> dict:
     }
 
 
-def similar_topics(topic: str, db_path: str = dm.DB_PATH) -> list[dict]:
+def similar_topics(topic: str) -> list[dict]:
     """Mishmarim in the database whose topic resembles this one."""
     if not (topic or "").strip():
         return []
-    return dm._query(
-        """SELECT id, gregorian_date, hebrew_date, topic FROM Mishmarim
-           WHERE topic IS NOT NULL AND topic LIKE ? ORDER BY id""",
-        (f"%{topic.strip()}%",),
-        db_path=db_path,
-    )
+    return dm.find_mishmarim_by_topic(topic)
 
 
-def summarise_for_topic(topic: str, db_path: str = dm.DB_PATH) -> dict:
+def summarise_for_topic(topic: str) -> dict:
     """One call answering 'has anything like this been done before?'"""
     past = search_past_mishmarim(topic)
-    same = similar_topics(topic, db_path=db_path)
+    same = similar_topics(topic)
     return {
         "topic": topic,
         "past_workfiles": past,
