@@ -20,6 +20,7 @@ import re
 import shutil
 import sqlite3
 from contextlib import contextmanager
+from datetime import date as _date, timedelta as _timedelta
 from typing import Any, Iterable, Iterator, Optional
 
 # --------------------------------------------------------------------------
@@ -46,6 +47,29 @@ SEASON_BUDGET_CEILING_NIS = None  # intentionally unset — tracking only
 
 TASK_STATUSES = ("TO DO", "IN PROGRESS", "DONE")
 SPEAKER_SOURCE_TYPES = ("original_44", "web_search", "manual")
+
+# Task categories drive the recommended deadlines below. They come from the
+# opening deck (binyat-mishmar-mifgash-peticha.pptx, slide "מתי כדאי לסגור מה").
+TASK_CATEGORIES = (
+    "נושא", "מרצים", "הזמנה", "כיבוד", "קישוט", "תוכן", "לוגיסטיקה", "אחרי",
+)
+
+# Days BEFORE the Mishmar that each category is recommended to be closed.
+# A negative value means "after the Mishmar".
+#
+# The deck frames these as "המלצה — לא חוק", and that framing is load-bearing:
+# a trainee sees a gentle nudge, never a failure state. Only the instructor
+# dashboard treats a passed date as something to act on.
+DEADLINE_OFFSETS_DAYS = {
+    "נושא": 21,
+    "מרצים": 14,
+    "הזמנה": 7,
+    "כיבוד": 7,
+    "קישוט": 7,
+    "תוכן": 7,
+    "לוגיסטיקה": 0,
+    "אחרי": -7,
+}
 
 # --------------------------------------------------------------------------
 # Paths
@@ -206,13 +230,119 @@ GROUP BY m.id;
 """
 
 
-def init_db(db_path: str = DB_PATH) -> None:
-    """Create the schema. Safe to call on every app start."""
+# --------------------------------------------------------------------------
+# Versioned migrations
+#
+# `CREATE TABLE IF NOT EXISTS` creates missing TABLES but never adds a missing
+# COLUMN to a table that already exists. Since the schema is changing weekly
+# right now, every change past the base schema goes in the numbered list below
+# and is applied exactly once, tracked in _meta.schema_version.
+# --------------------------------------------------------------------------
+
+SCHEMA_VERSION = 2
+
+MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        # Recommended-deadline support.
+        "ALTER TABLE Tasks ADD COLUMN category TEXT",
+        "ALTER TABLE Tasks ADD COLUMN due_date TEXT",
+        # Google identity, for when the app is deployed and 10 trainees sign in.
+        "ALTER TABLE Students ADD COLUMN email TEXT",
+
+        # The evening's actual running order. Deliberately NOT four fixed rows:
+        # real Mishmarim in the 2025-26 archive run a ceremony plus two
+        # lessons, or a song circle. slot_order is 1..N and lesson_role is free
+        # text so a ceremonial evening fits without being called malformed.
+        """CREATE TABLE IF NOT EXISTS Lessons (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            mishmar_id     INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
+            slot_order     INTEGER NOT NULL,
+            start_time     TEXT,
+            title          TEXT,
+            description    TEXT,
+            lesson_role    TEXT,
+            speaker_name   TEXT,
+            speaker_status TEXT DEFAULT '⬜ לא פנינו',
+            format         TEXT,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_lessons_mishmar ON Lessons(mishmar_id)",
+
+        # Post-Mishmar feedback. This is what turns the speaker index from a
+        # contact list into institutional memory: next year's trainee sees not
+        # just that someone taught here, but how it went.
+        """CREATE TABLE IF NOT EXISTS Feedback (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            mishmar_id   INTEGER NOT NULL REFERENCES Mishmarim(id) ON DELETE CASCADE,
+            student_id   INTEGER REFERENCES Students(id) ON DELETE SET NULL,
+            lesson_id    INTEGER REFERENCES Lessons(id)  ON DELETE SET NULL,
+            speaker_name TEXT,
+            rating       INTEGER CHECK (rating BETWEEN 1 AND 5),
+            what_worked  TEXT,
+            what_didnt   TEXT,
+            created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_mishmar ON Feedback(mishmar_id)",
+
+        # Chat history, per trainee per Mishmar, so a planning conversation
+        # survives a page refresh and the instructor can see how it went.
+        """CREATE TABLE IF NOT EXISTS ChatMessages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            mishmar_id INTEGER REFERENCES Mishmarim(id) ON DELETE CASCADE,
+            student_id INTEGER REFERENCES Students(id)  ON DELETE SET NULL,
+            role       TEXT NOT NULL CHECK (role IN ('user','assistant')),
+            content    TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_chat_lookup ON ChatMessages(mishmar_id, student_id, id)",
+    ],
+}
+
+
+def _current_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT value FROM _meta WHERE key = 'schema_version'"
+    ).fetchone()
+    if row:
+        return int(row["value"])
+    # No marker: a database created before migrations existed. Its tables match
+    # version 1, so start there rather than re-running the base schema blindly.
+    return 1
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> list[int]:
+    applied = []
+    current = _current_version(conn)
+    for version in sorted(MIGRATIONS):
+        if version <= current:
+            continue
+        for statement in MIGRATIONS[version]:
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as exc:
+                # A column added by hand, or a half-applied upgrade, should not
+                # wedge the app on every start. Anything else is a real error.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        applied.append(version)
+    conn.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
+    return applied
+
+
+def init_db(db_path: str = DB_PATH) -> list[int]:
+    """Create the schema and bring it up to SCHEMA_VERSION. Safe on every start.
+
+    Returns the migration versions applied this call (empty when already current).
+    """
     # The view carries the nominal figure; sqlite has no parameter binding in
     # DDL, so substitute it before executing.
     schema = SCHEMA.replace("?", str(PER_MISHMAR_BUDGET_NIS))
     with get_connection(db_path) as conn:
         conn.executescript(schema)
+        return _apply_migrations(conn)
 
 
 # --------------------------------------------------------------------------
@@ -568,15 +698,20 @@ def add_task(
     task_description: str,
     student_id: Optional[int] = None,
     status: str = "TO DO",
+    category: Optional[str] = None,
     db_path: str = DB_PATH,
 ) -> int:
     if status not in TASK_STATUSES:
         raise ValueError(f"status must be one of {TASK_STATUSES}, got {status!r}")
+    category = category or classify_task(task_description)
+    mishmar = get_mishmar(mishmar_id, db_path=db_path)
+    due = compute_due_date(mishmar["gregorian_date"], category) if mishmar else None
     with get_connection(db_path) as conn:
         cur = conn.execute(
-            """INSERT INTO Tasks (mishmar_id, student_id, task_description, status)
-               VALUES (?,?,?,?)""",
-            (mishmar_id, student_id, task_description, status),
+            """INSERT INTO Tasks
+               (mishmar_id, student_id, task_description, status, category, due_date)
+               VALUES (?,?,?,?,?,?)""",
+            (mishmar_id, student_id, task_description, status, category, due),
         )
         return int(cur.lastrowid)
 
@@ -685,6 +820,132 @@ def search_speakers_by_topic(
         sql += " AND (lesson_fit LIKE ? OR lesson_fit IS NULL OR lesson_fit = 'TBD')"
         params.append(f"%{lesson}%")
     return _query(sql + " ORDER BY source_type, name", params, db_path=db_path)
+
+
+# --------------------------------------------------------------------------
+# Task categories and recommended deadlines
+# --------------------------------------------------------------------------
+
+# First match wins, so order matters. Two rules must stay at the top:
+#   * "אחרי" before "מרצים", or "עדכון מאגר המרצים" (an after-the-night task)
+#     would be filed as speaker work and get a due date two weeks too early.
+#   * "לוגיסטיקה" before "תוכן", so "סידור חדרי חבורות (ביום המשמר)" is not
+#     read as content work because it mentions חבורות.
+_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("אחרי",       ("(אחרי)", "סיכום ולקחים", "תודות", "עדכון מאגר")),
+    ("לוגיסטיקה",  ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני")),
+    ("נושא",       ("סגירת נושא", "בחירת נושא", "נושא המשמר")),
+    ("מרצים",      ("מרצים", "מרצה")),
+    ("הזמנה",      ("הזמנה", "הזמנת", "קנבה", "הדפסה", "הפצה")),
+    ("כיבוד",      ("כיבוד", "רשימת קניות", "ארוחת", "קניות")),
+    ("קישוט",      ("קישוט",)),
+    ("תוכן",       ("חברותות", "חבורות", "מקורות", "טקסט", "לוח זמנים", "לוז", "שיעור")),
+)
+
+
+def classify_task(description: str) -> Optional[str]:
+    """Map a free-text task line to one of TASK_CATEGORIES, or None if unclear.
+
+    None is a legitimate answer: an unclassified task simply carries no
+    recommended date, which is better than inventing a deadline for it.
+    """
+    text = description or ""
+    for category, needles in _CATEGORY_RULES:
+        if any(n in text for n in needles):
+            return category
+    return None
+
+
+def parse_gregorian(date_str: str) -> Optional[_date]:
+    """Parse the repo's 'D.M.YYYY' date format (e.g. '24.9.2026')."""
+    m = re.match(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$", date_str or "")
+    if not m:
+        return None
+    day, month, year = (int(g) for g in m.groups())
+    try:
+        return _date(year, month, day)
+    except ValueError:
+        return None
+
+
+def compute_due_date(gregorian_date: str, category: Optional[str]) -> Optional[str]:
+    """Recommended closing date as ISO 'YYYY-MM-DD', or None if not derivable."""
+    if not category or category not in DEADLINE_OFFSETS_DAYS:
+        return None
+    base = parse_gregorian(gregorian_date)
+    if base is None:
+        return None
+    return (base - _timedelta(days=DEADLINE_OFFSETS_DAYS[category])).isoformat()
+
+
+def backfill_task_metadata(db_path: str = DB_PATH) -> dict:
+    """Fill category and due_date on tasks that have none. Never overwrites.
+
+    Runs on every start. Tasks migrated from the Markdown carry neither field,
+    and a trainee opening the app should see recommended dates immediately.
+    """
+    rows = _query(
+        """SELECT t.id, t.task_description, t.category, m.gregorian_date
+           FROM Tasks t JOIN Mishmarim m ON m.id = t.mishmar_id
+           WHERE t.category IS NULL OR t.due_date IS NULL""",
+        db_path=db_path,
+    )
+    filled, unclassified = 0, 0
+    with get_connection(db_path) as conn:
+        for r in rows:
+            category = r["category"] or classify_task(r["task_description"])
+            if not category:
+                unclassified += 1
+                continue
+            due = compute_due_date(r["gregorian_date"], category)
+            conn.execute(
+                "UPDATE Tasks SET category = ?, due_date = ? WHERE id = ?",
+                (category, due, r["id"]),
+            )
+            filled += 1
+    return {"examined": len(rows), "filled": filled, "unclassified": unclassified}
+
+
+def _he_days(n: int) -> str:
+    """Hebrew day counts. '1 ימים' reads as broken Hebrew to every trainee."""
+    if n == 1:
+        return "יום"
+    if n == 2:
+        return "יומיים"
+    return f"{n} ימים"
+
+
+def annotate_deadline(task: dict, today: Optional[_date] = None) -> dict:
+    """Attach days_left and a nudge label to a task row.
+
+    The opening deck calls these dates "המלצה — לא חוק", so the wording here
+    stays soft. `overdue` is a fact the instructor dashboard can act on; what
+    the trainee sees is a nudge, never a failure state.
+    """
+    today = today or _date.today()
+    out = dict(task)
+    out["days_left"] = None
+    out["overdue"] = False
+    out["nudge"] = ""
+
+    if task.get("status") == "DONE" or not task.get("due_date"):
+        return out
+
+    try:
+        due = _date.fromisoformat(task["due_date"])
+    except (ValueError, TypeError):
+        return out
+
+    days = (due - today).days
+    out["days_left"] = days
+    if days < 0:
+        out["overdue"] = True
+        out["nudge"] = f"מומלץ היה לסגור {_he_days(abs(days))} קודם"
+    elif days == 0:
+        out["nudge"] = "מומלץ לסגור היום"
+    elif days <= 3:
+        out["nudge"] = f"מומלץ לסגור בעוד {_he_days(days)}"
+    return out
 
 
 def get_speaker_by_name(name: str, db_path: str = DB_PATH) -> list[dict]:
@@ -801,10 +1062,174 @@ def get_speaker_stats(db_path: str = DB_PATH) -> dict:
 # --------------------------------------------------------------------------
 
 
+
+
+# --------------------------------------------------------------------------
+# Lessons — the evening's running order
+#
+# Deliberately not fixed at four. The 2025-26 archive holds a ceremony plus two
+# lessons, and a song circle; the four-lesson arc is the strong default the
+# generator emits, not a constraint the data model should enforce.
+# --------------------------------------------------------------------------
+
+
+def get_lessons(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
+    return _query(
+        "SELECT * FROM Lessons WHERE mishmar_id = ? ORDER BY slot_order",
+        (mishmar_id,),
+        db_path=db_path,
+    )
+
+
+def upsert_lesson(
+    mishmar_id: int,
+    slot_order: int,
+    title: Optional[str] = None,
+    start_time: Optional[str] = None,
+    description: Optional[str] = None,
+    lesson_role: Optional[str] = None,
+    speaker_name: Optional[str] = None,
+    speaker_status: Optional[str] = None,
+    fmt: Optional[str] = None,
+    db_path: str = DB_PATH,
+) -> int:
+    """Insert or update one slot. Only non-None fields are written."""
+    existing = _query(
+        "SELECT id FROM Lessons WHERE mishmar_id = ? AND slot_order = ?",
+        (mishmar_id, slot_order),
+        db_path=db_path,
+    )
+    fields = {
+        "start_time": start_time, "title": title, "description": description,
+        "lesson_role": lesson_role, "speaker_name": speaker_name,
+        "speaker_status": speaker_status, "format": fmt,
+    }
+    given = {k: v for k, v in fields.items() if v is not None}
+    with get_connection(db_path) as conn:
+        if existing:
+            if given:
+                sets = ", ".join(f"{k} = ?" for k in given)
+                conn.execute(
+                    f"UPDATE Lessons SET {sets} WHERE id = ?",
+                    (*given.values(), existing[0]["id"]),
+                )
+            return int(existing[0]["id"])
+        cols = ["mishmar_id", "slot_order", *given.keys()]
+        cur = conn.execute(
+            f"INSERT INTO Lessons ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' * len(cols))})",
+            (mishmar_id, slot_order, *given.values()),
+        )
+        return int(cur.lastrowid)
+
+
+def delete_lesson(lesson_id: int, db_path: str = DB_PATH) -> bool:
+    with get_connection(db_path) as conn:
+        return conn.execute("DELETE FROM Lessons WHERE id = ?", (lesson_id,)).rowcount > 0
+
+
+# --------------------------------------------------------------------------
+# Feedback — what turns the speaker index into institutional memory
+# --------------------------------------------------------------------------
+
+
+def add_feedback(
+    mishmar_id: int,
+    rating: Optional[int] = None,
+    speaker_name: Optional[str] = None,
+    lesson_id: Optional[int] = None,
+    student_id: Optional[int] = None,
+    what_worked: Optional[str] = None,
+    what_didnt: Optional[str] = None,
+    db_path: str = DB_PATH,
+) -> int:
+    if rating is not None and not 1 <= int(rating) <= 5:
+        raise ValueError("rating must be between 1 and 5")
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO Feedback
+               (mishmar_id, student_id, lesson_id, speaker_name, rating,
+                what_worked, what_didnt)
+               VALUES (?,?,?,?,?,?,?)""",
+            (mishmar_id, student_id, lesson_id, speaker_name, rating,
+             what_worked, what_didnt),
+        )
+        return int(cur.lastrowid)
+
+
+def get_feedback_for_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
+    return _query(
+        "SELECT * FROM Feedback WHERE mishmar_id = ? ORDER BY id",
+        (mishmar_id,),
+        db_path=db_path,
+    )
+
+
+def get_feedback_for_speaker(name: str, db_path: str = DB_PATH) -> list[dict]:
+    """Every past rating and note for a speaker — the 'how did it go' half.
+
+    This is what a trainee two years from now gets that today's trainee does
+    not: not just that someone taught here, but whether it worked.
+    """
+    return _query(
+        """SELECT f.*, m.gregorian_date, m.topic
+           FROM Feedback f JOIN Mishmarim m ON m.id = f.mishmar_id
+           WHERE f.speaker_name = ? ORDER BY f.id DESC""",
+        (name,),
+        db_path=db_path,
+    )
+
+
+# --------------------------------------------------------------------------
+# Chat history
+# --------------------------------------------------------------------------
+
+
+def add_chat_message(
+    role: str, content: str, mishmar_id: Optional[int] = None,
+    student_id: Optional[int] = None, db_path: str = DB_PATH,
+) -> int:
+    if role not in ("user", "assistant"):
+        raise ValueError("role must be 'user' or 'assistant'")
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO ChatMessages (mishmar_id, student_id, role, content)
+               VALUES (?,?,?,?)""",
+            (mishmar_id, student_id, role, content),
+        )
+        return int(cur.lastrowid)
+
+
+def get_chat_history(
+    mishmar_id: Optional[int] = None, student_id: Optional[int] = None,
+    limit: int = 100, db_path: str = DB_PATH,
+) -> list[dict]:
+    sql = "SELECT * FROM ChatMessages WHERE 1=1"
+    params: list[Any] = []
+    if mishmar_id is not None:
+        sql += " AND mishmar_id = ?"; params.append(mishmar_id)
+    if student_id is not None:
+        sql += " AND student_id = ?"; params.append(student_id)
+    rows = _query(sql + " ORDER BY id DESC LIMIT ?", (*params, limit), db_path=db_path)
+    return list(reversed(rows))
+
+
+def clear_chat_history(
+    mishmar_id: int, student_id: int, db_path: str = DB_PATH
+) -> int:
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "DELETE FROM ChatMessages WHERE mishmar_id = ? AND student_id = ?",
+            (mishmar_id, student_id),
+        ).rowcount
+
+
 def bootstrap(db_path: str = DB_PATH) -> dict:
     """Call once at app start: create the schema, migrate the Markdown if present."""
     init_db(db_path)
-    return migrate_and_archive_md(db_path=db_path)
+    result = migrate_and_archive_md(db_path=db_path)
+    result["deadlines"] = backfill_task_metadata(db_path=db_path)
+    return result
 
 
 if __name__ == "__main__":
