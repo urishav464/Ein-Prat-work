@@ -96,6 +96,7 @@ class StorageUnavailable(RuntimeError):
 
 
 _client = None
+_key_info: dict = {}
 
 
 def normalize_supabase_url(url: str) -> str:
@@ -123,6 +124,36 @@ def normalize_supabase_url(url: str) -> str:
             "→ API → Project URL."
         )
     return clean
+
+
+def describe_key(key: str) -> dict:
+    """Which Supabase role does this key actually carry?
+
+    Worth doing locally, because "wrong key type" is otherwise diagnosed by
+    guesswork: a legacy key is a JWT whose payload names the role outright, and
+    the current keys announce themselves by prefix. Reading it turns "it might
+    be the anon key" into "your key says role=anon", which is the difference
+    between a hint and an answer. Signature is NOT verified and must not be —
+    this only reads a claim in order to explain an error.
+    """
+    key = (key or "").strip()
+    if not key:
+        return {"role": None, "kind": "missing"}
+    # Current-generation keys: the role is the prefix.
+    if key.startswith("sb_secret_"):
+        return {"role": "service_role", "kind": "secret"}
+    if key.startswith("sb_publishable_"):
+        return {"role": "anon", "kind": "publishable"}
+    parts = key.split(".")
+    if len(parts) == 3:
+        try:
+            import base64
+            payload = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+            return {"role": claims.get("role"), "kind": "legacy_jwt"}
+        except Exception:
+            pass
+    return {"role": None, "kind": "unrecognised"}
 
 
 def get_client():
@@ -156,6 +187,8 @@ def get_client():
             "חסרים SUPABASE_URL / SUPABASE_KEY ב-Secrets של Streamlit. "
             "ראו DEPLOY.md."
         )
+    global _key_info
+    _key_info = describe_key(key)
     _client = create_client(normalize_supabase_url(url), (key or "").strip())
     return _client
 
@@ -207,13 +240,26 @@ def storage_ready() -> dict:
                 "Supabase → Project Settings → API → Project URL."
             )
         elif any(k in low for k in ("permission denied", "42501", "row-level security")):
-            # RLS is on with no policies, so an anon key is refused rather than
-            # returning nothing.
-            reason = (
-                "ההתחברות עובדת, אבל המפתח נדחה. RLS מופעל על כל הטבלאות, ולכן "
-                "**חייבים את מפתח ה-service_role** — מפתח anon לא ייתן גישה. "
-                "Supabase → Project Settings → API → service_role."
+            # A SELECT blocked by RLS returns no rows, not an error — so 42501
+            # "permission denied for table" is a missing table GRANT, which is
+            # what the schema's REVOKE leaves anon with. The key names its own
+            # role, so say which one arrived rather than guessing.
+            role = (_key_info or {}).get("role")
+            need = (
+                "האפליקציה דורשת את מפתח ה-**service_role** (או מפתח "
+                "`sb_secret_...`) — Supabase → Project Settings → API."
             )
+            if role == "service_role":
+                # The key is right, so the GRANTs really are missing.
+                reason = (
+                    "המפתח אכן `service_role`, ולכן חסרות ההרשאות על הטבלאות "
+                    "עצמן. **הריצו שוב את `supabase_schema.sql`** — הגרסה "
+                    "העדכנית מוסיפה `GRANT` מפורש ל-service_role, שחסר היה קודם."
+                )
+            elif role:
+                reason = f"המפתח שהוגדר הוא **`{role}`**, והרשאותיו נשללו במכוון. " + need
+            else:
+                reason = "לא הצלחתי לזהות את סוג המפתח. " + need
         elif any(k in low for k in ("pgrst301", "jwt", "invalid api key", "401")):
             reason = (
                 "המפתח `SUPABASE_KEY` נדחה. ודאו שהעתקתם את מפתח ה-**service_role** "

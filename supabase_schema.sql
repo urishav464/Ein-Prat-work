@@ -330,6 +330,15 @@ ALTER TABLE app_meta         ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
 
+-- ולהיפך: להעניק במפורש ל-service_role, שזה התפקיד שהאפליקציה עובדת בו.
+-- Supabase מעניק לו הרשאות אוטומטית, אבל לא בכל פרויקט ולא לכל טבלה שנוצרת
+-- מאוחר יותר — ובלי ה-GRANT הזה מתקבל 42501 «permission denied for table»,
+-- שנראה בדיוק כמו מפתח שגוי. BYPASSRLS עוקף מדיניות RLS, הוא **אינו** עוקף
+-- הרשאות ברמת הטבלה, ולכן שתי השורות האלה נחוצות בנפרד מ-RLS.
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT ALL ON ALL TABLES     IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES  IN SCHEMA public TO service_role;
+
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
 VALUES ('schema_version', '1')
