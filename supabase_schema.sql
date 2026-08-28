@@ -191,7 +191,8 @@ CREATE INDEX IF NOT EXISTS idx_cache_created     ON search_cache(created_at);
 -- ---------------------------------------------------------------------------
 
 -- הוצאות בפועל למשמר. אף פעם לא עמודה שמורה.
-CREATE OR REPLACE VIEW v_mishmar_budget AS
+CREATE OR REPLACE VIEW v_mishmar_budget
+WITH (security_invoker = true) AS
 SELECT m.id                              AS mishmar_id,
        m.gregorian_date,
        COALESCE(SUM(b.actual_cost), 0)   AS budget_used
@@ -200,7 +201,8 @@ SELECT m.id                              AS mishmar_id,
  GROUP BY m.id, m.gregorian_date;
 
 -- הסטטוס הנוכחי של מרצה = השורה האחרונה ביומן הפניות, ובהיעדרה הערך ההיסטורי.
-CREATE OR REPLACE VIEW v_speaker_status AS
+CREATE OR REPLACE VIEW v_speaker_status
+WITH (security_invoker = true) AS
 SELECT s.id                                AS speaker_id,
        s.name,
        s.name_norm,
@@ -225,7 +227,8 @@ SELECT s.id                                AS speaker_id,
   ) o ON true;
 
 -- יומן הפניות עם השמות מפוענחים — מה שחניך רואה לפני שהוא פונה.
-CREATE OR REPLACE VIEW v_outreach_full AS
+CREATE OR REPLACE VIEW v_outreach_full
+WITH (security_invoker = true) AS
 SELECT o.id,
        o.speaker_id,
        sp.name        AS speaker_name,
@@ -243,7 +246,8 @@ SELECT o.id,
   LEFT JOIN students  st ON st.id = o.student_id;
 
 -- משימות עם פרטי המשמר, לקנבן ולהקשר של הצ'אט.
-CREATE OR REPLACE VIEW v_tasks_full AS
+CREATE OR REPLACE VIEW v_tasks_full
+WITH (security_invoker = true) AS
 SELECT t.*,
        m.gregorian_date,
        m.hebrew_date,
@@ -254,7 +258,8 @@ SELECT t.*,
 -- משימות פתוחות שעברו את התאריך המומלץ, עם הזוג האחראי.
 -- #01 ו-#02 נבנים על ידי הצוות ואין להם שורות ב-assignments — לכן COALESCE,
 -- אחרת השדה חוזר NULL וכל מי שמעצב אותו נופל.
-CREATE OR REPLACE VIEW v_overdue_tasks AS
+CREATE OR REPLACE VIEW v_overdue_tasks
+WITH (security_invoker = true) AS
 SELECT t.*,
        m.gregorian_date,
        m.hebrew_date,
@@ -269,7 +274,8 @@ SELECT t.*,
    AND t.due_date < CURRENT_DATE;
 
 -- התקדמות לכל חניך. משימות של חניך = משימות המשמרים שלו, כולל המשותפות.
-CREATE OR REPLACE VIEW v_student_progress AS
+CREATE OR REPLACE VIEW v_student_progress
+WITH (security_invoker = true) AS
 SELECT s.id,
        s.name,
        COUNT(DISTINCT a.mishmar_id)                                   AS mishmarim,
@@ -286,16 +292,43 @@ SELECT s.id,
  GROUP BY s.id, s.name;
 
 -- ---------------------------------------------------------------------------
--- 6. הרשאות
+-- 6. הרשאות — RLS על כל טבלה, בלי אף מדיניות
 --
--- RLS מושבת בכוונה. הבקרה על הגישה היא ההתחברות דרך Google באפליקציה, והמפתח
--- של Supabase יושב ב-Streamlit Secrets בצד השרת — הדפדפן של החניך לא רואה
--- אותו לעולם.
+-- **תיקון להחלטה קודמת.** קודם השארתי RLS כבוי בהנחה שהמפתח נשאר פרטי
+-- ב-Streamlit Secrets. ההנחה הזו שגויה: מפתח ה-anon של Supabase מיועד להיות
+-- ציבורי מעצם תכנונו. בלי RLS, כל טבלה ב-public פתוחה לקריאה ולכתיבה לכל מי
+-- שמחזיק אותו — לא משנה מה האפליקציה עושה. זה מה שהלינטר סימן, והוא צדק.
 --
--- ⚠️ המשמעות: **מי שמשיג את המפתח מקבל את כל הנתונים.** אל תכניסו אותו לגיט,
--- ואל תדביקו אותו בשום מקום שאינו Streamlit Secrets. אם המאגר יתמלא בטלפונים
--- ובמיילים של מרצים — שווה לחזור לכאן ולהפעיל RLS עם מדיניות לפי משתמש.
+-- מפעילים RLS **בלי להוסיף מדיניות**, וזה בדיוק הנכון לארכיטקטורה הזו:
+--
+--   * `anon` / `authenticated`  → אפס גישה. אין מדיניות, אין הרשאה.
+--   * `service_role`            → גישה מלאה; לתפקיד הזה יש BYPASSRLS.
+--
+-- ⚠️ **לכן `SUPABASE_KEY` ב-Streamlit חייב להיות מפתח ה-service_role.**
+-- אם הוכנס שם מפתח anon, האפליקציה תראה מסד ריק אחרי ההרצה הזו.
+-- Supabase → Project Settings → API → service_role (מסומן secret).
+--
+-- זה עדיין מפתח שמעניק הכל למי שמחזיק בו — הוא נשאר רק ב-Streamlit Secrets,
+-- לעולם לא בגיט. אבל מפתח ה-anon הציבורי כבר לא פותח שום דבר.
 -- ---------------------------------------------------------------------------
+
+ALTER TABLE mishmarim        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE students         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assignments      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budget           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE speakers         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE speaker_outreach ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lessons          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE feedback         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE search_cache     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_meta         ENABLE ROW LEVEL SECURITY;
+
+-- הסרת ההרשאות ש-Supabase מעניק אוטומטית לתפקידים הציבוריים. RLS לבדו מספיק,
+-- אבל שתי שכבות עדיפות על אחת, וזה גם מבהיר את הכוונה.
+REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)

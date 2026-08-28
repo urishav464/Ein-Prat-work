@@ -166,13 +166,24 @@ def storage_ready() -> dict:
         _rows(_t("app_meta").select("key").limit(1).execute())
         return {"ok": True, "reason": ""}
     except Exception as exc:
-        return {
-            "ok": False,
-            "reason": (
+        detail = f"{type(exc).__name__}: {exc}"
+        # RLS is on with no policies, so an anon key is refused rather than
+        # returning nothing. Distinguish that from a schema that was never
+        # installed — the two look alike from here but need opposite fixes.
+        denied = any(k in detail.lower() for k in
+                     ("permission denied", "42501", "row-level security"))
+        if denied:
+            reason = (
+                "ההתחברות עובדת, אבל המפתח נדחה. RLS מופעל על כל הטבלאות, ולכן "
+                "**חייבים את מפתח ה-service_role** — מפתח anon לא ייתן גישה. "
+                "Supabase → Project Settings → API → service_role."
+            )
+        else:
+            reason = (
                 "ההתחברות ל-Supabase עובדת אבל הטבלאות חסרות. הריצו את "
-                f"`supabase_schema.sql` ב-SQL Editor. ({type(exc).__name__})"
-            ),
-        }
+                "`supabase_schema.sql` ב-SQL Editor."
+            )
+        return {"ok": False, "reason": f"{reason} ({detail[:120]})"}
 
 
 # --------------------------------------------------------------------------
