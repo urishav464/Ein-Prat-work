@@ -666,6 +666,15 @@ def get_budget_speaker_names(mishmar_id: int) -> list[str]:
     return out
 
 
+def get_task_totals() -> dict:
+    """Season-wide task counts, for the instructor's progress bar. Counts task
+    ROWS, so a pair-shared task (student_id NULL) is counted once — unlike
+    v_student_progress, which credits it to both partners on purpose."""
+    rows = _rows(_t("tasks").select("status").execute())
+    done = sum(1 for r in rows if r.get("status") == "DONE")
+    return {"total": len(rows), "done": done}
+
+
 def get_overdue_tasks() -> list[dict]:
     """Open tasks past their recommended date. CURRENT_DATE is evaluated in
     Postgres, so this does not drift with the app server's clock."""

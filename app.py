@@ -76,6 +76,43 @@ RTL_CSS = """
   [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { direction: rtl; }
   h1, h2, h3, h4, h5, h6 { text-align: right; }
   [data-testid="stDataFrame"] { direction: rtl; }
+  .stButton button, .stFormSubmitButton button { direction: rtl; }
+  [data-testid="stExpander"] summary { direction: rtl; text-align: right; }
+  [data-testid="stProgress"] { direction: rtl; }
+
+  /* Soft warm ground for the sidebar; the main area stays clean. */
+  [data-testid="stSidebar"] {
+      background: #f4f1ea;
+      border-inline-end: 1px solid #e6e0d2;
+  }
+
+  /* st.container(border=True) is the app's card primitive — white, rounded,
+     a light shadow, so a grid of them reads as a board and not as forms. */
+  [data-testid="stVerticalBlockBorderWrapper"] {
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(60, 50, 20, 0.08);
+  }
+
+  /* Colored tag chips (status / category / urgency). */
+  .chip {
+      display: inline-block;
+      padding: 1px 10px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      margin-inline-end: 4px;
+      white-space: nowrap;
+  }
+  .chip-red    { background: #fdecea; color: #b3261e; }
+  .chip-yellow { background: #fef3d5; color: #92600a; }
+  .chip-green  { background: #e6f4ea; color: #137333; }
+  .chip-gray   { background: #eeece7; color: #5a564c; }
+  .chip-gold   { background: #f5edda; color: #8a6d1d; }
+  .chip-blue   { background: #e8f0fe; color: #1a56b4; }
+
+  .task-desc { font-weight: 600; line-height: 1.45; margin-bottom: 4px; }
+  .card-meta { opacity: 0.65; font-size: 0.78rem; margin-top: 4px; }
 
   .kanban-card {
       background: var(--secondary-background-color, #f3f0e8);
@@ -109,7 +146,7 @@ def _init_session() -> None:
 def logout() -> None:
     """Clear the session. Under Google auth, also end the OIDC session."""
     for key in ("role", "user_name", "student_id", "search_result",
-                "verify_name", "verify_cache", "nav",
+                "verify_name", "verify_cache", "nav", "chat_open",
                 "chat_history", "chat_loaded_for", "chat_mishmar"):
         st.session_state.pop(key, None)
     if auth_configured() and getattr(st.user, "is_logged_in", False):
@@ -241,8 +278,8 @@ def _clean(text: str) -> str:
 
 
 def show_admin_dashboard() -> None:
-    st.title("לוח בקרה — Uri")
-    st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז')
+    st.title("🎛️ לוח הבקרה")
+    st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
 
     mishmarim = dm.get_all_mishmarim()
     budget = dm.get_budget_summary()
@@ -252,20 +289,91 @@ def show_admin_dashboard() -> None:
         return
 
     with_topic = [m for m in mishmarim if m.get("topic")]
+    totals = dm.get_task_totals()
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("משמרים", len(mishmarim))
-    c2.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
-    c3.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
-    c4.metric("אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
+    c1.metric("🕯️ משמרים", len(mishmarim))
+    c2.metric("🎯 עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
+    c3.metric("💰 סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
+    c4.metric("📊 אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
+
+    if totals["total"]:
+        st.progress(totals["done"] / totals["total"],
+                    text=f"התקדמות העונה: {totals['done']}/{totals['total']} משימות הושלמו")
 
     st.divider()
-    st.subheader("המשמרים")
+    st.subheader("🔴 עבר את התאריך המומלץ")
+    overdue = dm.get_overdue_tasks()
+    if not overdue:
+        st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
+    else:
+        st.caption(
+            f"{len(overdue)} משימות פתוחות עברו את התאריך המומלץ. "
+            "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
+        )
+        cards = []
+        for t in overdue:
+            a = dm.annotate_deadline(t)
+            a["category"] = a.get("category") or ""
+            cards.append(a)
+        for i in range(0, len(cards), 2):
+            cols = st.columns(2)
+            for col, t in zip(cols, cards[i:i + 2]):
+                with col:
+                    with st.container(border=True):
+                        chips = [_chip("באיחור", "red"),
+                                 _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
+                        if t.get("category"):
+                            chips.append(_chip(t["category"], "gold"))
+                        st.markdown(
+                            f"<div class='task-desc'>{_clean(t['task_description'])[:80]}</div>"
+                            f"<div>{''.join(chips)}</div>"
+                            f"<div class='card-meta'>{_clean(t.get('owners') or 'צוות')} · "
+                            f"{t['gregorian_date']} · {_clean(t.get('nudge') or '')}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        # The instructor can advance a trainee's task directly,
+                        # for the common case where the work happened but
+                        # nobody updated the board.
+                        b1, b2 = st.columns(2)
+                        if b1.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary"):
+                            dm.update_task_status(t["id"], "DONE"); st.rerun()
+                        if b2.button("▶ בתהליך", key=f"ov-ip-{t['id']}"):
+                            dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
 
-    # st.dataframe does NOT mirror under `direction: rtl` the way st.columns does.
-    # Keys are laid out left-to-right in insertion order, so the order below is
-    # written in reverse: "#" is inserted last and therefore lands on the RIGHT,
-    # which is where a Hebrew reader starts.
+    st.divider()
+    st.subheader("👥 התקדמות החניכים")
+    progress = dm.get_student_progress()
+    prow = []
+    for r in progress:
+        total = r["tasks_total"] or 0
+        done = r["tasks_done"] or 0
+        # st.dataframe does NOT mirror under RTL — columns lay out left-to-right
+        # in insertion order, so the dict is written in reverse to put the name
+        # on the RIGHT, where a Hebrew reader starts.
+        prow.append({
+            "באיחור": r["overdue"] or 0,
+            "התקדמות": round(100 * done / total) if total else 0,
+            "משימות": f"{done}/{total}",
+            "משמרים": r["mishmarim"] or 0,
+            "חניך": r["name"],
+        })
+    st.dataframe(
+        prow, width="stretch", hide_index=True,
+        column_config={
+            "התקדמות": st.column_config.ProgressColumn(
+                "התקדמות", min_value=0, max_value=100, format="%d%%"),
+        },
+    )
+    behind = [r for r in progress if (r["overdue"] or 0) > 0]
+    if behind:
+        st.info(
+            "חניכים עם משימות שעברו את התאריך: "
+            + " · ".join(f"{r['name']} ({r['overdue']})" for r in behind)
+        )
+
+    st.divider()
+    st.subheader("📅 כל המשמרים")
     rows = []
     for m in mishmarim:
         rows.append(
@@ -280,147 +388,228 @@ def show_admin_dashboard() -> None:
             }
         )
     st.dataframe(rows, width="stretch", hide_index=True)
-
-    st.divider()
-    st.subheader("תקציב")
-    st.caption(
-        "אין תקרה עונתית — זהו מעקב הוצאות מצטבר. חריגה במשמר בודד **אינה שגיאה**: "
-        "היא נמשכת מהסעיף התקציבי הכולל, ומשמרים זולים מאזנים אותה."
-    )
-    over = budget["over_nominal"]
-    if over:
-        st.info(
-            "מעל האינדיקציה של "
-            + _fmt_nis(budget["nominal_per_mishmar"])
-            + ": משמרים "
-            + ", ".join(f"#{i:02d}" for i in over)
-            + " — לידיעה, לא לדאגה."
-        )
-    else:
-        st.success("אף משמר לא חרג מהאינדיקציה של " + _fmt_nis(budget["nominal_per_mishmar"]) + ".")
-
     missing = [m for m in mishmarim if not m.get("topic")]
     if missing:
-        st.divider()
-        st.subheader("ממתין לנושא")
-        st.write(" · ".join(f"#{m['id']:02d} ({m['gregorian_date']})" for m in missing))
+        st.caption("ממתין לנושא: " + " · ".join(
+            f"#{m['id']:02d} ({m['gregorian_date']})" for m in missing))
 
-    st.divider()
-    st.subheader("עבר את התאריך המומלץ")
-    overdue = dm.get_overdue_tasks()
-    if not overdue:
-        st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
-    else:
+    with st.expander("💰 תקציב"):
         st.caption(
-            f"{len(overdue)} משימות פתוחות עברו את התאריך המומלץ. "
-            "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
+            "אין תקרה עונתית — זהו מעקב הוצאות מצטבר. חריגה במשמר בודד **אינה שגיאה**: "
+            "היא נמשכת מהסעיף התקציבי הכולל, ומשמרים זולים מאזנים אותה."
         )
-        by_mishmar: dict[int, list[dict]] = {}
-        for t in overdue:
-            by_mishmar.setdefault(t["mishmar_id"], []).append(t)
-        for mid, items in sorted(by_mishmar.items()):
-            head = items[0]
-            with st.expander(
-                f"#{mid:02d} · {head['gregorian_date']} · {head['owners']} — "
-                f"{len(items)} משימות"
-            ):
-                for t in items:
-                    a = dm.annotate_deadline(t)
-                    c1, c2, c3 = st.columns([4, 2, 2])
-                    c1.markdown(f"**{_clean(t['task_description'])[:70]}**")
-                    c1.caption(f"{t.get('category') or ''} · {a['nudge']}")
-                    # The instructor can advance a trainee's task directly,
-                    # for the common case where the work happened but nobody
-                    # updated the board.
-                    if c2.button("→ בתהליך", key=f"ov-ip-{t['id']}"):
-                        dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
-                    if c3.button("→ הושלם", key=f"ov-dn-{t['id']}"):
-                        dm.update_task_status(t["id"], "DONE"); st.rerun()
+        over = budget["over_nominal"]
+        if over:
+            st.info(
+                "מעל האינדיקציה של "
+                + _fmt_nis(budget["nominal_per_mishmar"])
+                + ": משמרים "
+                + ", ".join(f"#{i:02d}" for i in over)
+                + " — לידיעה, לא לדאגה."
+            )
+        else:
+            st.success("אף משמר לא חרג מהאינדיקציה של "
+                       + _fmt_nis(budget["nominal_per_mishmar"]) + ".")
 
     if auth_configured():
-        st.divider()
-        st.subheader("שיוך חשבונות")
-        st.caption(
-            "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
-            "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
-        )
-        with st.form("emails"):
-            students = [x for x in dm.get_students() if x["role"] == "student"]
-            entered = {}
-            for stu in students:
-                entered[stu["id"]] = st.text_input(
-                    stu["name"], value=stu.get("email") or "",
-                    key=f"em-{stu['id']}", placeholder="name@gmail.com")
-            if st.form_submit_button("שמור שיוכים"):
-                n = 0
-                for sid, addr in entered.items():
-                    dm.set_student_email(sid, addr); n += 1
-                st.toast(f"נשמרו {n} שיוכים"); st.rerun()
+        with st.expander("🔗 שיוך חשבונות"):
+            st.caption(
+                "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
+                "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
+            )
+            with st.form("emails"):
+                students = [x for x in dm.get_students() if x["role"] == "student"]
+                entered = {}
+                for stu in students:
+                    entered[stu["id"]] = st.text_input(
+                        stu["name"], value=stu.get("email") or "",
+                        key=f"em-{stu['id']}", placeholder="name@gmail.com")
+                if st.form_submit_button("שמור שיוכים"):
+                    n = 0
+                    for sid, addr in entered.items():
+                        dm.set_student_email(sid, addr); n += 1
+                    st.toast(f"נשמרו {n} שיוכים"); st.rerun()
 
-    st.divider()
-    st.subheader("התקדמות החניכים")
-    progress = dm.get_student_progress()
-    rows = []
-    for r in progress:
-        total = r["tasks_total"] or 0
-        done = r["tasks_done"] or 0
-        rows.append({
-            "באיחור": r["overdue"] or 0,
-            "אחוז": f"{round(100 * done / total) if total else 0}%",
-            "משימות": f"{done}/{total}",
-            "משמרים": r["mishmarim"] or 0,
-            "חניך": r["name"],
-        })
-    st.dataframe(rows, width="stretch", hide_index=True)
-    behind = [r for r in progress if (r["overdue"] or 0) > 0]
-    if behind:
-        st.info(
-            "חניכים עם משימות שעברו את התאריך: "
-            + " · ".join(f"{r['name']} ({r['overdue']})" for r in behind)
+
+# --------------------------------------------------------------------------
+# Card primitives — the visual grammar of the redesigned dashboards
+# --------------------------------------------------------------------------
+
+from datetime import date as _date_cls
+
+
+def _parse_date(value) -> Optional[_date_cls]:
+    try:
+        return _date_cls.fromisoformat(str(value)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _fmt_date(value) -> str:
+    """ISO out of Postgres, day.month.year in the UI — the repo's convention."""
+    d = _parse_date(value)
+    return f"{d.day}.{d.month}.{d.year}" if d else str(value or "")
+
+
+def _chip(text: str, kind: str) -> str:
+    return f"<span class='chip chip-{kind}'>{_clean(text)}</span>"
+
+
+_STATUS_CHIP = {"TO DO": ("לעשות", "gray"),
+                "IN PROGRESS": ("בתהליך", "blue"),
+                "DONE": ("הושלם", "green")}
+
+
+def _urgency(t: dict) -> str:
+    """red = past the recommended date · yellow = within the week · green = open.
+    The deck calls the dates a recommendation, so red is a nudge, not an alarm."""
+    if t.get("status") == "DONE":
+        return "done"
+    if t.get("overdue"):
+        return "red"
+    days = t.get("days_left")
+    if days is not None and days <= 7:
+        return "yellow"
+    return "green"
+
+
+def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True) -> None:
+    """One task as a bordered card: description, chips, soft nudge, actions."""
+    urgency = _urgency(t)
+    with st.container(border=True):
+        chips = []
+        label, kind = _STATUS_CHIP.get(t.get("status"), ("", "gray"))
+        if label:
+            chips.append(_chip(label, kind))
+        if t.get("category"):
+            chips.append(_chip(t["category"], "gold"))
+        if show_mishmar and t.get("mishmar_id"):
+            chips.append(_chip(f"משמר #{t['mishmar_id']:02d}", "gray"))
+        if urgency == "red":
+            chips.append(_chip("באיחור", "red"))
+        elif urgency == "yellow":
+            chips.append(_chip("השבוע", "yellow"))
+
+        st.markdown(
+            f"<div class='task-desc'>{_clean(t['task_description'])}</div>"
+            f"<div>{''.join(chips)}</div>",
+            unsafe_allow_html=True,
         )
+        meta = t.get("nudge") or (
+            f"מומלץ עד {_fmt_date(t['due_date'])}" if t.get("due_date") else "")
+        if meta:
+            st.markdown(f"<div class='card-meta'>🕒 {_clean(meta)}</div>",
+                        unsafe_allow_html=True)
+
+        status = t.get("status")
+        b1, b2 = st.columns(2)
+        if status == "DONE":
+            if b1.button("↩ החזר לתהליך", key=f"{key_prefix}-{t['id']}-re"):
+                dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
+        else:
+            if b1.button("✓ הושלם", key=f"{key_prefix}-{t['id']}-dn", type="primary"):
+                dm.update_task_status(t["id"], "DONE")
+                st.toast(f"«{_clean(t['task_description'])[:40]}» הושלם 🎉")
+                st.rerun()
+            other = ("↩ לעשות", "TO DO") if status == "IN PROGRESS" else ("▶ התחל", "IN PROGRESS")
+            if b2.button(other[0], key=f"{key_prefix}-{t['id']}-mv"):
+                dm.update_task_status(t["id"], other[1]); st.rerun()
+
+
+def _card_grid(items: list[dict], key_prefix: str, per_row: int = 2,
+               show_mishmar: bool = True) -> None:
+    # st.columns mirrors under RTL, so the first card of each row lands on the
+    # RIGHT — Hebrew reading order — with no extra work here.
+    for i in range(0, len(items), per_row):
+        cols = st.columns(per_row)
+        for col, t in zip(cols, items[i:i + per_row]):
+            with col:
+                _task_card(t, key_prefix, show_mishmar=show_mishmar)
+
+
+def _mishmar_card(m: dict, tasks: list[dict]) -> None:
+    """The trainee's Mishmar at a glance: dates, topic, progress, countdown."""
+    mine = [t for t in tasks if t.get("mishmar_id") == m["id"]]
+    done = sum(1 for t in mine if t.get("status") == "DONE")
+    total = len(mine)
+    with st.container(border=True):
+        chips = []
+        if m.get("mishmar_type"):
+            chips.append(_chip(m["mishmar_type"], "gold"))
+        d = _parse_date(m.get("gregorian_date"))
+        days = (d - _date_cls.today()).days if d else None
+        if days is not None:
+            if days < 0:
+                chips.append(_chip("התקיים", "gray"))
+            elif days <= 14:
+                chips.append(_chip(f"בעוד {days} ימים", "yellow" if days > 7 else "red"))
+            else:
+                chips.append(_chip(f"בעוד {days} ימים", "green"))
+        st.markdown(
+            f"<div class='task-desc'>🕯️ משמר #{m['id']:02d} · {m['gregorian_date']} · "
+            f"{m['hebrew_date']}</div><div>{''.join(chips)}</div>",
+            unsafe_allow_html=True,
+        )
+        if m.get("topic"):
+            st.markdown(f"**הנושא:** {_clean(m['topic'])}")
+        else:
+            st.markdown("**הנושא:** ❗ עדיין לא נסגר — זה הצעד הראשון")
+        if total:
+            st.progress(done / total, text=f"{done}/{total} משימות הושלמו")
+        else:
+            st.caption("אין עדיין משימות למשמר הזה.")
 
 
 def show_student_view(student_name: str) -> None:
     student_id = st.session_state.student_id
-    st.title(f"שלום, {student_name} 👋")
+    st.title(f"🏠 שלום, {student_name}")
+    st.caption("המשמרים שלך, המשימות שלך — לפי מה שדחוף באמת.")
 
     mine = dm.get_mishmarim_for_student(student_id)
-    if mine:
-        st.caption(
-            "המשמרים שלך: "
-            + " · ".join(f"#{m['id']:02d} ({m['gregorian_date']} · {m['hebrew_date']})" for m in mine)
-        )
+    tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_student(student_id)]
 
-    tasks = dm.get_tasks_for_student(student_id)
+    if not mine:
+        st.info("עוד לא משובצים לך משמרים.")
+        return
+
+    st.subheader("🕯️ המשמרים שלי")
+    for i in range(0, len(mine), 2):
+        cols = st.columns(2)
+        for col, m in zip(cols, mine[i:i + 2]):
+            with col:
+                _mishmar_card(m, tasks)
+
     if not tasks:
         st.info("אין משימות פתוחות כרגע.")
         return
 
     st.divider()
+    buckets: dict[str, list[dict]] = {"red": [], "yellow": [], "green": [], "done": []}
+    for t in tasks:
+        buckets[_urgency(t)].append(t)
+    by_due = lambda x: x.get("due_date") or "9999"
 
-    # Under `direction: rtl` Streamlit's flex columns reverse, so listing
-    # [TO DO, IN PROGRESS, DONE] renders TO DO on the RIGHT — Hebrew reading order.
-    titles = {"TO DO": "לעשות", "IN PROGRESS": "בתהליך", "DONE": "הושלם"}
-    columns = st.columns(len(dm.TASK_STATUSES))
+    if buckets["red"]:
+        st.subheader(f"🔴 עבר התאריך המומלץ ({len(buckets['red'])})")
+        st.caption("המלצה — לא חוק. אבל אלה הדברים ששווה לסגור קודם.")
+        _card_grid(sorted(buckets["red"], key=by_due), "red")
 
-    for col, status in zip(columns, dm.TASK_STATUSES):
-        bucket = [t for t in tasks if t["status"] == status]
-        with col:
-            st.subheader(f"{titles[status]} ({len(bucket)})")
-            for t in bucket:
-                st.markdown(
-                    f"<div class='kanban-card'>{_clean(t['task_description'])}"
-                    f"<div class='meta'>משמר #{t['mishmar_id']:02d} · {t['gregorian_date']}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                targets = [s for s in dm.TASK_STATUSES if s != status]
-                btn_cols = st.columns(len(targets))
-                for bc, target in zip(btn_cols, targets):
-                    if bc.button(f"→ {titles[target]}", key=f"mv-{t['id']}-{target}"):
-                        dm.update_task_status(t["id"], target)
-                        st.toast(f"«{_clean(t['task_description'])[:40]}» → {titles[target]}")
-                        st.rerun()
+    if buckets["yellow"]:
+        st.subheader(f"🟡 מומלץ השבוע ({len(buckets['yellow'])})")
+        _card_grid(sorted(buckets["yellow"], key=by_due), "yel")
+
+    if buckets["green"]:
+        # A season is ~40 open tasks per trainee. The urgent buckets stay flat
+        # on the page; the far-future bulk folds, or the grid becomes exactly
+        # the endless list the redesign is replacing.
+        urgent_exists = bool(buckets["red"] or buckets["yellow"])
+        with st.expander(f"🟢 פתוח — בהמשך ({len(buckets['green'])})",
+                         expanded=not urgent_exists):
+            _card_grid(sorted(buckets["green"], key=by_due), "grn")
+
+    if buckets["done"]:
+        with st.expander(f"✅ הושלמו ({len(buckets['done'])})"):
+            _card_grid(buckets["done"], "done")
 
 
 def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
@@ -461,7 +650,7 @@ def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
 
 
 def show_speaker_search() -> None:
-    st.title("חיפוש מרצים")
+    st.title("🔍 חיפוש מרצים")
     st.caption("שני נתיבים מקבילים: המאגר המקומי, וגילוי שמות חדשים מהרשת")
 
     status = ss.search_status()
@@ -585,7 +774,7 @@ def show_speaker_index() -> None:
     """The shared board. This is what the opening deck's slide 11 points at:
     check here before approaching anyone, so two pairs never contact the same
     person a week apart without knowing."""
-    st.title("מאגר המרצים")
+    st.title("👥 מאגר המרצים")
     st.caption(
         "המאגר המשותף לכל הצוותים. **לפני שפונים למישהו — בדקו כאן.** "
         "כל עדכון סטטוס נרשם ביומן ונראה מיד לכל שאר הזוגות."
@@ -904,7 +1093,7 @@ def _after_tab(mid: int) -> None:
 
 
 def show_mishmar_page() -> None:
-    st.title("קובץ העבודה")
+    st.title("📋 ניהול המשמר")
     mid = _mishmar_picker("workfile_mishmar")
     if not mid:
         return
@@ -968,21 +1157,33 @@ def _message_text(content) -> str:
     return "\n\n".join(parts).strip()
 
 
-def show_chat() -> None:
-    st.title("בניית משמר")
+def render_chat_panel() -> None:
+    """The global assistant — a persistent panel beside EVERY page.
+
+    This is the redesign's core move: the chat is no longer a page you visit,
+    it is a companion to whatever screen is open. A trainee can stand in the
+    speaker index, say "סגרתי עם X", and watch the index update — the turn
+    ends with st.rerun(), so the main column re-renders from fresh rows.
+
+    The panel is drawn AFTER the main column in code, which keeps the page
+    visible while the answer streams in.
+    """
+    st.markdown("#### 💬 שותף הבנייה")
 
     mine = _my_mishmarim()
     if not mine:
-        st.info("לא משובצים לך משמרים.")
+        st.caption("לא משובצים לך משמרים עדיין — אין על מה לשוחח.")
         return
 
     labels = {
-        m["id"]: f"#{m['id']:02d} · {m['gregorian_date']} · {m.get('topic') or 'ללא נושא'}"
+        m["id"]: f"#{m['id']:02d} · {m['gregorian_date']} · "
+                 f"{(m.get('topic') or 'ללא נושא')[:24]}"
         for m in mine
     }
     chosen = st.selectbox(
-        "על איזה משמר עובדים?", options=list(labels), format_func=lambda i: labels[i],
-        key="chat_mishmar",
+        "על איזה משמר עובדים?", options=list(labels),
+        format_func=lambda i: labels[i], key="chat_mishmar",
+        label_visibility="collapsed",
     )
 
     # Switching Mishmar starts a new thread rather than carrying the old one
@@ -996,78 +1197,74 @@ def show_chat() -> None:
         ]
         st.session_state["chat_loaded_for"] = chosen
 
-    ctx = ca.build_context(st.session_state.student_id, chosen)
-    m = ctx.get("mishmar") or {}
-    open_tasks = [t for t in (ctx.get("tasks") or []) if t["status"] != "DONE"]
-    overdue = [t for t in open_tasks if t.get("overdue")]
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("נושא", m.get("topic") or "טרם נסגר")
-    c2.metric("משימות פתוחות", len(open_tasks))
-    c3.metric("מומלץ היה לסגור", len(overdue))
-    if overdue:
-        st.caption(
-            "עברו את התאריך המומלץ: "
-            + " · ".join(t["task_description"][:24] for t in overdue[:4])
-            + "  \n*(המלצה, לא חוק — כך זה מוגדר במפגש הפתיחה)*"
-        )
-
     history = st.session_state.setdefault("chat_history", [])
-    for msg in history:
-        text = _message_text(msg["content"])
-        if not text:
-            continue   # tool-result turns carry no prose to show
-        with st.chat_message(msg["role"]):
-            st.markdown(text)
 
-    prompt = st.chat_input("במה נתקדם? נושא, מרצים, מבנה הערב…")
-    if not prompt:
+    # Fixed height => the panel scrolls internally instead of stretching the page.
+    box = st.container(height=460)
+    with box:
         if not history:
             st.caption(
-                "אפשר להתחיל ב: «עזור לי לבחור נושא» · «מצא מרצה לשיעור הראשון» · "
-                "«היה משמר דומה בשנה שעברה?»"
+                "אני מחובר ללוח: מה שתספרו לי — אני מעדכן, ותראו את זה מיד במסך.\n\n"
+                "אפשר להתחיל ב:\n"
+                "- «עזור לי לבחור נושא»\n"
+                "- «מצא מרצה לשיעור הראשון»\n"
+                "- «סגרתי עם תמר כהן — תרשום»"
             )
+        for msg in history:
+            text = _message_text(msg["content"])
+            if not text:
+                continue   # tool-result turns carry no prose to show
+            with st.chat_message(msg["role"]):
+                st.markdown(text)
+
+    prompt = st.chat_input("ספרו לי מה קורה — אני אעדכן את הלוח", key="global_chat")
+    if not prompt:
         return
 
+    ctx = ca.build_context(st.session_state.student_id, chosen)
     history.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
     dm.add_chat_message("user", prompt, mishmar_id=chosen,
                         student_id=st.session_state.student_id)
 
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        text = ""
-        try:
-            for ev in ca.stream_turn(history, ctx):
-                if ev["type"] == "text":
-                    text += ev["text"]
-                    placeholder.markdown(text)
-                elif ev["type"] == "tool":
-                    st.caption(f"🔧 {TOOL_LABELS.get(ev['name'], ev['name'])}…")
-                elif ev["type"] == "tool_result":
-                    out = ev.get("output") or {}
-                    if out.get("error"):
-                        st.caption(f"⚠️ {out['error'][:120]}")
-                elif ev["type"] == "error":
-                    st.warning(ev["message"])
-        except ca.ChatUnavailable as exc:
-            placeholder.empty()
-            st.warning(str(exc))
-            st.caption(
-                "עד שהמפתח יוגדר אפשר להשתמש ב«חיפוש מרצים» ובבלוק ההעתקה לצ׳אט."
-            )
-            history.pop()   # do not leave a question with no answer in the thread
-            return
-        except Exception as exc:
-            placeholder.empty()
-            st.error(f"שגיאה בשיחה: {type(exc).__name__}: {exc}")
-            history.pop()
-            return
+    with box:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            text = ""
+            try:
+                for ev in ca.stream_turn(history, ctx):
+                    if ev["type"] == "text":
+                        text += ev["text"]
+                        placeholder.markdown(text)
+                    elif ev["type"] == "tool":
+                        st.caption(f"🔧 {TOOL_LABELS.get(ev['name'], ev['name'])}…")
+                    elif ev["type"] == "tool_result":
+                        out = ev.get("output") or {}
+                        if out.get("error"):
+                            st.caption(f"⚠️ {out['error'][:120]}")
+                    elif ev["type"] == "error":
+                        st.warning(ev["message"])
+            except ca.ChatUnavailable as exc:
+                placeholder.empty()
+                st.warning(str(exc))
+                st.caption(
+                    "עד שהמפתח יוגדר אפשר להשתמש ב«חיפוש מרצים» ובבלוק ההעתקה לצ׳אט."
+                )
+                history.pop()   # do not leave a question with no answer in the thread
+                return
+            except Exception as exc:
+                placeholder.empty()
+                st.error(f"שגיאה בשיחה: {type(exc).__name__}: {exc}")
+                history.pop()
+                return
 
     if text.strip():
         dm.add_chat_message("assistant", text, mishmar_id=chosen,
                             student_id=st.session_state.student_id)
+    # THE point of the global panel: re-render the page the trainee is looking
+    # at, so a change the chat wrote (task closed, outreach logged) is visible
+    # on the main column immediately.
     st.rerun()
 
 
@@ -1076,19 +1273,40 @@ def show_chat() -> None:
 # --------------------------------------------------------------------------
 
 
+NAV_WORKFILE = "📋 ניהול המשמר"
+NAV_INDEX = "👥 מאגר המרצים"
+NAV_SEARCH = "🔍 חיפוש מרצים"
+
+
 def show_sidebar() -> None:
     with st.sidebar:
         st.markdown(f"### {st.session_state.user_name}")
         st.caption("מדריך (אדמין)" if st.session_state.role == "admin" else "חניך")
         st.divider()
+        home = "🎛️ לוח הבקרה" if st.session_state.role == "admin" else "🏠 מסך הבית שלי"
+        st.radio("ניווט", [home, NAV_WORKFILE, NAV_INDEX, NAV_SEARCH], key="nav")
+        st.divider()
+        st.toggle("💬 שותף הבנייה", value=True, key="chat_open",
+                  help="הצ׳אט זמין בכל מסך. אפשר לקפל אותו כשצריך רוחב.")
+        st.divider()
         st.caption('שנה ב׳ · תשפ״ז · 5787')
-        st.divider()
-        home = "לוח בקרה" if st.session_state.role == "admin" else "המשימות שלי"
-        st.radio("מסך", [home, "קובץ העבודה", "בניית משמר", "מאגר המרצים", "חיפוש מרצים"], key="nav")
-        st.divider()
         if st.button("התנתק", width="stretch"):
             logout()
             st.rerun()
+
+
+def _route_main() -> None:
+    nav = st.session_state.get("nav") or ""
+    if nav == NAV_WORKFILE:
+        show_mishmar_page()
+    elif nav == NAV_INDEX:
+        show_speaker_index()
+    elif nav == NAV_SEARCH:
+        show_speaker_search()
+    elif st.session_state.role == "admin":
+        show_admin_dashboard()
+    else:
+        show_student_view(st.session_state.user_name)
 
 
 def main() -> None:
@@ -1117,18 +1335,20 @@ def main() -> None:
         return
 
     show_sidebar()
-    if st.session_state.get("nav") == "קובץ העבודה":
-        show_mishmar_page()
-    elif st.session_state.get("nav") == "בניית משמר":
-        show_chat()
-    elif st.session_state.get("nav") == "מאגר המרצים":
-        show_speaker_index()
-    elif st.session_state.get("nav") == "חיפוש מרצים":
-        show_speaker_search()
-    elif st.session_state.role == "admin":
-        show_admin_dashboard()
+
+    # The global layout. Under RTL st.columns mirrors, so declaring
+    # [main, chat] renders the MAIN column on the right — Hebrew reading
+    # order — and the chat as the fixed LEFT panel the redesign asked for.
+    if st.session_state.get("chat_open", True):
+        main_col, chat_col = st.columns([2.4, 1.1], gap="medium")
     else:
-        show_student_view(st.session_state.user_name)
+        main_col, chat_col = st.container(), None
+
+    with main_col:
+        _route_main()
+    if chat_col is not None:
+        with chat_col:
+            render_chat_panel()
 
 
 if __name__ == "__main__":
