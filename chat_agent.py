@@ -29,6 +29,16 @@ import speaker_search as ss
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 8000
 
+# --- The context budget ---------------------------------------------------
+# A turn re-sends its entire history on every API call, and a tool-using turn
+# makes several calls. The two multiply, so anything unbounded in here is paid
+# for again on every round: one 20k-char tool result carried through six rounds
+# is billed six times. Three ceilings keep a turn flat instead of quadratic.
+MAX_TOOL_ROUNDS = 3        # API calls per user message; the last cannot use tools
+HISTORY_WINDOW = 8         # trailing messages sent to the model
+TOOL_RESULT_LIMIT = 1500   # chars of any one tool result kept in the history
+MAX_SPEAKER_ROWS = 8       # rows a speaker search may hand back
+
 GENERATOR_PROMPT_PATH = os.path.join(
     dm.REPO_ROOT, "Mishmer-section", "generator", "mishmar-generator-prompt.md"
 )
@@ -112,10 +122,69 @@ ROLE_PROMPT = """\
 """
 
 
+# The roster is bounded by these two headings inside נספח א׳.
+_ROSTER_START = "**\u05dc\u05d9\u05de\u05d3\u05d5 \u05d0\u05e6\u05dc\u05e0\u05d5:**"
+_ROSTER_END = "**\u05dc\u05d9\u05d3\u05d9\u05dd \u05dc\u05dc\u05d0 \u05e9\u05dd**"
+
+
+def _drop_speaker_roster(text: str) -> str:
+    """Remove the 44-name roster from the generator prompt.
+
+    It is a dated snapshot of the same rows `search_speaker_index` reads live,
+    so carrying it costs ~3.2k chars on every single request in order to give
+    the model *staler* speaker data than its own tool returns — and it is the
+    one part of the prompt that goes out of date by itself.
+
+    What surrounds it is not duplicated anywhere and stays: the legend, the
+    ה1–ה7 name-collision flags with their "do not merge them on your own
+    judgement" rule, the unnamed leads, and the list of institutions to search.
+    The file itself is untouched — it is still pasted whole into external chat
+    windows, which have no tools.
+    """
+    a, b = text.find(_ROSTER_START), text.find(_ROSTER_END)
+    if a == -1 or b == -1 or b <= a:
+        return text
+    return (
+        text[:a]
+        + "**\u05e8\u05e9\u05d9\u05de\u05ea \u05d4\u05e9\u05de\u05d5\u05ea "
+          "\u05d0\u05d9\u05e0\u05d4 \u05db\u05d0\u05df \u05d1\u05db\u05d5\u05d5\u05e0\u05d4** \u2014 "
+          "\u05d9\u05e9 \u05dc\u05da \u05d0\u05d5\u05ea\u05d4 \u05d7\u05d9\u05d4 \u05d1\u05de\u05e1\u05d3. "
+          "\u05e7\u05e8\u05d0 \u05dc-`search_speaker_index` \u05db\u05d3\u05d9 \u05dc\u05e7\u05d1\u05dc "
+          "\u05d0\u05ea \u05d4\u05de\u05d0\u05d2\u05e8 \u05d4\u05de\u05e2\u05d5\u05d3\u05db\u05df, "
+          "\u05db\u05d5\u05dc\u05dc \u05de\u05d9 \u05db\u05d1\u05e8 \u05e4\u05e0\u05d4 \u05dc\u05de\u05d9.\n\n"
+        + text[b:]
+    )
+
+
+_STABLE_PROMPT: Optional[str] = None
+_STABLE_KEY: Optional[tuple] = None
+
+
+def _source_key() -> tuple:
+    """Modification times of the files the stable prompt is built from."""
+    out = []
+    for path in (GENERATOR_PROMPT_PATH, WORKFILE_TEMPLATE_PATH):
+        try:
+            out.append(os.path.getmtime(path))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 def build_stable_prompt() -> str:
-    """The half that never changes between turns, so it can be cached."""
+    """The half that never changes between turns, so it can be cached.
+
+    Built once and reused: it is read from disk and identical on every round of
+    every turn, so rebuilding it per API call was pure I/O. Keyed on the source
+    files' mtimes rather than built once per process, so editing the generator
+    prompt still takes effect on the next message instead of needing a restart.
+    """
+    global _STABLE_PROMPT, _STABLE_KEY
+    key = _source_key()
+    if _STABLE_PROMPT is not None and _STABLE_KEY == key:
+        return _STABLE_PROMPT
     parts = [ROLE_PROMPT]
-    generator = _read(GENERATOR_PROMPT_PATH)
+    generator = _drop_speaker_roster(_read(GENERATOR_PROMPT_PATH))
     if generator:
         parts.append(
             "\n\n---\n\n# מחולל המשמרים — הפדגוגיה ורף האיכות\n\n"
@@ -129,7 +198,8 @@ def build_stable_prompt() -> str:
             "המחולל מתאר מבנה אידיאלי; זה הפורמט שבו משמרים באמת מנוהלים.\n\n"
             + template
         )
-    return "".join(parts)
+    _STABLE_PROMPT, _STABLE_KEY = "".join(parts), key
+    return _STABLE_PROMPT
 
 
 def build_context(student_id: Optional[int], mishmar_id: Optional[int]) -> dict:
@@ -411,6 +481,13 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
         if name == "search_speaker_index":
             found = dm.search_speakers_by_topic(
                 args["topic"], lesson=args.get("lesson"))
+            # Cap BEFORE enriching, for two reasons. Every row costs two more
+            # Supabase round-trips below, and a one-letter topic — which is
+            # what a model sends when it widens a search — matched 46 rows and
+            # produced a 20k-char tool result that was then re-sent on every
+            # later round of the turn.
+            total = len(found)
+            found = found[:MAX_SPEAKER_ROWS]
             # Attach live outreach state, so the model can say "someone already
             # contacted them" instead of proposing a name that is already taken.
             enriched = []
@@ -419,30 +496,48 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
                 current = status[0] if status else {}
                 out = dm.get_outreach_for_speaker(
                     current["speaker_id"]) if current else []
+                notes = (r.get("notes") or "")
                 enriched.append({
-                    **r,
+                    # Projected, not **r: name_norm, verification_url and
+                    # created_at are noise to the model, and `contact` must not
+                    # travel into a conversation at all.
+                    "speaker_id": current.get("speaker_id") or r.get("id"),
+                    "name": dm.display_name(r),   # title rejoined for the model
+                    "expertise_topics": r.get("expertise_topics"),
+                    "lesson_fit": r.get("lesson_fit"),
+                    "region": r.get("region"),
+                    "notes": notes[:160] + ("…" if len(notes) > 160 else ""),
                     "current_status": current.get("current_status") or r.get("status"),
                     "already_approached": bool(out),
                     "outreach": [
                         {"status": o["status"], "mishmar_id": o.get("mishmar_id"),
                          "by": o.get("student_name"), "when": (o.get("created_at") or "")[:10]}
-                        for o in out[:3]
+                        for o in out[:2]
                     ],
                 })
-            return {"count": len(enriched), "speakers": enriched,
-                    "reminder": "אלה רק מי שכבר מוכר למדרשה. הרחב עם discover_speakers_online."}
+            res = {"count": total, "shown": len(enriched), "speakers": enriched,
+                   "reminder": "אלה רק מי שכבר מוכר למדרשה. הרחב עם discover_speakers_online."}
+            if total > len(enriched):
+                res["truncated"] = f"הוצגו {len(enriched)} מתוך {total}. חדד את הנושא."
+            return res
 
         if name == "discover_speakers_online":
             res = ss.search_candidates(
                 args["topic"], lesson=args.get("lesson", "1"))
-            return {
-                "index_hits": res["index_hits"],
-                "web_names": res["web_names"][:12],
-                "queries": res["queries"],
-                "errors": [{"query": e["query"], "manual": e["manual"]["duckduckgo"]}
-                           for e in res["errors"]],
+            out = {
+                "index_hits": res["index_hits"][:MAX_SPEAKER_ROWS],
+                "web_names": res["web_names"][:8],
                 "skipped": res.get("skipped"), "reason": res.get("reason"),
             }
+            # The query list is only useful when something failed and the
+            # trainee needs a link to run by hand; otherwise it is ~1k chars of
+            # text the model never acts on.
+            if res["errors"]:
+                out["errors"] = [
+                    {"query": e["query"], "manual": e["manual"]["duckduckgo"]}
+                    for e in res["errors"][:3]
+                ]
+            return out
 
         if name == "verify_speaker":
             return ss.verify_speaker(args["name"], topic=args.get("topic"))
@@ -487,18 +582,103 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Keeping the context flat
+# --------------------------------------------------------------------------
+
+
+def _shrink(value: Any, str_cap: int, list_cap: int) -> Any:
+    """Structurally reduce a value: fewer rows, shorter strings."""
+    if isinstance(value, str):
+        return value if len(value) <= str_cap else value[:str_cap].rstrip() + "\u2026"
+    if isinstance(value, list):
+        out = [_shrink(v, str_cap, list_cap) for v in value[:list_cap]]
+        if len(value) > list_cap:
+            out.append(
+                "\u2026\u05d5\u05e2\u05d5\u05d3 %d \u05e9\u05dc\u05d0 \u05e0\u05e9\u05dc\u05d7\u05d5"
+                % (len(value) - list_cap)
+            )
+        return out
+    if isinstance(value, dict):
+        return {k: _shrink(v, str_cap, list_cap) for k, v in value.items()}
+    return value
+
+
+def compact_tool_output(output: Any, limit: int = TOOL_RESULT_LIMIT) -> str:
+    """Serialise a tool result small enough to carry for the rest of the turn.
+
+    Shrinks structurally rather than cutting the JSON text: a result truncated
+    mid-string is no longer JSON, and the model cannot read it at all — so the
+    naive fix would spend the tokens and lose the answer. Rows and long strings
+    go first, and the model is told the output was cut so it can ask again for
+    one specific name instead of assuming it saw everything.
+    """
+    dumped = json.dumps(output, ensure_ascii=False, default=str)
+    if len(dumped) <= limit:
+        return dumped
+    for str_cap, list_cap in ((400, 8), (200, 5), (120, 3), (80, 2)):
+        small = _shrink(output, str_cap, list_cap)
+        if isinstance(small, dict):
+            small["_note"] = (
+                "\u05d4\u05e4\u05dc\u05d8 \u05e7\u05d5\u05e6\u05e5 \u05db\u05d3\u05d9 "
+                "\u05dc\u05d7\u05e1\u05d5\u05da \u05d1\u05d4\u05e7\u05e9\u05e8. "
+                "\u05d1\u05e7\u05e9 \u05e4\u05d9\u05e8\u05d5\u05d8 \u05e2\u05dc \u05e9\u05dd "
+                "\u05d0\u05d7\u05d3 \u05d0\u05dd \u05e6\u05e8\u05d9\u05da."
+            )
+        dumped = json.dumps(small, ensure_ascii=False, default=str)
+        if len(dumped) <= limit:
+            return dumped
+    return json.dumps({"_note": "output too large", "preview": dumped[:limit]},
+                      ensure_ascii=False)
+
+
+def _block_type(block: Any) -> Optional[str]:
+    return getattr(block, "type", None) or (
+        block.get("type") if isinstance(block, dict) else None)
+
+
+def _has_tool_result(msg: dict) -> bool:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return False
+    return any(_block_type(b) == "tool_result" for b in (content or []))
+
+
+def trim_history(history: list[dict], window: int = HISTORY_WINDOW) -> list[dict]:
+    """The trailing `window` messages — cut only where a cut is legal.
+
+    The window may not open in the middle of an exchange. A `tool_result` whose
+    matching `tool_use` was trimmed away is a 400 from the API, not a cheaper
+    request, and that is the way this optimisation usually breaks. So the cut
+    always lands on a real user turn, and never later than the current
+    question: the turn in flight is sent whole, thinking blocks included.
+
+    Trimming is what the model *sees*; the caller's `history` keeps everything,
+    so the trainee's thread on screen is never shortened.
+    """
+    if len(history) <= window:
+        return history
+    starts = [i for i, m in enumerate(history)
+              if m.get("role") == "user" and not _has_tool_result(m)]
+    if not starts:
+        return history
+    cut = len(history) - window
+    return history[next((i for i in starts if i >= cut), starts[-1]):]
+
+
+# --------------------------------------------------------------------------
 # The turn
 # --------------------------------------------------------------------------
 
 
 def stream_turn(
-    history: list[dict], ctx: dict, max_rounds: int = 6,
+    history: list[dict], ctx: dict, max_rounds: int = MAX_TOOL_ROUNDS,
 ) -> Iterator[dict]:
     """Run one conversational turn, yielding events as they happen.
 
     Yields {"type": "text"|"tool"|"tool_result"|"final"|"error", ...}.
     `history` is mutated in place so the caller keeps the full thread, including
     thinking blocks, which must be echoed back unchanged on the same model.
+    What is *sent* is the trimmed window; what is kept is everything.
     """
     client = get_client()
     system = [
@@ -510,7 +690,11 @@ def stream_turn(
         {"type": "text", "text": render_context(ctx)},
     ]
 
-    for _ in range(max_rounds):
+    rounds = max(1, max_rounds)
+    for index in range(rounds):
+        # On the final round the model may not call another tool, so a trainee
+        # ends the turn with an answer rather than "I ran out of steps".
+        extra = {"tool_choice": {"type": "none"}} if index == rounds - 1 else {}
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -518,7 +702,8 @@ def stream_turn(
             tools=TOOLS,
             thinking={"type": "adaptive"},
             output_config={"effort": "medium"},
-            messages=history,
+            messages=trim_history(history),
+            **extra,
         ) as stream:
             for event in stream.text_stream:
                 yield {"type": "text", "text": event}
@@ -541,8 +726,11 @@ def stream_turn(
             results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": json.dumps(output, ensure_ascii=False, default=str),
-                "is_error": bool(output.get("error")),
+                # Compact, not verbatim: this block is re-sent on every
+                # remaining round of the turn, and on every later turn that is
+                # still inside the window.
+                "content": compact_tool_output(output),
+                "is_error": bool(isinstance(output, dict) and output.get("error")),
             })
         # All results go back in ONE user message — splitting them teaches the
         # model to stop making parallel tool calls.
