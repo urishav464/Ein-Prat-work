@@ -48,6 +48,23 @@ SEASON_BUDGET_CEILING_NIS = None  # intentionally unset — tracking only
 TASK_STATUSES = ("TO DO", "IN PROGRESS", "DONE")
 SPEAKER_SOURCE_TYPES = ("original_44", "web_search", "manual")
 
+# The outreach ladder, taken from templates/mishmar-workfile-template.md — the
+# format real Mishmarim are actually run in, and the one the opening deck
+# teaches on slide 11 ("לפני שפונים — בדקו במאגר המשותף").
+#
+# ⚠️ Three files word this ladder slightly differently: database.md says
+# "✅ אישר/לימד ❌ סירב", 2026-27/speakers.md says "✅ אישר", and the template
+# says "✅ סגור ❌ לא יכול/ה". Flagged, not silently rewritten — the wording in
+# those documents is Uri's to settle.
+SPEAKER_STATUSES = (
+    "⬜ לא פנינו",
+    "📩 נשלחה פנייה",
+    "⏳ ממתין לתשובה",
+    "✅ סגור",
+    "❌ לא יכול/ה",
+    "⚠️ בתנאי",
+)
+
 # Task categories drive the recommended deadlines below. They come from the
 # opening deck (binyat-mishmar-mifgash-peticha.pptx, slide "מתי כדאי לסגור מה").
 TASK_CATEGORIES = (
@@ -239,7 +256,7 @@ GROUP BY m.id;
 # and is applied exactly once, tracked in _meta.schema_version.
 # --------------------------------------------------------------------------
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, list[str]] = {
     2: [
@@ -295,6 +312,43 @@ MIGRATIONS: dict[int, list[str]] = {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )""",
         "CREATE INDEX IF NOT EXISTS idx_chat_lookup ON ChatMessages(mishmar_id, student_id, id)",
+    ],
+    3: [
+        # Outreach is a LOG, not a field. Before this, a trainee closing a
+        # speaker wrote only Lessons.speaker_status — next to their own
+        # Mishmar — so the shared index never learned, and the next pair
+        # checking "have we approached them?" saw a stale answer. That is
+        # exactly the collision the opening deck's shared-database slide
+        # exists to prevent.
+        """CREATE TABLE IF NOT EXISTS SpeakerOutreach (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            speaker_id INTEGER NOT NULL REFERENCES Speakers(id)   ON DELETE CASCADE,
+            mishmar_id INTEGER          REFERENCES Mishmarim(id)  ON DELETE SET NULL,
+            student_id INTEGER          REFERENCES Students(id)   ON DELETE SET NULL,
+            status     TEXT    NOT NULL,
+            note       TEXT,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_outreach_speaker ON SpeakerOutreach(speaker_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_outreach_mishmar ON SpeakerOutreach(mishmar_id)",
+
+        # Current status is DERIVED from the newest log row, never stored — the
+        # same reasoning as v_mishmar_budget. A stored copy drifts from the log
+        # the moment anyone records an approach through a different path.
+        # Speakers.status keeps its seeded cross-year value ("✅ לימד פעמיים")
+        # and serves as the fallback until this season's first approach.
+        """CREATE VIEW IF NOT EXISTS v_speaker_status AS
+           SELECT s.id                          AS speaker_id,
+                  s.name                        AS name,
+                  COALESCE(o.status, s.status)  AS current_status,
+                  o.mishmar_id                  AS last_mishmar_id,
+                  o.student_id                  AS last_student_id,
+                  o.created_at                  AS last_contact_at,
+                  CASE WHEN o.id IS NULL THEN 0 ELSE 1 END AS has_outreach
+             FROM Speakers s
+             LEFT JOIN SpeakerOutreach o
+                    ON o.id = (SELECT id FROM SpeakerOutreach
+                                WHERE speaker_id = s.id ORDER BY id DESC LIMIT 1)""",
     ],
 }
 
@@ -798,6 +852,153 @@ def add_new_speaker(
         return int(cur.lastrowid) if cur.rowcount else None
 
 
+class AmbiguousSpeaker(ValueError):
+    """More than one index row carries this exact name.
+
+    Not an edge case here: flag ה7 in Mishmer-section/speakers/database.md
+    records up to four different people called אורי, with the standing
+    instruction "אל תאחד אותם על דעתך". Recording outreach against a guessed
+    one would be exactly that merge, so the caller must pick.
+    """
+
+    def __init__(self, name: str, candidates: list[dict]):
+        super().__init__(f"{len(candidates)} speakers named {name!r} — pick one by id")
+        self.name = name
+        self.candidates = candidates
+
+
+def resolve_speaker(
+    name: Optional[str] = None,
+    speaker_id: Optional[int] = None,
+    create_if_missing: bool = False,
+    db_path: str = DB_PATH,
+) -> Optional[dict]:
+    """Find exactly one speaker row, or raise AmbiguousSpeaker."""
+    if speaker_id is not None:
+        rows = _query("SELECT * FROM Speakers WHERE id = ?", (speaker_id,), db_path=db_path)
+        return rows[0] if rows else None
+
+    name = (name or "").strip()
+    if not name:
+        return None
+    exact = _query("SELECT * FROM Speakers WHERE name = ?", (name,), db_path=db_path)
+    if len(exact) > 1:
+        raise AmbiguousSpeaker(name, exact)
+    if exact:
+        return exact[0]
+
+    if not create_if_missing:
+        return None
+    # A name typed into a work-file that is not in the index yet is a real
+    # person we are about to approach — add them so the next pair sees it.
+    new_id = add_new_speaker(name=name, source_type="manual", db_path=db_path)
+    rows = _query(
+        "SELECT * FROM Speakers WHERE id = ?", (new_id,), db_path=db_path
+    ) if new_id else _query("SELECT * FROM Speakers WHERE name = ?", (name,), db_path=db_path)
+    return rows[0] if rows else None
+
+
+def record_outreach(
+    status: str,
+    name: Optional[str] = None,
+    speaker_id: Optional[int] = None,
+    mishmar_id: Optional[int] = None,
+    student_id: Optional[int] = None,
+    note: Optional[str] = None,
+    db_path: str = DB_PATH,
+) -> dict:
+    """THE single writer for speaker outreach. Every path goes through here.
+
+    Writes one row to the log, which the v_speaker_status view derives current
+    status from, and mirrors the status onto any matching Lessons row so the
+    work-file and the shared index cannot disagree.
+
+    Before this existed, closing a speaker wrote only Lessons.speaker_status,
+    so the shared index never learned and the next pair checking "did anyone
+    approach them?" got a stale answer.
+    """
+    if status not in SPEAKER_STATUSES:
+        raise ValueError(f"status must be one of {SPEAKER_STATUSES}, got {status!r}")
+
+    speaker = resolve_speaker(
+        name=name, speaker_id=speaker_id, create_if_missing=True, db_path=db_path
+    )
+    if not speaker:
+        raise ValueError("no speaker name or id supplied")
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT INTO SpeakerOutreach
+               (speaker_id, mishmar_id, student_id, status, note)
+               VALUES (?,?,?,?,?)""",
+            (speaker["id"], mishmar_id, student_id, status, note),
+        )
+        # Keep the work-file's own display in step. This is a mirror of the
+        # log, never an independent source — the log is what the view reads.
+        if mishmar_id is not None:
+            conn.execute(
+                """UPDATE Lessons SET speaker_status = ?
+                   WHERE mishmar_id = ? AND speaker_name = ?""",
+                (status, mishmar_id, speaker["name"]),
+            )
+    return {"speaker_id": speaker["id"], "name": speaker["name"], "status": status}
+
+
+def get_outreach_for_speaker(
+    speaker_id: int, db_path: str = DB_PATH
+) -> list[dict]:
+    """Full approach history for one speaker, newest first."""
+    return _query(
+        """SELECT o.*, m.gregorian_date, m.topic, s.name AS student_name
+             FROM SpeakerOutreach o
+             LEFT JOIN Mishmarim m ON m.id = o.mishmar_id
+             LEFT JOIN Students  s ON s.id = o.student_id
+            WHERE o.speaker_id = ? ORDER BY o.id DESC""",
+        (speaker_id,),
+        db_path=db_path,
+    )
+
+
+def get_outreach_for_mishmar(mishmar_id: int, db_path: str = DB_PATH) -> list[dict]:
+    return _query(
+        """SELECT o.*, sp.name AS speaker_name
+             FROM SpeakerOutreach o JOIN Speakers sp ON sp.id = o.speaker_id
+            WHERE o.mishmar_id = ? ORDER BY o.id DESC""",
+        (mishmar_id,),
+        db_path=db_path,
+    )
+
+
+def get_speaker_status(name: str, db_path: str = DB_PATH) -> list[dict]:
+    """Current status for every index row carrying this name.
+
+    A list, again because of ה7 — the caller shows all matches rather than
+    silently merging people who happen to share a name.
+    """
+    return _query(
+        """SELECT v.*, sp.expertise_topics, sp.region, sp.notes, sp.source_type
+             FROM v_speaker_status v JOIN Speakers sp ON sp.id = v.speaker_id
+            WHERE v.name = ? OR v.name LIKE ?""",
+        (name, f"%{name}%"),
+        db_path=db_path,
+    )
+
+
+def get_speakers_with_status(
+    only_contacted: bool = False, db_path: str = DB_PATH
+) -> list[dict]:
+    """The whole index with current status — what the shared board renders."""
+    sql = """SELECT v.*, sp.expertise_topics, sp.lesson_fit, sp.region,
+                    sp.contact, sp.notes, sp.source_type,
+                    m.gregorian_date AS last_mishmar_date
+               FROM v_speaker_status v
+               JOIN Speakers sp ON sp.id = v.speaker_id
+               LEFT JOIN Mishmarim m ON m.id = v.last_mishmar_id"""
+    if only_contacted:
+        sql += " WHERE v.has_outreach = 1"
+    return _query(sql + " ORDER BY v.has_outreach DESC, v.name", db_path=db_path)
+
+
 def search_speakers_by_topic(
     topic: str, lesson: Optional[str] = None, db_path: str = DB_PATH
 ) -> list[dict]:
@@ -1168,6 +1369,7 @@ def upsert_lesson(
     speaker_name: Optional[str] = None,
     speaker_status: Optional[str] = None,
     fmt: Optional[str] = None,
+    student_id: Optional[int] = None,
     db_path: str = DB_PATH,
 ) -> int:
     """Insert or update one slot. Only non-None fields are written."""
@@ -1182,22 +1384,46 @@ def upsert_lesson(
         "speaker_status": speaker_status, "format": fmt,
     }
     given = {k: v for k, v in fields.items() if v is not None}
+
+    # speaker_status is NOT written here. It is a mirror of the outreach log,
+    # and letting this function set it directly would recreate the second
+    # writer this whole change exists to remove: the work-file would say
+    # "closed" while the shared index still said "not approached".
+    status_request = given.pop("speaker_status", None)
+
     with get_connection(db_path) as conn:
         if existing:
+            lesson_id = int(existing[0]["id"])
             if given:
                 sets = ", ".join(f"{k} = ?" for k in given)
                 conn.execute(
                     f"UPDATE Lessons SET {sets} WHERE id = ?",
-                    (*given.values(), existing[0]["id"]),
+                    (*given.values(), lesson_id),
                 )
-            return int(existing[0]["id"])
-        cols = ["mishmar_id", "slot_order", *given.keys()]
-        cur = conn.execute(
-            f"INSERT INTO Lessons ({', '.join(cols)}) "
-            f"VALUES ({', '.join('?' * len(cols))})",
-            (mishmar_id, slot_order, *given.values()),
-        )
-        return int(cur.lastrowid)
+        else:
+            cols = ["mishmar_id", "slot_order", *given.keys()]
+            cur = conn.execute(
+                f"INSERT INTO Lessons ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' * len(cols))})",
+                (mishmar_id, slot_order, *given.values()),
+            )
+            lesson_id = int(cur.lastrowid)
+
+    # Route the status through the one writer, AFTER the lesson row exists so
+    # its mirror-update can match on speaker_name.
+    if status_request:
+        who = speaker_name or (existing[0].get("speaker_name") if existing else None)
+        if who:
+            try:
+                record_outreach(
+                    status_request, name=who, mishmar_id=mishmar_id,
+                    student_id=student_id, db_path=db_path,
+                )
+            except AmbiguousSpeaker:
+                # Several people share this name (flag ה7). Record nothing
+                # rather than pick one; the UI asks which person is meant.
+                pass
+    return lesson_id
 
 
 def delete_lesson(lesson_id: int, db_path: str = DB_PATH) -> bool:
