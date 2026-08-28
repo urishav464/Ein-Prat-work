@@ -9,3 +9,6 @@ pyluach>=2.2          # Hebrew/Gregorian dates
 ddgs>=9.0
 
 # sqlite3 is in the Python standard library — nothing to install.
+# The chat layer. Note the SDK went 0.x -> 1.x; this code targets 1.x
+# (httpx2-based, and `budget_tokens` is rejected on current models).
+anthropic>=1.0

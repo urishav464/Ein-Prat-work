@@ -19,6 +19,7 @@ import streamlit as st
 
 import data_manager as dm
 import speaker_search as ss
+import chat_agent as ca
 
 # --------------------------------------------------------------------------
 # Page config must be the first Streamlit call.
@@ -107,7 +108,8 @@ def _init_session() -> None:
 
 def logout() -> None:
     for key in ("role", "user_name", "student_id", "search_result",
-                "verify_name", "verify_cache", "nav"):
+                "verify_name", "verify_cache", "nav",
+                "chat_history", "chat_loaded_for", "chat_mishmar"):
         st.session_state.pop(key, None)
 
 
@@ -442,6 +444,128 @@ def show_speaker_search() -> None:
         st.code(ss.format_for_chat(result), language="markdown")
 
 
+TOOL_LABELS = {
+    "close_topic": "סוגר את הנושא",
+    "save_lesson": "שומר מקטע בלוז",
+    "add_task": "מוסיף משימה",
+    "update_task": "מעדכן משימה",
+    "search_speaker_index": "מחפש במאגר המרצים",
+    "discover_speakers_online": "מחפש מרצים חדשים ברשת",
+    "verify_speaker": "מאמת מרצה",
+    "check_archive": "בודק בארכיון השנים הקודמות",
+    "speaker_history": "בודק היסטוריית מרצה",
+}
+
+
+def _my_mishmarim() -> list[dict]:
+    if st.session_state.role == "admin":
+        return dm.get_all_mishmarim()
+    return dm.get_mishmarim_for_student(st.session_state.student_id)
+
+
+def show_chat() -> None:
+    st.title("בניית משמר")
+
+    mine = _my_mishmarim()
+    if not mine:
+        st.info("לא משובצים לך משמרים.")
+        return
+
+    labels = {
+        m["id"]: f"#{m['id']:02d} · {m['gregorian_date']} · {m.get('topic') or 'ללא נושא'}"
+        for m in mine
+    }
+    chosen = st.selectbox(
+        "על איזה משמר עובדים?", options=list(labels), format_func=lambda i: labels[i],
+        key="chat_mishmar",
+    )
+
+    # Switching Mishmar starts a new thread rather than carrying the old one
+    # into a different evening's context.
+    if st.session_state.get("chat_loaded_for") != chosen:
+        st.session_state["chat_history"] = [
+            {"role": r["role"], "content": r["content"]}
+            for r in dm.get_chat_history(
+                mishmar_id=chosen, student_id=st.session_state.student_id
+            )
+        ]
+        st.session_state["chat_loaded_for"] = chosen
+
+    ctx = ca.build_context(st.session_state.student_id, chosen)
+    m = ctx.get("mishmar") or {}
+    open_tasks = [t for t in (ctx.get("tasks") or []) if t["status"] != "DONE"]
+    overdue = [t for t in open_tasks if t.get("overdue")]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("נושא", m.get("topic") or "טרם נסגר")
+    c2.metric("משימות פתוחות", len(open_tasks))
+    c3.metric("מומלץ היה לסגור", len(overdue))
+    if overdue:
+        st.caption(
+            "עברו את התאריך המומלץ: "
+            + " · ".join(t["task_description"][:24] for t in overdue[:4])
+            + "  \n*(המלצה, לא חוק — כך זה מוגדר במפגש הפתיחה)*"
+        )
+
+    history = st.session_state.setdefault("chat_history", [])
+    for msg in history:
+        content = msg["content"]
+        if not isinstance(content, str):
+            continue  # tool-result blocks are internal plumbing, not shown
+        with st.chat_message(msg["role"]):
+            st.markdown(content)
+
+    prompt = st.chat_input("במה נתקדם? נושא, מרצים, מבנה הערב…")
+    if not prompt:
+        if not history:
+            st.caption(
+                "אפשר להתחיל ב: «עזור לי לבחור נושא» · «מצא מרצה לשיעור הראשון» · "
+                "«היה משמר דומה בשנה שעברה?»"
+            )
+        return
+
+    history.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    dm.add_chat_message("user", prompt, mishmar_id=chosen,
+                        student_id=st.session_state.student_id)
+
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        text = ""
+        try:
+            for ev in ca.stream_turn(history, ctx):
+                if ev["type"] == "text":
+                    text += ev["text"]
+                    placeholder.markdown(text)
+                elif ev["type"] == "tool":
+                    st.caption(f"🔧 {TOOL_LABELS.get(ev['name'], ev['name'])}…")
+                elif ev["type"] == "tool_result":
+                    out = ev.get("output") or {}
+                    if out.get("error"):
+                        st.caption(f"⚠️ {out['error'][:120]}")
+                elif ev["type"] == "error":
+                    st.warning(ev["message"])
+        except ca.ChatUnavailable as exc:
+            placeholder.empty()
+            st.warning(str(exc))
+            st.caption(
+                "עד שהמפתח יוגדר אפשר להשתמש ב«חיפוש מרצים» ובבלוק ההעתקה לצ׳אט."
+            )
+            history.pop()   # do not leave a question with no answer in the thread
+            return
+        except Exception as exc:
+            placeholder.empty()
+            st.error(f"שגיאה בשיחה: {type(exc).__name__}: {exc}")
+            history.pop()
+            return
+
+    if text.strip():
+        dm.add_chat_message("assistant", text, mishmar_id=chosen,
+                            student_id=st.session_state.student_id)
+    st.rerun()
+
+
 # --------------------------------------------------------------------------
 # 5. Sidebar + routing
 # --------------------------------------------------------------------------
@@ -455,7 +579,7 @@ def show_sidebar() -> None:
         st.caption('שנה ב׳ · תשפ״ז · 5787')
         st.divider()
         home = "לוח בקרה" if st.session_state.role == "admin" else "המשימות שלי"
-        st.radio("מסך", [home, "חיפוש מרצים"], key="nav")
+        st.radio("מסך", [home, "בניית משמר", "חיפוש מרצים"], key="nav")
         st.divider()
         if st.button("התנתק", width="stretch"):
             logout()
@@ -478,7 +602,9 @@ def main() -> None:
         return
 
     show_sidebar()
-    if st.session_state.get("nav") == "חיפוש מרצים":
+    if st.session_state.get("nav") == "בניית משמר":
+        show_chat()
+    elif st.session_state.get("nav") == "חיפוש מרצים":
         show_speaker_search()
     elif st.session_state.role == "admin":
         show_admin_dashboard()
