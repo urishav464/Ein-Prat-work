@@ -116,6 +116,13 @@ ROLE_PROMPT = """\
    מחפשים מרצים במקביל; יומן שלא מתעדכן הוא איך ששני זוגות פונים לאותו אדם
    בלי לדעת. לפני שאתה מציע מרצה — בדוק אם כבר פנו אליו.
 
+9. **סגירת נושא פותחת את שלב המרצים — פרוס אותו באותה תשובה.** כשכלי
+   `close_topic` מחזיר `phase_opened`: ברך בקצרה, הצג את משימות שלב המרצים
+   שנפתחו, נקוב בשמות ההתאמות מהמאגר (`index_matches`) כנקודת פתיחה — כולל
+   מי שכבר פנו אליו — והצע שני המשכים: לפרט או להוסיף משימות (`add_task`),
+   או חיפוש רשת לשמות חדשים (`discover_speakers_online`). את חיפוש הרשת
+   הצע — אל תריץ אותו מיוזמתך, הוא איטי ומוגבל-קצב.
+
 **סגנון**
 תשובות קצרות וממוקדות. שאלה אחת בכל פעם, לא שש. כשהחניך תקוע — הצע צעד אחד
 קונקרטי, לא רשימה של עשר אפשרויות.
@@ -445,7 +452,50 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
                 if t.get("category") == "נושא" and t["status"] != "DONE":
                     dm.update_task_status(t["id"], "DONE")
                     closed.append(t["task_description"])
-            return {"ok": True, "topic": topic, "tasks_marked_done": closed}
+
+            # Closing a topic advances the build phase. Hand the model the
+            # newly-current phase and topical index matches, so the SAME
+            # response can unfold the next steps instead of stopping at
+            # "נסגר" — the Todoist/Linear move: the moment of completion is
+            # the moment the next work is laid out.
+            out: dict[str, Any] = {"ok": True, "topic": topic,
+                                   "tasks_marked_done": closed}
+            progress = dm.mishmar_progress(mishmar_id=mishmar_id)
+            cur = progress["phases"][progress["current"]]
+            out["phase_opened"] = {
+                "label": cur["label"],
+                "open_tasks": [
+                    {"id": t["id"], "task": t["task_description"]}
+                    for t in cur["tasks"] if t.get("status") != "DONE"
+                ][:6],
+            }
+            # A closed topic is a SENTENCE ("תשובה — האם אדם יכול לשכתב את
+            # העבר?"), and an ilike on the whole sentence matches nothing.
+            # Fall back to its meaningful words, deduped by row id.
+            found = dm.search_speakers_by_topic(topic)
+            if not found:
+                seen_ids = set()
+                for word in topic.replace("?", " ").replace("—", " ").split():
+                    if len(word) < 4:
+                        continue
+                    for r in dm.search_speakers_by_topic(word):
+                        if r["id"] not in seen_ids:
+                            seen_ids.add(r["id"])
+                            found.append(r)
+                    if len(found) >= 5:
+                        break
+            matches = []
+            for r in found[:5]:
+                status = dm.get_speaker_status(r["name"])
+                current = status[0] if status else {}
+                matches.append({
+                    "name": dm.display_name(r),
+                    "topics": r.get("expertise_topics"),
+                    "status": current.get("current_status") or r.get("status"),
+                    "already_approached": bool(current.get("has_outreach")),
+                })
+            out["index_matches"] = matches
+            return out
 
         if name == "save_lesson":
             lesson_id = dm.upsert_lesson(
