@@ -632,6 +632,125 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
+# The in-app speaker scout — the speaker-search screen's synthesis step
+# --------------------------------------------------------------------------
+
+SCOUT_SYSTEM = """\
+אתה סוקר מועמדים להרצאה במשמר של מדרשת עין פרת. תקבל תוצאות חיפוש גולמיות:
+התאמות מהמאגר המשותף (עם סטטוס ויומן פניות) ושמות שנכרו מתוצאות חיפוש רשת.
+
+בחר את 3–4 המועמדים הטובים ביותר לנושא ולשיעור. כללים קשיחים:
+1. **רק שמות שמופיעים בקלט.** אל תמציא שם, תואר, שיוך מוסדי או פרט קשר.
+2. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד.
+3. שם שמקורו ברשת חייב לשאת דגל "⚠️ לאמת" — הוא לא אומת.
+4. אם במאגר כתוב שכבר פנו לאדם — זה חייב להופיע בכרטיס שלו.
+5. עדיף מועמד מהמאגר עם היסטוריה טובה על שם רשת לא מוכר, אבל אל תסתפק רק
+   במאגר אם הרשת העלתה שם רלוונטי באמת.
+
+החזר JSON בלבד, במבנה:
+{"candidates": [{"name": "...", "title": "ד\"ר/הרב/... או null",
+  "source": "index" או "web", "rationale": "משפט אחד למה מתאים",
+  "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}]}
+"""
+
+
+def _history_line(name: str) -> Optional[str]:
+    """One line of institutional memory, or None — silence is not a review."""
+    try:
+        h = archive.speaker_history(name)
+    except Exception:
+        return None
+    if h.get("avg_rating"):
+        return f"⭐ {h['avg_rating']} ({h['times_rated']} דירוגים)"
+    return None
+
+
+def scout_speakers(topic: str, lesson: str = "1") -> dict:
+    """One search → 3-4 vetted candidates, or a fallback the UI can render raw.
+
+    Gathers through the existing throttled paths (index + web discovery) and
+    spends exactly ONE model call to curate. Every failure mode — no API key,
+    refused JSON, empty search — degrades to {"fallback": True, "raw": ...}
+    so the screen keeps working without the synthesis.
+    """
+    raw = ss.search_candidates(topic, lesson=lesson)
+    if raw.get("skipped"):
+        return {"fallback": True, "raw": raw}
+
+    # Compact inputs: the synthesis pays per token, and evidence snippets are
+    # long. Project before sending, exactly like tool results are compacted.
+    index_part = []
+    for r in raw.get("index_hits", [])[:8]:
+        status_rows = dm.get_speaker_status(r["name"])
+        cur = status_rows[0] if status_rows else {}
+        index_part.append({
+            "name": dm.display_name(r),
+            "topics": r.get("expertise_topics"),
+            "notes": (r.get("notes") or "")[:120],
+            "status": cur.get("current_status") or r.get("status"),
+            "already_approached": bool(cur.get("has_outreach")),
+            "history": _history_line(r["name"]),
+        })
+    web_part = [{
+        "name": e.get("name"),
+        "confidence": e.get("confidence"),
+        "evidence": [{"title": (ev.get("title") or "")[:90],
+                      "href": ev.get("href")} for ev in e.get("evidence", [])[:2]],
+        "flags": e.get("flags", []),
+    } for e in raw.get("web_names", [])[:10]]
+
+    if not index_part and not web_part:
+        return {"fallback": True, "raw": raw}
+
+    payload = json.dumps(
+        {"topic": topic, "lesson": lesson,
+         "index_hits": index_part, "web_names": web_part},
+        ensure_ascii=False)
+
+    try:
+        client = get_client()
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            system=SCOUT_SYSTEM,
+            messages=[{"role": "user", "content": payload}],
+        )
+        text = "".join(b.text for b in resp.content
+                       if getattr(b, "type", None) == "text")
+        start, end = text.find("{"), text.rfind("}")
+        data = json.loads(text[start:end + 1])
+        candidates = data.get("candidates") or []
+    except (ChatUnavailable, Exception) as exc:
+        return {"fallback": True, "raw": raw, "error": f"{type(exc).__name__}: {exc}"}
+
+    # The no-invention rule, enforced and not just requested: a candidate
+    # whose name matches nothing we sent is dropped.
+    known = {ip["name"] for ip in index_part} | {r["name"] for r in raw.get("index_hits", [])}
+    known_web = {w["name"] for w in web_part if w.get("name")}
+    vetted = []
+    for c in candidates[:4]:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        in_index = any(name in k or k in name for k in known)
+        in_web = any(name == k for k in known_web)
+        if not (in_index or in_web):
+            continue
+        c["source"] = "index" if in_index else "web"
+        if c["source"] == "web" and "⚠️ לאמת" not in (c.get("flags") or []):
+            c.setdefault("flags", []).append("⚠️ לאמת")
+        row = next((ip for ip in index_part if name in ip["name"] or ip["name"] in name), None)
+        c["index_status"] = (row or {}).get("status")
+        c["already_approached"] = bool((row or {}).get("already_approached"))
+        c["history"] = (row or {}).get("history")
+        vetted.append(c)
+
+    if not vetted:
+        return {"fallback": True, "raw": raw, "error": "empty synthesis"}
+    return {"fallback": False, "candidates": vetted, "raw": raw}
+
+
+# --------------------------------------------------------------------------
 # Keeping the context flat
 # --------------------------------------------------------------------------
 
