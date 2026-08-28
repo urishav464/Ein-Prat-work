@@ -5,9 +5,17 @@
 ## מקומית (פיתוח)
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+> **התקינו בתוך venv.** `Authlib` (להתחברות Google) מושך את `cryptography`, ועל
+> פייתון מערכתי של Debian/Ubuntu זה נופל עם
+> *"Cannot uninstall cryptography, RECORD file not found"* — מה שמפיל את כל
+> `pip install`, ובשרשרת `&&` גם מונע מ-`streamlit run` לרוץ. venv פותר את זה.
+> בלי venv: `pip install --ignore-installed cryptography Authlib`.
+> כל האפליקציה חוץ מהתחברות Google עובדת גם בלי Authlib.
 
 בלי `.streamlit/secrets.toml` האפליקציה עולה במצב פיתוח: הזדהות בשם בלבד, בלי סיסמה.
 זה בסדר על המחשב שלך, ו**לא** בסדר בכתובת ציבורית.

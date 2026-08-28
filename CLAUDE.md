@@ -14,11 +14,14 @@ The app migrates the content half's task tracking into SQLite. That migration is
 ## Commands
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate   # see the note below — do not skip
 pip install -r requirements.txt
 streamlit run app.py                    # first run creates mishmar.db AND archives students_tasks.md
 python3 data_manager.py                 # bootstrap the DB without the UI; prints migration counts
 export ANTHROPIC_API_KEY=sk-ant-...     # only the chat page needs this; everything else works without
 ```
+
+**Install into a venv.** `Authlib` (for Google sign-in) pulls `cryptography`, and on Debian/Ubuntu system Python that fails with *"Cannot uninstall cryptography, RECORD file not found"* — which aborts the whole `pip install` and, in a `&&` chain, never reaches `streamlit run`. A venv sidesteps it entirely. Without one, `pip install --ignore-installed cryptography Authlib` is the escape hatch; everything except Google login works without Authlib at all.
 
 Deployment (Google sign-in, the ephemeral-disk problem): **`DEPLOY.md`**.
 
