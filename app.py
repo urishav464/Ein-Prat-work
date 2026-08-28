@@ -14,6 +14,7 @@ do not expose it while the speaker index holds contact details.
 from __future__ import annotations
 
 import html
+from typing import Optional
 
 import streamlit as st
 
@@ -444,6 +445,227 @@ def show_speaker_search() -> None:
         st.code(ss.format_for_chat(result), language="markdown")
 
 
+LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"]
+LESSON_FORMATS = ["הרצאה", "חבורות", "דיבייט", "כתיבה", "טד", "ניגון", "טקס", "אחר"]
+
+
+def _mishmar_picker(key: str) -> Optional[int]:
+    mine = _my_mishmarim()
+    if not mine:
+        st.info("לא משובצים לך משמרים.")
+        return None
+    labels = {
+        m["id"]: f"#{m['id']:02d} · {m['gregorian_date']} · {m.get('topic') or 'ללא נושא'}"
+        for m in mine
+    }
+    return st.selectbox("משמר", list(labels), format_func=lambda i: labels[i], key=key)
+
+
+def _topic_and_structure(mid: int) -> None:
+    m = dm.get_mishmar(mid)
+    st.subheader("נושא")
+    if m.get("topic"):
+        st.success(f"**{_clean(m['topic'])}**")
+    else:
+        st.caption("הנושא הוא הצעד הראשון — מומלץ לסגור אותו כשלושה שבועות לפני.")
+    with st.form(f"topic-{mid}"):
+        new_topic = st.text_input("שם הנושא", value=m.get("topic") or "",
+                                  placeholder="למשל: כרוניקה של שינוי — האם אדם יכול לשכתב את העבר?")
+        if st.form_submit_button("שמור נושא") and new_topic.strip():
+            dm.set_mishmar_topic(mid, new_topic.strip())
+            # Closing the topic closes its task too, so the board cannot show a
+            # topic that is set and a "close the topic" card still open.
+            for t in dm.get_tasks_for_mishmar(mid):
+                if t.get("category") == "נושא" and t["status"] != "DONE":
+                    dm.update_task_status(t["id"], "DONE")
+            st.toast(f"הנושא נשמר: {new_topic.strip()}")
+            st.rerun()
+
+    st.divider()
+    st.subheader("מבנה הערב")
+    st.caption(
+        "ארבעת השיעורים הם ברירת מחדל מצוינת — לא חוק. טקס, מעגל שירה או "
+        "שלושה מקטעים הם מבנים לגיטימיים לגמרי."
+    )
+    lessons = dm.get_lessons(mid)
+    for l in lessons:
+        with st.expander(
+            f"{l['slot_order']}. {l.get('start_time') or '--:--'} · "
+            f"{l.get('title') or 'ללא כותרת'}"
+            + (f" · {l['speaker_name']}" if l.get("speaker_name") else ""),
+        ):
+            with st.form(f"lesson-{l['id']}"):
+                c1, c2 = st.columns(2)
+                title = c1.text_input("כותרת", value=l.get("title") or "")
+                start = c2.text_input("שעה", value=l.get("start_time") or "")
+                c3, c4 = st.columns(2)
+                role = c3.selectbox(
+                    "תפקיד בערב", LESSON_ROLES,
+                    index=LESSON_ROLES.index(l["lesson_role"]) if l.get("lesson_role") in LESSON_ROLES else len(LESSON_ROLES) - 1)
+                fmt = c4.selectbox(
+                    "פורמט", LESSON_FORMATS,
+                    index=LESSON_FORMATS.index(l["format"]) if l.get("format") in LESSON_FORMATS else len(LESSON_FORMATS) - 1)
+                c5, c6 = st.columns(2)
+                speaker = c5.text_input("מרצה", value=l.get("speaker_name") or "")
+                status = c6.text_input("סטטוס", value=l.get("speaker_status") or "⬜ לא פנינו")
+                desc = st.text_area("תיאור", value=l.get("description") or "")
+                cc1, cc2 = st.columns([1, 1])
+                if cc1.form_submit_button("שמור"):
+                    dm.upsert_lesson(mid, l["slot_order"], title=title, start_time=start,
+                                     description=desc, lesson_role=role,
+                                     speaker_name=speaker, speaker_status=status, fmt=fmt)
+                    st.toast("המקטע נשמר"); st.rerun()
+                if cc2.form_submit_button("מחק מקטע"):
+                    dm.delete_lesson(l["id"]); st.toast("נמחק"); st.rerun()
+
+    if st.button("➕ הוסף מקטע"):
+        dm.upsert_lesson(mid, len(lessons) + 1, title="מקטע חדש")
+        st.rerun()
+    if not lessons and st.button("התחל מארבעת השיעורים"):
+        for i, (t, hh, role) in enumerate(
+            [("היסודות", "20:30", "יסודות"), ("העומק והערעור", "22:00", "ערעור"),
+             ("הזווית המפתיעה", "23:30", "טוויסט"), ("נחיתה אל הלב", "01:00", "נחיתה")], 1):
+            dm.upsert_lesson(mid, i, title=t, start_time=hh, lesson_role=role)
+        st.rerun()
+
+
+def _tasks_tab(mid: int) -> None:
+    tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_mishmar(mid)]
+    titles = {"TO DO": "לעשות", "IN PROGRESS": "בתהליך", "DONE": "הושלם"}
+    cols = st.columns(len(dm.TASK_STATUSES))
+    for col, status in zip(cols, dm.TASK_STATUSES):
+        bucket = [t for t in tasks if t["status"] == status]
+        with col:
+            st.subheader(f"{titles[status]} ({len(bucket)})")
+            for t in sorted(bucket, key=lambda x: x.get("due_date") or "9999"):
+                badge = ""
+                if t.get("nudge"):
+                    badge = f"<div class='meta'>{'❗' if t['overdue'] else '🕒'} {t['nudge']}</div>"
+                elif t.get("due_date"):
+                    badge = f"<div class='meta'>מומלץ עד {t['due_date']}</div>"
+                st.markdown(
+                    f"<div class='kanban-card'>{_clean(t['task_description'])}"
+                    f"<div class='meta'>{t.get('category') or ''}</div>{badge}</div>",
+                    unsafe_allow_html=True)
+                targets = [x for x in dm.TASK_STATUSES if x != status]
+                bc = st.columns(len(targets))
+                for b, target in zip(bc, targets):
+                    if b.button(f"→ {titles[target]}", key=f"m{mid}-{t['id']}-{target}"):
+                        dm.update_task_status(t["id"], target); st.rerun()
+
+    st.divider()
+    with st.form(f"addtask-{mid}"):
+        c1, c2 = st.columns([3, 1])
+        desc = c1.text_input("משימה חדשה")
+        cat = c2.selectbox("קטגוריה", ["(אוטומטי)"] + list(dm.TASK_CATEGORIES))
+        if st.form_submit_button("הוסף") and desc.strip():
+            dm.add_task(mid, desc.strip(),
+                        category=None if cat == "(אוטומטי)" else cat)
+            st.toast("נוספה משימה"); st.rerun()
+
+
+def _after_tab(mid: int) -> None:
+    m = dm.get_mishmar(mid)
+    lessons = dm.get_lessons(mid)
+    speakers = [l["speaker_name"] for l in lessons if l.get("speaker_name")]
+
+    # A speaker recorded only on a budget line — someone who came but was never
+    # added to the running order — must still be reviewable, or their feedback
+    # is unreachable and never reaches the index.
+    for row in dm._query(
+        "SELECT DISTINCT description FROM Budget WHERE mishmar_id = ? AND expense_type = 'מרצה'",
+        (mid,),
+    ):
+        name = (row.get("description") or "").strip()
+        if name and name not in speakers:
+            speakers.append(name)
+
+    st.subheader("סיכום תקציב")
+    st.caption(
+        f"האינדיקציה היא {dm.PER_MISHMAR_BUDGET_NIS} ₪ למשמר — ממוצע שכולל מרצים "
+        "וכיבוד יחד. חריגה במשמר בודד אינה שגיאה: היא נמשכת מהסעיף העונתי."
+    )
+    with st.form(f"budget-{mid}"):
+        st.markdown("**מרצים שהגיעו ומה שולם להם** *(0 = הגיע בהתנדבות)*")
+        paid = {}
+        for i, name in enumerate(speakers):
+            paid[name] = st.number_input(f"{name} (₪)", min_value=0.0, step=50.0, key=f"pay-{mid}-{i}")
+        if not speakers:
+            st.caption("לא רשומים מרצים במבנה הערב — אפשר להוסיף אותם בלשונית «נושא ומבנה».")
+        extra_name = st.text_input("מרצה נוסף שלא מופיע למעלה")
+        extra_amt = st.number_input("תשלום למרצה הנוסף (₪)", min_value=0.0, step=50.0)
+        refreshments = st.number_input("כיבוד (₪)", min_value=0.0, step=10.0)
+        other = st.number_input("הוצאות אחרות (₪)", min_value=0.0, step=10.0)
+        if st.form_submit_button("שמור סיכום תקציב"):
+            n = 0
+            for name, amt in paid.items():
+                dm.add_budget_entry(mid, "מרצה", actual_cost=amt, description=name); n += 1
+            if extra_name.strip():
+                dm.add_budget_entry(mid, "מרצה", actual_cost=extra_amt, description=extra_name.strip()); n += 1
+            if refreshments:
+                dm.add_budget_entry(mid, "כיבוד", actual_cost=refreshments, description="כיבוד"); n += 1
+            if other:
+                dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
+            st.toast(f"נשמרו {n} שורות תקציב"); st.rerun()
+
+    spent = (m or {}).get("budget_used") or 0
+    st.metric("סה״כ הוצאות למשמר הזה", _fmt_nis(spent))
+    if spent > dm.PER_MISHMAR_BUDGET_NIS:
+        st.info("מעל האינדיקציה — לידיעה, לא לדאגה.")
+
+    st.divider()
+    st.subheader("משוב")
+    st.caption(
+        "המשוב הוא מה שהופך את מאגר המרצים מרשימת שמות לזיכרון מוסדי — "
+        "החניך של השנה הבאה יראה לא רק שמישהו לימד כאן, אלא איך זה הלך."
+    )
+    with st.form(f"feedback-{mid}"):
+        # Explicit parens: "a + b if c else d" parses as "(a+b) if c else d",
+        # which happens to be right here but reads as if it is not.
+        target = st.selectbox("על מה המשוב?", [*speakers, "המשמר בכללותו"])
+        rating = st.slider("דירוג", 1, 5, 4)
+        worked = st.text_area("מה עבד")
+        didnt = st.text_area("מה פחות עבד")
+        if st.form_submit_button("שמור משוב"):
+            dm.add_feedback(
+                mid, rating=rating,
+                speaker_name=None if target == "המשמר בכללותו" else target,
+                student_id=st.session_state.student_id,
+                what_worked=worked or None, what_didnt=didnt or None)
+            st.toast("המשוב נשמר"); st.rerun()
+
+    existing = dm.get_feedback_for_mishmar(mid)
+    if existing:
+        st.markdown("**משוב שנרשם:**")
+        for f in existing:
+            who = f.get("speaker_name") or "המשמר בכללותו"
+            st.markdown(f"- **{_clean(who)}** — {'⭐' * (f.get('rating') or 0)}")
+            if f.get("what_worked"):
+                st.caption(f"עבד: {_clean(f['what_worked'])}")
+            if f.get("what_didnt"):
+                st.caption(f"פחות: {_clean(f['what_didnt'])}")
+
+
+def show_mishmar_page() -> None:
+    st.title("קובץ העבודה")
+    mid = _mishmar_picker("workfile_mishmar")
+    if not mid:
+        return
+    m = dm.get_mishmar(mid)
+    st.caption(
+        f"#{m['id']:02d} · {m['gregorian_date']} · {m['hebrew_date']} · "
+        f"{m.get('mishmar_type') or 'סוג לא נקבע'}"
+        + (f" · {m['note']}" if m.get("note") else "")
+    )
+    t1, t2, t3 = st.tabs(["נושא ומבנה", "משימות", "אחרי המשמר"])
+    with t1:
+        _topic_and_structure(mid)
+    with t2:
+        _tasks_tab(mid)
+    with t3:
+        _after_tab(mid)
+
+
 TOOL_LABELS = {
     "close_topic": "סוגר את הנושא",
     "save_lesson": "שומר מקטע בלוז",
@@ -579,7 +801,7 @@ def show_sidebar() -> None:
         st.caption('שנה ב׳ · תשפ״ז · 5787')
         st.divider()
         home = "לוח בקרה" if st.session_state.role == "admin" else "המשימות שלי"
-        st.radio("מסך", [home, "בניית משמר", "חיפוש מרצים"], key="nav")
+        st.radio("מסך", [home, "קובץ העבודה", "בניית משמר", "חיפוש מרצים"], key="nav")
         st.divider()
         if st.button("התנתק", width="stretch"):
             logout()
@@ -602,7 +824,9 @@ def main() -> None:
         return
 
     show_sidebar()
-    if st.session_state.get("nav") == "בניית משמר":
+    if st.session_state.get("nav") == "קובץ העבודה":
+        show_mishmar_page()
+    elif st.session_state.get("nav") == "בניית משמר":
         show_chat()
     elif st.session_state.get("nav") == "חיפוש מרצים":
         show_speaker_search()
