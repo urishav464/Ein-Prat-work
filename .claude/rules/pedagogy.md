@@ -12,7 +12,7 @@ A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:30–02:0
 
 ## Ideal vs. reality
 
-**The generator prompt (`Mishmer-section/generator/mishmar-generator-prompt.md`) describes an idealized 4-lesson Logos→Pathos arc** — Foundation (20:30) → Conflict (22:00) → Twist (23:30) → Soul (01:00). Real Mishmarim rarely follow it: some have three lessons, some are ceremonial, some are song circles, and roughly half of a real work-file is logistics — decoration, shopping list, a themed dinner. **The actual operating format is `Mishmer-section/templates/mishmar-workfile-template.md`**, reverse-engineered from the five real 2025-26 documents. Help a student who wants to deviate; never tell them a three-lesson Mishmar is wrong.
+**The generator prompt (`Mishmer-section/generator/mishmar-generator-prompt.md`) describes an idealized 4-lesson Logos→Pathos arc** — Foundation (20:30) → Conflict (22:00) → Twist (23:30) → Soul (01:00). Real Mishmarim rarely follow it: some have three lessons, some are ceremonial, some are song circles, and roughly half of a real work-file is logistics — decoration, shopping list, a themed dinner. **The actual operating format is `Mishmer-section/templates/mishmar-workfile-template.md`**, reverse-engineered from the five real 2025-26 documents. Help a student who wants to deviate; never tell them a three-lesson Mishmar is wrong. **The app's default evening skeleton is the real format** — 20:00, three 75-minute lessons with breaks, an hour of חבורות — while the generator prompt keeps the 4-lesson arc as the *pedagogical* ideal; the two coexist deliberately.
 
 ## Content rules — non-negotiable
 

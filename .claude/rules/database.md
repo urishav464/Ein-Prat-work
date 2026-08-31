@@ -12,7 +12,9 @@ paths:
 
 **Anything needing a join or an aggregate is a VIEW in that file**, because PostgREST cannot express one: `v_speaker_status`, `v_mishmar_budget`, `v_overdue_tasks`, `v_student_progress`, `v_outreach_full`, `v_tasks_full`. Python reads views and never assembles a join itself.
 
-**Twelve tables.** `mishmarim`, `students`, `assignments`, `tasks`, `budget`, `speakers`, `speaker_outreach`, `lessons`, `feedback`, `chat_messages`, `search_cache`, `app_meta`.
+**Thirteen tables.** `mishmarim`, `students`, `assignments`, `tasks`, `budget`, `speakers`, `speaker_outreach`, `lessons`, `lesson_speakers`, `feedback`, `chat_messages`, `search_cache`, `app_meta`.
+
+**One more schema-change rule, learned the hard way: adding a column to a table that a view reads via `t.*` requires `DROP VIEW IF EXISTS` before the recreation** — `CREATE OR REPLACE VIEW` cannot insert a column mid-view, so the second (idempotent re-)run of the file fails. The view section drops all six before creating them.
 
 ## Security decisions that are not obvious from the DDL
 
@@ -35,6 +37,10 @@ paths:
 - **`lessons` is deliberately not four rows** — `slot_order` is 1..N, `lesson_role` free text (the archive holds ceremonies and song circles).
 - **`budget_used` is a view**, never a stored column.
 - **Seeding does not archive `students_tasks.md`** — the checkout is rebuilt from git on every deploy, so an `app_meta` flag guards the seed instead of a rename.
+- **The evening timeline is derived, never hand-typed.** `lessons.start_time` is computed by `recompute_lesson_times()` from 20:00 plus cumulative `duration_minutes` (breaks are ordinary rows with `is_break`); every duration edit reflows the whole evening, so slots cannot overlap. `create_default_timeline()` builds the real skeleton — three 75-minute lessons, 30/30/15-minute breaks, an hour of חבורות ending 02:00 — with titles/roles/formats EMPTY by design, and both topic-close paths (form and chat tool) call it when the evening is empty.
+- **Candidate speakers** (`lesson_speakers`): `add_lesson_speaker()` also teaches the shared index the person exists (manual source, phone as contact, title auto-split); candidate statuses route through `record_outreach()`; `close_lesson_speaker()` implements «סגרתי את X» — X becomes `lessons.speaker_name` with one ✅ row, the other candidates are deleted, the journal logs the close. **Phones live only in `lesson_speakers.phone` and `speakers.contact` — never in chat context or the generator digest.**
+- The status ladder merged in v2: `⏳ ממתין לתשובה` folded into `📩 נשלחה פנייה` — constants AND idempotent UPDATEs in the schema file; do not reintroduce it.
+- `upload_source_sheet()` uploads to Supabase Storage (auto-creates the `sources` bucket; returns None on ANY failure so the UI can fall back to a paste-a-link field). `edit_task`/`delete_task` exist; `tasks.details` is the free description; `feedback.lesson_title` carries per-slot feedback BY NAME so it survives slot deletion — submitting it closes the trainee's משוב task. Category `יום המשמר` (offset 0) took the day-of classifier needles from `לוגיסטיקה`.
 - The phase model lives here too: `mishmar_progress()` derives a 4-phase build state (נושא → מרצים ותוכן → לוגיסטיקה → אחרי) from task categories; phase 1 completes when the topic is SET. It accepts preloaded rows so list views cost two queries, not one per Mishmar.
 
 ## Verifying changes — no live Supabase reachable from a sandbox

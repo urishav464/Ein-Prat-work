@@ -29,8 +29,8 @@ Without a venv, `Authlib`→`cryptography` fails on Debian/Ubuntu system Python 
 
 Path-scoped rules load automatically when their files enter context:
 
-- `.claude/rules/database.md` — the 12 tables, RLS/service_role, views, name normalisation, the outreach log, derived deadlines, and the local-PG16 verification harness.
-- `.claude/rules/ui.md` — RTL mechanics, the rerun trap, the design system, phase-driven UI, query budgets, date formats, Playwright verification.
+- `.claude/rules/database.md` — the 13 tables, RLS/service_role, views (and when they must be DROPped), the derived evening timeline, the candidates flow, name normalisation, the outreach log, derived deadlines, and the local-PG16 verification harness.
+- `.claude/rules/ui.md` — RTL mechanics, the rerun trap, the design system + brand theme, deep-link navigation and its widget-state trap, phase-driven UI, query budgets, date formats, Playwright verification.
 - `.claude/rules/pedagogy.md` — what a Mishmar is, ideal vs. real format, the content rules (dead-thinker trap, ⚠️ לאמת, no invented contacts), the archive's traps, speaker-search throttling, the image workflow.
 - `.claude/rules/chat-agent.md` — the Mishmar-scoping rule and the four cost ceilings that keep a chat turn flat.
 
@@ -41,10 +41,11 @@ Path-scoped rules load automatically when their files enter context:
 ```
 app.py                 # Streamlit UI (render only; global chat panel; phase-driven)
 data_manager.py        # the ONLY data seam — Supabase REST, seeding, phase model
-chat_agent.py          # Sonnet 5 + 10 tools; generator prompt as system prompt
+chat_agent.py          # Sonnet 5 + 13 tools + the scout; generator prompt as system prompt
 speaker_search.py      # discovery (mines names) + verification, throttled
 archive.py             # cross-year memory over 2025-26 work-files
 supabase_schema.sql    # tables, views, RLS + GRANTs — run in Supabase SQL Editor
+.streamlit/config.toml # brand theme (navy/parchment) — deploys with the app
 system_rules.md        # operating layer: roles, pedagogy, speaker mandate, budget
 students_tasks.md      # seed data read on first run
 Mishmer-section/       # generator prompt · templates · speakers · 2025-26 archive · 2026-27 season
