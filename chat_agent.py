@@ -116,7 +116,12 @@ ROLE_PROMPT = """\
    מחפשים מרצים במקביל; יומן שלא מתעדכן הוא איך ששני זוגות פונים לאותו אדם
    בלי לדעת. לפני שאתה מציע מרצה — בדוק אם כבר פנו אליו.
 
-9. **סגירת נושא פותחת את שלב המרצים — פרוס אותו באותה תשובה.** כשכלי
+9. **מבנה הערב הוא משטח העבודה המרכזי — שקף אותו במדויק.** המשכים קובעים
+   את השעות (save_lesson); מועמדי מרצים נוספים ב-add_candidate_speaker;
+   «סגרתי את X» = close_speaker (השאר יוסרו ויירשם ✅ ביומן); דף מקורות
+   שהגיע = set_source_sheet. כל שינוי שהחניך מספר עליו — בצע בכלי, ואמור
+   בדיוק מה השתנה בלוז.
+10. **סגירת נושא פותחת את שלב המרצים — פרוס אותו באותה תשובה.** כשכלי
    `close_topic` מחזיר `phase_opened`: ברך בקצרה, הצג את משימות שלב המרצים
    שנפתחו, נקוב בשמות ההתאמות מהמאגר (`index_matches`) כנקודת פתיחה — כולל
    מי שכבר פנו אליו — והצע שני המשכים: לפרט או להוסיף משימות (`add_task`),
@@ -220,6 +225,7 @@ def build_context(student_id: Optional[int], mishmar_id: Optional[int]) -> dict:
     if mishmar_id:
         ctx["mishmar"] = dm.get_mishmar(mishmar_id)
         ctx["lessons"] = dm.get_lessons(mishmar_id)
+        ctx["candidates"] = dm.get_lesson_speakers(mishmar_id)
         tasks = dm.get_tasks_for_mishmar(mishmar_id)
         ctx["tasks"] = [dm.annotate_deadline(t) for t in tasks]
         ctx["partners"] = dm.get_partners(mishmar_id, exclude_student_id=student_id)
@@ -255,18 +261,31 @@ def render_context(ctx: dict) -> str:
         lines.append(f"**הערה:** {m['note']}")
 
     lessons = ctx.get("lessons") or []
+    candidates = ctx.get("candidates") or {}
     if lessons:
-        lines += ["", "**מבנה הערב עד כה:**"]
+        lines += ["", "**מבנה הערב (השעות נגזרות מהמשכים — עריכה דרך save_lesson):**"]
         for l in lessons:
+            if l.get("is_break"):
+                lines.append(
+                    f"  {l['slot_order']}. ☕ הפסקה {l.get('duration_minutes') or 30} דק'")
+                continue
             bits = [f"{l['slot_order']}."]
             if l.get("start_time"):
                 bits.append(l["start_time"])
             bits.append(l.get("title") or "— ללא כותרת")
+            if l.get("lesson_role"):
+                bits.append(f"[{l['lesson_role']}]")
             if l.get("speaker_name"):
-                bits.append(f"· {l['speaker_name']} ({l.get('speaker_status') or ''})")
+                bits.append(f"· 🎤 {l['speaker_name']} ✅")
+            elif candidates.get(l["id"]):
+                # names + status only. Phones NEVER enter the chat context.
+                bits.append("· מועמדים: " + ", ".join(
+                    f"{c['name']} ({c['status']})" for c in candidates[l["id"]][:4]))
+            if l.get("source_url"):
+                bits.append("· 📎 יש דף מקורות")
             lines.append("  " + " ".join(bits))
     else:
-        lines += ["", "**מבנה הערב:** עדיין ריק."]
+        lines += ["", "**מבנה הערב:** עדיין ריק — ייבנה אוטומטית כשייסגר נושא."]
 
     tasks = ctx.get("tasks") or []
     open_tasks = [t for t in tasks if t["status"] != "DONE"]
@@ -306,21 +325,65 @@ TOOLS: list[dict] = [
     {
         "name": "save_lesson",
         "description": (
-            "שומר או מעדכן מקטע אחד בלוז הערב. slot_order הוא 1,2,3... "
-            "לא חייבים להיות בדיוק ארבעה — טקס, מעגל שירה או שלושה שיעורים לגיטימיים."
+            "שומר או מעדכן מקטע בלוז הערב. slot_order הוא 1,2,3... "
+            "השעות נגזרות מהמשכים אוטומטית מ-20:00 — אל תקבע שעות ידנית. "
+            "הפסקות הן משבצות לוז רגילות עם is_break."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "slot_order": {"type": "integer"},
                 "title": {"type": "string"},
-                "start_time": {"type": "string", "description": "למשל 20:30"},
+                "duration_minutes": {"type": "integer", "description": "60 / 75 / 90 לשיעור, 15–30 להפסקה"},
                 "description": {"type": "string"},
-                "lesson_role": {"type": "string", "description": "יסודות / ערעור / טוויסט / נחיתה / טקס / אחר"},
-                "speaker_name": {"type": "string"},
+                "lesson_role": {"type": "string", "description": "יסודות / ערעור / טוויסט / חבורות / טקס / אחר"},
                 "format": {"type": "string", "description": "הרצאה / חבורות / דיבייט / כתיבה"},
             },
             "required": ["slot_order"],
+        },
+    },
+    {
+        "name": "add_candidate_speaker",
+        "description": (
+            "מוסיף מרצה אופציונלי לשיעור (מועמד — עוד לא נסגר). השם נלמד "
+            "אוטומטית גם במאגר המשותף. טלפון — רק אם החניך מסר אותו."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slot_order": {"type": "integer"},
+                "name": {"type": "string"},
+                "phone": {"type": "string"},
+            },
+            "required": ["slot_order", "name"],
+        },
+    },
+    {
+        "name": "close_speaker",
+        "description": (
+            "«סגרתי את X» — הופך מועמד למרצה הסגור של השיעור: נרשם ✅ ביומן "
+            "המשותף, ושאר המועמדים של השיעור מוסרים. חובה לקרוא לזה כשחניך "
+            "מספר שמרצה סגר סופית."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slot_order": {"type": "integer"},
+                "name": {"type": "string"},
+            },
+            "required": ["slot_order", "name"],
+        },
+    },
+    {
+        "name": "set_source_sheet",
+        "description": "שומר קישור לדף המקורות של שיעור (המרצה שלח קובץ/קישור).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slot_order": {"type": "integer"},
+                "url": {"type": "string"},
+            },
+            "required": ["slot_order", "url"],
         },
     },
     {
@@ -510,14 +573,46 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
                 mishmar_id,
                 int(args["slot_order"]),
                 title=args.get("title"),
-                start_time=args.get("start_time"),
                 description=args.get("description"),
                 lesson_role=args.get("lesson_role"),
-                speaker_name=args.get("speaker_name"),
                 fmt=args.get("format"),
             )
+            if args.get("duration_minutes") and lesson_id:
+                dm._t("lessons").update(
+                    {"duration_minutes": int(args["duration_minutes"])}
+                ).eq("id", lesson_id).execute()
+            dm.recompute_lesson_times(mishmar_id)
             return {"ok": True, "lesson_id": lesson_id,
-                    "lessons": dm.get_lessons(mishmar_id)}
+                    "schedule": [
+                        {"slot": l["slot_order"], "time": l.get("start_time"),
+                         "title": l.get("title"),
+                         "break": bool(l.get("is_break"))}
+                        for l in dm.get_lessons(mishmar_id)
+                    ]}
+
+        if name in ("add_candidate_speaker", "close_speaker", "set_source_sheet"):
+            if not mishmar_id:
+                return {"error": "לא נבחר משמר."}
+            lessons = dm.get_lessons(mishmar_id)
+            slot = int(args.get("slot_order") or 0)
+            lesson = next((l for l in lessons if l["slot_order"] == slot), None)
+            if not lesson:
+                return {"error": f"אין מקטע {slot}. המקטעים: "
+                        + ", ".join(str(l["slot_order"]) for l in lessons)}
+            if name == "add_candidate_speaker":
+                cid = dm.add_lesson_speaker(
+                    lesson["id"], args["name"], phone=args.get("phone"),
+                    student_id=ctx.get("student_id"))
+                return {"ok": bool(cid), "candidate": args["name"],
+                        "note": "נוסף כמועמד לשיעור וגם למאגר המשותף"}
+            if name == "close_speaker":
+                res = dm.close_lesson_speaker(
+                    lesson["id"], args["name"], mishmar_id=mishmar_id,
+                    student_id=ctx.get("student_id"))
+                return {"ok": True, **res,
+                        "visible_to": "נרשם ✅ ביומן המשותף — כל הזוגות רואים"}
+            dm.set_lesson_source(lesson["id"], args["url"])
+            return {"ok": True, "slot": slot, "source_url": args["url"]}
 
         if name == "add_task":
             tid = dm.add_task(
