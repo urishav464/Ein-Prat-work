@@ -187,21 +187,71 @@ RTL_CSS = """
       margin-bottom: .3rem;
   }
 
-  /* ---- Cards: st.container(border=True) is the app's card primitive ---- */
+  /* ---- Rhythm: one 4/8px spacing scale for the whole app ---- */
+  :root {
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px;
+      --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+      --line: #e3ddcc;
+  }
+  h1 { margin-bottom: var(--sp-2) !important; }
+  h3, h4 { margin: var(--sp-5) 0 var(--sp-2) !important; }
+  /* a quiet navy accent instead of an emoji per heading. A physical RIGHT
+     border, not a ::before — Streamlit headings are flex containers and an
+     inline pseudo-box drifts to the line's END under RTL. */
+  .stMarkdown h4 {
+      border-right: 4px solid #1d3e7d;
+      padding-right: var(--sp-2);
+  }
+  [data-testid="stDivider"] hr, hr {
+      border-color: var(--line) !important;
+      opacity: .6;
+      margin: var(--sp-4) 0 !important;
+  }
+  [data-testid="stCaptionContainer"] { line-height: 1.5; }
+
+  /* ---- Cards: depth from a hairline, not a shadow ---- */
   [data-testid="stVerticalBlockBorderWrapper"] {
       background: #ffffff;
-      border-radius: 14px;
-      box-shadow: 0 1px 5px rgba(60, 50, 20, 0.07);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
   }
+  [data-testid="stVerticalBlockBorderWrapper"] > div > div[data-testid="stVerticalBlock"] {
+      gap: var(--sp-2);
+  }
+
+  /* ---- Expanders: hairline, not a boxed box ---- */
+  [data-testid="stExpander"] details {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: transparent;
+  }
+  [data-testid="stExpander"] summary { font-weight: 600; }
+
+  /* ---- Buttons: ghost secondaries, one height ---- */
+  .stButton button[kind="secondary"], .stFormSubmitButton button[kind="secondary"] {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: #1d3e7d;
+  }
+  .stButton button[kind="secondary"]:hover {
+      border-color: #1d3e7d;
+      background: #f7f9fd;
+  }
+
+  /* ---- Metrics: quieter numbers ---- */
+  [data-testid="stMetricValue"] { font-size: 1.45rem !important; font-weight: 700; }
+  [data-testid="stMetricLabel"] { opacity: .65; }
 
   /* ---- Chat: bubbles, not a white box ---- */
   .chat-head {
       background: linear-gradient(135deg, #16305f, #1d3e7d);
       color: #eef2fb;
-      border-radius: 14px;
-      padding: .55rem .9rem;
+      border-radius: 10px;
+      padding: .4rem .8rem;
       font-weight: 700;
-      margin-bottom: .45rem;
+      font-size: .92rem;
+      margin-bottom: var(--sp-2);
       display: flex; align-items: center; gap: .5rem;
   }
   .chat-head small { font-weight: 400; opacity: .75; font-size: .72rem; }
@@ -248,11 +298,11 @@ RTL_CSS = """
       white-space: nowrap;
   }
   .chip-red    { background: #fdecea; color: #b3261e; }
-  .chip-yellow { background: #fef3d5; color: #92600a; }
-  .chip-green  { background: #e6f4ea; color: #137333; }
-  .chip-gray   { background: #eeece7; color: #5a564c; }
-  .chip-gold   { background: #f5edda; color: #8a6d1d; }
-  .chip-blue   { background: #e7edf9; color: #1d3e7d; }
+  .chip-yellow { background: #fdf1d8; color: #8f5f00; }   /* pending */
+  .chip-green  { background: #e6f4ea; color: #137333; }   /* closed/done */
+  .chip-gray   { background: #edeae1; color: #5a564c; }   /* neutral */
+  .chip-gold   { background: #e7edf9; color: #1d3e7d; }   /* legacy alias → info */
+  .chip-blue   { background: #e7edf9; color: #1d3e7d; }   /* info */
 
   .task-desc { font-weight: 600; line-height: 1.45; margin-bottom: 4px; }
   .card-meta { opacity: 0.65; font-size: 0.78rem; margin-top: 4px; }
@@ -494,7 +544,7 @@ def _pipeline_row(m: dict, progress: dict, overdue_count: int) -> None:
 
 
 def show_admin_dashboard() -> None:
-    st.title("🎛️ לוח הבקרה")
+    st.title("לוח הבקרה")
     st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
 
     mishmarim = dm.get_all_mishmarim()
@@ -516,16 +566,16 @@ def show_admin_dashboard() -> None:
     total_all = sum(p["total"] for p in progress.values())
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🕯️ משמרים", len(mishmarim))
-    c2.metric("🎯 עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
-    c3.metric("💰 סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
-    c4.metric("📊 אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
+    c1.metric("משמרים", len(mishmarim))
+    c2.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
+    c3.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
+    c4.metric("אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
     if total_all:
         st.progress(done_all / total_all,
                     text=f"התקדמות העונה: {done_all}/{total_all} משימות הושלמו")
 
     st.divider()
-    st.subheader("🔴 עבר את התאריך המומלץ")
+    st.markdown("#### עבר את התאריך המומלץ")
     overdue = dm.get_overdue_tasks()
     over_by_mid: dict[int, int] = {}
     for t in overdue:
@@ -565,7 +615,7 @@ def show_admin_dashboard() -> None:
 
     # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
-    st.subheader("📅 צינור המשמרים")
+    st.markdown("#### צינור המשמרים")
     st.caption("כל משמר, איפה הוא עומד בבנייה, ומי מחזיק אותו. לפי סדר הערבים.")
     today = _date_cls.today()
     upcoming = [m for m in mishmarim
@@ -895,7 +945,7 @@ def _mini_mishmar_card(m: dict, progress: dict) -> None:
 
 def show_student_view(student_name: str) -> None:
     student_id = st.session_state.student_id
-    st.title(f"🏠 שלום, {student_name}")
+    st.title(f"שלום, {student_name}")
 
     mine = dm.get_mishmarim_for_student(student_id)
     if not mine:
@@ -922,17 +972,17 @@ def show_student_view(student_name: str) -> None:
     overdue = [t for t in all_tasks
                if t.get("overdue") and t["mishmar_id"] != hero["id"]]
     if overdue:
-        st.markdown(f"#### 🔴 עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
+        st.markdown(f"#### עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
         st.caption("המלצה — לא חוק. אבל אלה קודמים לכל השאר.")
         _card_grid(sorted(overdue, key=lambda t: t.get("due_date") or "9999"),
                    "ovd", link=True)
 
-    st.markdown("#### ⭐ המשמר הבא שלי")
+    st.markdown("#### המשמר הבא שלי")
     _next_mishmar_hero(hero, progress[hero["id"]])
 
     others = [m for m in mine if m["id"] != hero["id"]]
     if others:
-        st.markdown("#### 🕯️ שאר המשמרים שלי")
+        st.markdown("#### שאר המשמרים שלי")
         st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. הצ׳אט וקובץ העבודה פתוחים לכולם תמיד.")
         cols = st.columns(min(3, max(1, len(others))))
         for i, m in enumerate(others):
@@ -1049,7 +1099,7 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
 
 
 def show_speaker_search() -> None:
-    st.title("🔍 חיפוש מרצים")
+    st.title("חיפוש מרצים")
     st.caption(
         "סריקה אחת — המאגר המשותף וגם הרשת — וקבלת 3–4 מועמדים מסוננים. "
         "כל שם מהרשת הוא ⚠️ לאמת עד שבדקתם."
@@ -1120,7 +1170,7 @@ def show_speaker_search() -> None:
 
     if not result.get("fallback"):
         st.divider()
-        st.subheader(f"⭐ המועמדים המומלצים ({len(result['candidates'])})")
+        st.markdown(f"#### המועמדים המומלצים ({len(result['candidates'])})")
         cands = result["candidates"]
         for i in range(0, len(cands), 2):
             cols = st.columns(2)
@@ -1138,7 +1188,7 @@ def show_speaker_search() -> None:
     if st.session_state.get("verify_name"):
         st.divider()
         name = st.session_state["verify_name"]
-        st.subheader(f"אימות — {name}")
+        st.markdown(f"#### אימות — {name}")
         # Cache per name. Without this the verification re-ran on every rerun —
         # i.e. on every unrelated button click on this page — which is exactly
         # the burst pattern the throttle exists to prevent.
@@ -1166,7 +1216,7 @@ def show_speaker_search() -> None:
 
 def _raw_search_results(result: dict) -> None:
     """The pre-synthesis listing — also the whole page when there is no API key."""
-    st.subheader(f"📗 מהמאגר ({len(result.get('index_hits') or [])})")
+    st.markdown(f"##### 📗 מהמאגר ({len(result.get('index_hits') or [])})")
     if result.get("index_hits"):
         for r in result["index_hits"]:
             st.markdown(
@@ -1178,7 +1228,7 @@ def _raw_search_results(result: dict) -> None:
     else:
         st.caption("אין התאמות במאגר לנושא הזה.")
 
-    st.subheader(f"🌐 שמות חדשים מהרשת ({len(result.get('web_names') or [])})")
+    st.markdown(f"##### 🌐 שמות חדשים מהרשת ({len(result.get('web_names') or [])})")
     st.caption(
         "כל שם כאן הוא ⚠️ **לאמת** — הוא חולץ מתוצאות חיפוש, לא מהמאגר. "
         "פרטי קשר לעולם לא ממולאים אוטומטית."
@@ -1187,7 +1237,7 @@ def _raw_search_results(result: dict) -> None:
         _speaker_card(entry, result.get("topic") or "", result.get("lesson") or "1", i)
 
     if result.get("errors"):
-        st.subheader("⚠️ שאילתות שלא רצו — הריצו ידנית")
+        st.markdown("##### שאילתות שלא רצו — הריצו ידנית")
         for err in result["errors"]:
             st.markdown(
                 f"`{err['query']}` — [DuckDuckGo]({err['manual']['duckduckgo']}) · "
@@ -1270,7 +1320,7 @@ def _speaker_index_card(r: dict, history: list[dict], dup_count: int) -> None:
 def show_speaker_index() -> None:
     """Institutional memory. The workfile and the search screen WRITE here;
     this page is where you come to remember."""
-    st.title("👥 מאגר המרצים")
+    st.title("מאגר המרצים")
     st.caption(
         "הזיכרון המשותף של כל הצוותים: מי קיים, מה הם מביאים, ומה קרה איתם. "
         "שיבוץ למשמר נעשה בבניית הערב ובחיפוש — כאן נזכרים."
@@ -1487,7 +1537,7 @@ def _topic_and_structure(mid: int) -> None:
     # --- the topic: a hero form until it exists, a quiet line after ---
     if not m.get("topic"):
         with st.container(border=True):
-            st.markdown("#### 🎯 הצעד הראשון: לסגור נושא")
+            st.markdown("#### הצעד הראשון: לסגור נושא")
             st.caption(
                 "הנושא הוא מנוע הערב כולו — מומלץ לסגור אותו כשלושה שבועות לפני. "
                 "אין רעיון? שאלו את שותף הבנייה משמאל, או בדקו בארכיון אם היה משמר דומה."
@@ -1515,7 +1565,7 @@ def _topic_and_structure(mid: int) -> None:
                     st.toast("הנושא עודכן"); st.rerun()
 
     # --- the evening as a duration-driven timeline ---
-    st.markdown("#### 🌙 מבנה הערב")
+    st.markdown("#### מבנה הערב")
     st.caption(
         "השעות נגזרות מהמשכים — שינוי משך של משבצת מזרים את כל הערב. "
         "שלושה שיעורים ושעת חבורות הם ברירת המחדל; אפשר לשנות הכל."
@@ -1742,7 +1792,7 @@ def _after_tab(mid: int) -> None:
     after_tasks = [t for t in tasks if t.get("category") == "אחרי"]
 
     # --- feedback, per evening slot ---
-    st.markdown("#### 🌙 משוב על הערב — לפי מקטעים")
+    st.markdown("#### משוב על הערב — לפי מקטעים")
     st.caption(
         "המשוב נשמר על שמך ועל המשמר הזה, והופך את מאגר המרצים לזיכרון מוסדי. "
         "שליחה גם סוגרת את משימת המשוב שלך."
@@ -1801,7 +1851,7 @@ def _after_tab(mid: int) -> None:
     # --- the after-work tasks live here, in context ---
     open_after = [t for t in after_tasks if t["status"] != "DONE"]
     if open_after:
-        st.markdown("#### 🌙 המשימות של אחרי הערב")
+        st.markdown("#### המשימות של אחרי הערב")
         _wf_task_grid(sorted(open_after, key=lambda t: t.get("due_date") or "9999"),
                       mid, f"aft{mid}")
 
@@ -1847,7 +1897,7 @@ def _after_tab(mid: int) -> None:
 
 
 def show_mishmar_page() -> None:
-    st.title("📋 ניהול המשמר")
+    st.title("ניהול המשמר")
     mid = _mishmar_picker("workfile_mishmar")
     if not mid:
         return
