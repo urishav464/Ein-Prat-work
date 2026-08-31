@@ -27,7 +27,7 @@ import chat_agent as ca
 # --------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="ניהול משמרים — תשפ״ז",
+    page_title='משמרים · המדרשה הגבוהה · תשפ"ז',
     page_icon="🕯️",
     layout="wide",
 )
@@ -60,9 +60,9 @@ RTL_CSS = """
 <style>
   /* ---- Typography: Heebo is the app's voice. Loaded from Google Fonts on
      the deployed app; sandboxes without network fall back silently. ---- */
-  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;800&family=Assistant:wght@400;600;700&display=swap');
   html, body, .stApp, [class^="st-"], button, input, textarea, select {
-      font-family: 'Heebo', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
+      font-family: 'Assistant', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
   }
   /* The override above must NOT reach Streamlit's icon glyphs — they are
      ligature text ("keyboard_arrow_down") that renders literally without
@@ -70,7 +70,12 @@ RTL_CSS = """
   [data-testid="stIconMaterial"], span[class*="material-symbols"] {
       font-family: 'Material Symbols Rounded' !important;
   }
-  h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.01em; }
+  h1, h2, h3, h4 {
+      font-family: 'Rubik', 'Assistant', sans-serif !important;
+      font-weight: 800 !important;
+      letter-spacing: -0.01em;
+      color: #1d3e7d !important;
+  }
 
   /* ---- RTL: the whole UI is Hebrew; Streamlit has no native mode. ---- */
   .stApp,
@@ -98,9 +103,25 @@ RTL_CSS = """
   /* ---- Sidebar: warm ground, and the nav radio restyled as cards.
      The radio circle is hidden; the label IS the card. ---- */
   [data-testid="stSidebar"] {
-      background: #f4f1ea;
-      border-inline-end: 1px solid #e6e0d2;
+      background: #ebe4d3;
+      border-inline-end: 1px solid #d9cfb8;
   }
+  /* Collapse under RTL: Streamlit's collapse animation translates the panel
+     toward the LEFT while our layout holds it on the RIGHT, leaving a broken
+     1px strip of letter-stacked nav in mid-screen. Kill the remnants: hide
+     the content the moment the sidebar reports collapsed, and give the
+     content a minimum width so mid-animation text never letter-wraps. */
+  [data-testid="stSidebarContent"] { min-width: 244px; }
+  section[data-testid="stSidebar"][aria-expanded="false"] {
+      width: 0 !important;
+      min-width: 0 !important;
+      overflow: hidden !important;
+      border: none !important;
+  }
+  section[data-testid="stSidebar"][aria-expanded="false"] * { display: none !important; }
+  /* every control in the sidebar tracks its full width */
+  [data-testid="stSidebar"] .stButton button,
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { width: 100%; }
   [data-testid="stSidebar"] div[role="radiogroup"] > label {
       display: flex; align-items: center;
       background: #ffffff;
@@ -114,12 +135,12 @@ RTL_CSS = """
       box-shadow: 0 1px 2px rgba(60,50,20,.05);
   }
   [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-      border-color: #c9a961;
+      border-color: #1d3e7d;
       transform: translateX(-2px);
   }
   [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
-      background: linear-gradient(135deg, #f7efdd, #f2e6c9);
-      border-color: #c9a961;
+      background: linear-gradient(135deg, #e7edf9, #dbe5f6);
+      border-color: #1d3e7d;
   }
   [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
       font-weight: 700;
@@ -137,7 +158,7 @@ RTL_CSS = """
 
   .side-avatar {
       width: 44px; height: 44px; border-radius: 50%;
-      background: linear-gradient(135deg, #c9a961, #a9873f);
+      background: linear-gradient(135deg, #1d3e7d, #2c56a4);
       color: #fff; font-weight: 800; font-size: 1.15rem;
       display: flex; align-items: center; justify-content: center;
       margin-bottom: .3rem;
@@ -152,8 +173,8 @@ RTL_CSS = """
 
   /* ---- Chat: bubbles, not a white box ---- */
   .chat-head {
-      background: linear-gradient(135deg, #2f2a1d, #4a4028);
-      color: #f7efdd;
+      background: linear-gradient(135deg, #16305f, #1d3e7d);
+      color: #eef2fb;
       border-radius: 14px;
       padding: .55rem .9rem;
       font-weight: 700;
@@ -170,8 +191,8 @@ RTL_CSS = """
       box-shadow: 0 1px 2px rgba(60,50,20,.04);
   }
   [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-      background: #f5edda;
-      border-color: #e8d9b4;
+      background: #e7edf9;
+      border-color: #ccd9f0;
   }
   [data-testid^="stChatMessageAvatar"] { display: none; }
   [data-testid="stChatMessage"] p { line-height: 1.55; }
@@ -183,9 +204,9 @@ RTL_CSS = """
       border-radius: 50%;
       width: 52px; height: 52px;
       font-size: 1.25rem;
-      border: 1px solid #c9a961;
-      background: #f7efdd;
-      box-shadow: 0 2px 8px rgba(60,50,20,.15);
+      border: 1px solid #1d3e7d;
+      background: #e7edf9;
+      box-shadow: 0 2px 8px rgba(20,40,80,.18);
   }
   .st-key-chat_close button {
       border: none; background: transparent;
@@ -208,7 +229,7 @@ RTL_CSS = """
   .chip-green  { background: #e6f4ea; color: #137333; }
   .chip-gray   { background: #eeece7; color: #5a564c; }
   .chip-gold   { background: #f5edda; color: #8a6d1d; }
-  .chip-blue   { background: #e8f0fe; color: #1a56b4; }
+  .chip-blue   { background: #e7edf9; color: #1d3e7d; }
 
   .task-desc { font-weight: 600; line-height: 1.45; margin-bottom: 4px; }
   .card-meta { opacity: 0.65; font-size: 0.78rem; margin-top: 4px; }
@@ -223,8 +244,8 @@ RTL_CSS = """
       background: #eeece7; border: 2px solid #ddd6c6; font-size: .95rem;
   }
   .step.done .dot    { background: #e6f4ea; border-color: #137333; }
-  .step.current .dot { background: #f5edda; border-color: #c9a961;
-                       box-shadow: 0 0 0 4px rgba(201,169,97,.2); }
+  .step.current .dot { background: #e7edf9; border-color: #1d3e7d;
+                       box-shadow: 0 0 0 4px rgba(29,62,125,.18); }
   .step.current { color: #2f2a1d; font-weight: 700; }
   .step-bar { flex: 1 1 auto; height: 3px; background: #e4ddcb;
               margin: 16px 2px 0; border-radius: 2px; min-width: 10px; }
@@ -292,13 +313,32 @@ def _admin_emails() -> set[str]:
     return {e.strip().lower() for e in raw if e and e.strip()}
 
 
-def show_google_login() -> None:
-    st.title("🕯️ ניהול משמרים")
-    st.caption('שנה ב׳ · תשפ״ז · מדרשת עין פרת')
+APP_TITLE = 'משמרים · המדרשה הגבוהה · תשפ"ז'
 
+
+def _login_frame():
+    """A centered, card-shaped login — not a form stuck to one side."""
+    _, mid, _ = st.columns([1, 1.15, 1])
+    box = mid.container(border=True)
+    with box:
+        st.markdown(
+            f"<div style='text-align:center;padding:.6rem 0 .1rem'>"
+            f"<div style='font-size:2.2rem'>🕯️</div>"
+            f"<div style='font-family:Rubik,Assistant,sans-serif;font-weight:800;"
+            f"font-size:1.45rem;color:#1d3e7d'>{APP_TITLE}</div>"
+            f"<div style='opacity:.6;font-size:.85rem'>מדרשת עין פרת</div></div>",
+            unsafe_allow_html=True,
+        )
+    return box
+
+
+def show_google_login() -> None:
+    box = _login_frame()
     if not getattr(st.user, "is_logged_in", False):
-        st.write("היכנסו עם חשבון הגוגל שלכם.")
-        st.button("כניסה עם Google", on_click=st.login, width="stretch")
+        with box:
+            st.button("כניסה עם Google", on_click=st.login,
+                      width="stretch", type="primary")
+            st.caption("היכנסו עם חשבון הגוגל שאיתו נרשמתם אצל המדריך.")
         return
 
     email = (getattr(st.user, "email", "") or "").strip()
@@ -328,28 +368,26 @@ def show_login() -> None:
         show_google_login()
         return
 
-    st.title("🕯️ ניהול משמרים")
-    st.caption('שנה ב׳ · תשפ״ז · מדרשת עין פרת')
-
-    st.warning(
-        "**מצב פיתוח — ללא אימות.** ההזדהות היא בשם בלבד, בלי סיסמה. "
-        "מי שמקליד «Uri» מקבל גישה מלאה לכל המשימות ולפרטי הקשר במאגר. "
-        "להרצה מקומית בלבד. לפריסה חיצונית — הגדירו `[auth]` "
-        "ב-`.streamlit/secrets.toml` (ראו `secrets.toml.example`), "
-        "וההתחברות תעבור אוטומטית ל-Google."
-    )
-
+    box = _login_frame()
     students = dm.get_students()
     student_names = [s["name"] for s in students if s["role"] == "student"]
 
-    with st.form("login"):
-        name = st.text_input("מי אתה?", placeholder="למשל: חניך 3 · או Uri")
-        submitted = st.form_submit_button("כניסה")
+    with box:
+        with st.form("login", border=False):
+            name = st.text_input("השם שלך", placeholder="למשל: חניך 3",
+                                 label_visibility="collapsed")
+            submitted = st.form_submit_button("כניסה", width="stretch",
+                                              type="primary")
+        with st.expander("מצב פיתוח — פרטים"):
+            st.caption(
+                "**ללא אימות**: ההזדהות היא בשם בלבד. מי שמקליד «Uri» מקבל "
+                "גישה מלאה. להרצה מקומית בלבד — לפריסה הגדירו `[auth]` "
+                "ב-Secrets וההתחברות תעבור ל-Google."
+            )
+            if student_names:
+                st.caption("שמות רשומים: " + " · ".join(student_names))
 
     if not submitted:
-        if student_names:
-            with st.expander("השמות הרשומים במערכת"):
-                st.write(" · ".join(student_names))
         return
 
     typed = (name or "").strip()
@@ -369,9 +407,11 @@ def show_login() -> None:
         st.session_state.student_id = match["id"]
         st.rerun()
 
-    st.error(f"לא מצאתי את «{typed}» ברשימת החניכים.")
-    if student_names:
-        st.info("השמות התקפים: " + " · ".join(student_names))
+    _, mid2, _ = st.columns([1, 1.15, 1])
+    with mid2:
+        st.error(f"לא מצאתי את «{typed}» ברשימת החניכים.")
+        if student_names:
+            st.caption("השמות התקפים: " + " · ".join(student_names))
 
 
 # --------------------------------------------------------------------------
@@ -1720,7 +1760,7 @@ def main() -> None:
 
     info = bootstrap()
     if not info.get("storage_ok"):
-        st.title("🕯️ ניהול משמרים")
+        st.title(f"🕯️ {APP_TITLE}")
         # The probe already identified WHICH of the failure modes this is, so
         # it leads. The general checklist folds away underneath — printing
         # "run the schema" first sends people to the SQL Editor for a problem

@@ -1,0 +1,8 @@
+# Ein-Prat brand theme: navy on desert parchment (from ein-prat.com).
+# primaryColor drives primary buttons, toggles, focus rings and st.progress.
+[theme]
+base = "light"
+primaryColor = "#1d3e7d"
+backgroundColor = "#f2eee3"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#243146"
