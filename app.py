@@ -1303,44 +1303,133 @@ def _mishmar_picker(key: str) -> Optional[int]:
     return st.selectbox("משמר", list(labels), format_func=lambda i: labels[i], key=key)
 
 
+DURATION_OPTIONS = {60: "שעה", 75: "שעה ורבע", 90: "שעה וחצי"}
+
+
+def _slot_times(l: dict) -> str:
+    start = l.get("start_time") or "--:--"
+    dur = l.get("duration_minutes")
+    if not dur or ":" not in start:
+        return start
+    h, m = (int(x) for x in start.split(":"))
+    end = (h * 60 + m + int(dur)) % (24 * 60)
+    return f"{start}–{end // 60:02d}:{end % 60:02d}"
+
+
+def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
+    """The lesson's optional-speakers list: name · phone · status · actions.
+    Once one is closed, the list collapses to that single row."""
+    closed = l.get("speaker_name")
+    if closed:
+        st.markdown(f"🎤 **{_clean(closed)}** {_chip('✅ סגור', 'green')}",
+                    unsafe_allow_html=True)
+        return
+    if cands:
+        st.markdown("**מרצים אופציונליים:**")
+    for cand in cands:
+        c1, c2, c3, c4 = st.columns([1.7, 1.4, 0.6, 0.6])
+        c1.markdown(f"{_clean(cand['name'])}"
+                    + (f" <span class='card-meta'>{_clean(cand['phone'])}</span>"
+                       if cand.get("phone") else ""),
+                    unsafe_allow_html=True)
+        cur = cand.get("status") or dm.SPEAKER_STATUSES[0]
+        new_status = c2.selectbox(
+            "סטטוס", dm.SPEAKER_STATUSES,
+            index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
+            key=f"cst-{cand['id']}", label_visibility="collapsed")
+        if new_status != cur:
+            dm.update_lesson_speaker_status(
+                cand["id"], new_status, mishmar_id=mid,
+                student_id=st.session_state.student_id)
+            st.rerun()
+        if c3.button("✅ סגרנו", key=f"close-{cand['id']}",
+                     help="הופך למרצה של השיעור; שאר המועמדים יוסרו"):
+            res = dm.close_lesson_speaker(
+                l["id"], cand["name"], mishmar_id=mid,
+                student_id=st.session_state.student_id)
+            st.toast(f"«{res['closed']}» נסגר לשיעור"
+                     + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
+            st.rerun()
+        if c4.button("🗑", key=f"rmc-{cand['id']}"):
+            dm._t("lesson_speakers").delete().eq("id", cand["id"]).execute()
+            st.rerun()
+
+    with st.form(f"addcand-{l['id']}", border=False):
+        f1, f2, f3 = st.columns([1.6, 1.3, 0.8])
+        nm = f1.text_input("שם מרצה", key=f"cn-{l['id']}",
+                           label_visibility="collapsed", placeholder="שם מרצה אפשרי")
+        ph = f2.text_input("טלפון", key=f"cp-{l['id']}",
+                           label_visibility="collapsed", placeholder="טלפון (רשות)")
+        if f3.form_submit_button("➕ מועמד") and nm.strip():
+            dm.add_lesson_speaker(l["id"], nm.strip(), phone=ph,
+                                  student_id=st.session_state.student_id)
+            st.toast(f"«{nm.strip()}» נוסף כמועמד — וגם למאגר המשותף")
+            st.rerun()
+
+
 def _lesson_form(mid: int, l: dict) -> None:
-    with st.form(f"lesson-{l['id']}"):
+    """The slot's editor. Lives behind a session-state toggle, not an
+    expander — expanders remember their open state client-side, so the old
+    editor never collapsed after saving."""
+    with st.form(f"lesson-{l['id']}", border=False):
         c1, c2 = st.columns(2)
         title = c1.text_input("כותרת", value=l.get("title") or "")
-        start = c2.text_input("שעה", value=l.get("start_time") or "")
+        dur_keys = list(DURATION_OPTIONS)
+        cur_dur = l.get("duration_minutes") or 75
+        if cur_dur not in dur_keys:
+            dur_keys = sorted({*dur_keys, cur_dur})
+        duration = c2.selectbox(
+            "משך", dur_keys,
+            index=dur_keys.index(cur_dur),
+            format_func=lambda d: DURATION_OPTIONS.get(d, f"{d} דק'"))
         c3, c4 = st.columns(2)
         role = c3.selectbox(
-            "תפקיד בערב", LESSON_ROLES,
-            index=LESSON_ROLES.index(l["lesson_role"]) if l.get("lesson_role") in LESSON_ROLES else len(LESSON_ROLES) - 1)
+            "תפקיד בערב", ["", *LESSON_ROLES],
+            index=(LESSON_ROLES.index(l["lesson_role"]) + 1)
+            if l.get("lesson_role") in LESSON_ROLES else 0,
+            format_func=lambda r: r or "—")
         fmt = c4.selectbox(
-            "פורמט", LESSON_FORMATS,
-            index=LESSON_FORMATS.index(l["format"]) if l.get("format") in LESSON_FORMATS else len(LESSON_FORMATS) - 1)
-        c5, c6 = st.columns(2)
-        speaker = c5.text_input("מרצה", value=l.get("speaker_name") or "")
-        cur = l.get("speaker_status") or dm.SPEAKER_STATUSES[0]
-        status = c6.selectbox(
-            "סטטוס פנייה", dm.SPEAKER_STATUSES,
-            index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
-            help="נרשם ביומן הפניות המשותף — כל זוג אחר יראה שפניתם.",
-        )
+            "פורמט", ["", *LESSON_FORMATS],
+            index=(LESSON_FORMATS.index(l["format"]) + 1)
+            if l.get("format") in LESSON_FORMATS else 0,
+            format_func=lambda r: r or "—")
         desc = st.text_area("תיאור", value=l.get("description") or "")
-        cc1, cc2 = st.columns([1, 1])
-        if cc1.form_submit_button("שמור", type="primary"):
-            try:
-                dm.upsert_lesson(
-                    mid, l["slot_order"], title=title, start_time=start,
-                    description=desc, lesson_role=role,
-                    speaker_name=speaker, speaker_status=status, fmt=fmt,
-                    student_id=st.session_state.student_id)
-                st.toast("המקטע נשמר · הסטטוס נרשם במאגר המשותף")
-            except dm.AmbiguousSpeaker as exc:
-                st.warning(
-                    f"יש {len(exc.candidates)} אנשים בשם «{exc.name}» במאגר. "
-                    "בחרו את הנכון במסך «מאגר המרצים» — לא נאחד אותם אוטומטית."
-                )
-            st.rerun()
-        if cc2.form_submit_button("מחק מקטע"):
-            dm.delete_lesson(l["id"]); st.toast("נמחק"); st.rerun()
+
+        st.markdown("**📎 דף מקורות**")
+        up = st.file_uploader("העלאת קובץ", key=f"src-{l['id']}",
+                              label_visibility="collapsed")
+        link = st.text_input("או קישור (Drive וכו')", value=l.get("source_url") or "")
+
+        cc1, cc2, cc3 = st.columns([1, 1, 1])
+        saved = cc1.form_submit_button("💾 שמור", type="primary")
+        cancel = cc2.form_submit_button("ביטול")
+        delete = cc3.form_submit_button("🗑 מחק מקטע")
+
+    if delete:
+        dm.delete_lesson(l["id"])
+        dm.recompute_lesson_times(mid)
+        st.session_state["editing_lesson"] = None
+        st.toast("המקטע נמחק"); st.rerun()
+    if cancel:
+        st.session_state["editing_lesson"] = None
+        st.rerun()
+    if saved:
+        dm.upsert_lesson(mid, l["slot_order"], title=title,
+                         description=desc, lesson_role=role or None, fmt=fmt or None,
+                         student_id=st.session_state.student_id)
+        dm._t("lessons").update({"duration_minutes": int(duration)}).eq(
+            "id", l["id"]).execute()
+        source = None
+        if up is not None:
+            with st.spinner("מעלה את דף המקורות…"):
+                source = dm.upload_source_sheet(mid, l["id"], up.name, up.getvalue())
+            if not source:
+                st.warning("ההעלאה נכשלה — הדביקו קישור במקום.")
+        if source or link.strip() != (l.get("source_url") or ""):
+            dm.set_lesson_source(l["id"], source or link)
+        dm.recompute_lesson_times(mid)
+        st.session_state["editing_lesson"] = None
+        st.toast("המקטע נשמר"); st.rerun()
 
 
 def _speaker_status_chip(status: Optional[str]) -> str:
@@ -1373,8 +1462,11 @@ def _topic_and_structure(mid: int) -> None:
                     for t in dm.get_tasks_for_mishmar(mid):
                         if t.get("category") == "נושא" and t["status"] != "DONE":
                             dm.update_task_status(t["id"], "DONE")
-                    st.toast(f"הנושא נסגר: {new_topic.strip()} — שלב המרצים נפתח!")
+                    # The structure appears the moment the topic closes.
+                    created = dm.create_default_timeline(mid)
+                    st.toast(f"הנושא נסגר! נבנה שלד ערב של {created} משבצות מ-20:00")
                     st.rerun()
+        return   # no timeline before a topic — one step at a time
     else:
         with st.expander(f"🎯 הנושא: {m['topic']} — לעריכה"):
             with st.form(f"topic-{mid}"):
@@ -1383,61 +1475,109 @@ def _topic_and_structure(mid: int) -> None:
                     dm.set_mishmar_topic(mid, new_topic.strip())
                     st.toast("הנושא עודכן"); st.rerun()
 
-    # --- the evening as a timeline, not a stack of forms ---
+    # --- the evening as a duration-driven timeline ---
     st.markdown("#### 🌙 מבנה הערב")
     st.caption(
-        "ארבעת השיעורים הם ברירת מחדל מצוינת — לא חוק. טקס, מעגל שירה או "
-        "שלושה מקטעים הם מבנים לגיטימיים לגמרי."
+        "השעות נגזרות מהמשכים — שינוי משך של משבצת מזרים את כל הערב. "
+        "שלושה שיעורים ושעת חבורות הם ברירת המחדל; אפשר לשנות הכל."
     )
     lessons = dm.get_lessons(mid)
     if not lessons:
-        c1, c2 = st.columns(2)
-        if c1.button("✨ התחל מארבעת השיעורים", type="primary", width="stretch"):
-            for i, (t, hh, role) in enumerate(
-                [("היסודות", "20:30", "יסודות"), ("העומק והערעור", "22:00", "ערעור"),
-                 ("הזווית המפתיעה", "23:30", "טוויסט"), ("נחיתה אל הלב", "01:00", "נחיתה")], 1):
-                dm.upsert_lesson(mid, i, title=t, start_time=hh, lesson_role=role)
-            st.rerun()
-        if c2.button("➕ התחל ממקטע ריק", width="stretch"):
-            dm.upsert_lesson(mid, 1, title="מקטע חדש")
+        if st.button("✨ צור את שלד הערב (20:00, שלושה שיעורים + חבורות)",
+                     type="primary", width="stretch"):
+            dm.create_default_timeline(mid)
             st.rerun()
         return
 
+    candidates = dm.get_lesson_speakers(mid)
+    editing = st.session_state.get("editing_lesson")
+    focus = st.session_state.pop("wf_focus_lesson", None)
+    if focus == "first_open_speaker":
+        for l in lessons:
+            if not l.get("is_break") and not l.get("speaker_name") \
+                    and (l.get("lesson_role") or "") != "חבורות":
+                st.session_state["editing_lesson"] = editing = l["id"]
+                break
+
+    lesson_no = 0
     for l in lessons:
-        prior = []
-        if l.get("speaker_name"):
-            for row in dm.get_speaker_status(l["speaker_name"]):
-                if row.get("has_outreach"):
-                    for o in dm.get_outreach_for_speaker(row["speaker_id"])[:2]:
-                        if o.get("mishmar_id") and o["mishmar_id"] != mid:
-                            prior.append(
-                                f"‼️ פנייה קודמת — משמר #{o['mishmar_id']:02d} · {o['status']}")
+        if l.get("is_break"):
+            # a slim break row: the only knob is minutes
+            bc1, bc2 = st.columns([4, 1])
+            bc1.markdown(
+                f"<div style='opacity:.6;padding:.25rem .6rem'>☕ הפסקה · "
+                f"{l.get('duration_minutes') or 30} דק' · "
+                f"<span dir='ltr'>{_slot_times(l)}</span></div>",
+                unsafe_allow_html=True,
+            )
+            new_min = bc2.number_input(
+                "דק'", min_value=5, max_value=90, step=5,
+                value=int(l.get("duration_minutes") or 30),
+                key=f"brk-{l['id']}", label_visibility="collapsed")
+            if int(new_min) != int(l.get("duration_minutes") or 30):
+                dm._t("lessons").update({"duration_minutes": int(new_min)}).eq(
+                    "id", l["id"]).execute()
+                dm.recompute_lesson_times(mid)
+                st.rerun()
+            continue
+
+        lesson_no += 1
+        cands = candidates.get(l["id"], [])
         with st.container(border=True):
-            speaker_bit = ""
-            if l.get("speaker_name"):
-                speaker_bit = (f" · 🎤 {_clean(l['speaker_name'])} "
-                               f"{_speaker_status_chip(l.get('speaker_status'))}")
+            head = _clean(l.get("title") or "") or f"שיעור {lesson_no} — ללא כותרת"
+            if (l.get("lesson_role") or "") == "חבורות" and not l.get("title"):
+                head = "חבורות"
             chips = []
             if l.get("lesson_role"):
                 chips.append(_chip(l["lesson_role"], "gold"))
             if l.get("format"):
                 chips.append(_chip(l["format"], "gray"))
+            if not l.get("speaker_name") and cands:
+                chips.append(_chip(f"{len(cands)} מועמדים", "blue"))
             st.markdown(
                 f"<div class='task-desc'>"
-                f"<span class='chip chip-blue'>{_clean(l.get('start_time') or '--:--')}</span> "
-                f"{_clean(l.get('title') or 'ללא כותרת')}{speaker_bit}</div>"
+                f"<span class='chip chip-blue' dir='ltr'>{_slot_times(l)}</span> {head}</div>"
                 f"<div>{''.join(chips)}</div>",
                 unsafe_allow_html=True,
             )
             if l.get("description"):
                 st.caption(_clean(l["description"])[:180])
-            for line in prior:
-                st.warning(line)
-            with st.expander("✏️ עריכת המקטע"):
+            if l.get("source_url"):
+                st.caption(f"📎 [דף מקורות]({l['source_url']})")
+
+            _candidate_rows(mid, l, cands)
+
+            # the slot's derived work, as small doors to the tasks board
+            todo = []
+            if not l.get("speaker_name") and (l.get("lesson_role") or "") != "חבורות":
+                todo.append("🎤 סגירת מרצה")
+            if not l.get("source_url"):
+                todo.append("📎 דף מקורות")
+            tc = st.columns([1, 1, 1, 1])
+            for i, label in enumerate(todo):
+                if tc[i].button(label, key=f"td-{l['id']}-{i}",
+                                help="פותח את לוח המשימות"):
+                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[1])
+            if tc[3].button("✏️ עריכה", key=f"ed-{l['id']}"):
+                st.session_state["editing_lesson"] = (
+                    None if editing == l["id"] else l["id"])
+                st.rerun()
+
+            if editing == l["id"]:
                 _lesson_form(mid, l)
 
-    if st.button("➕ הוסף מקטע"):
-        dm.upsert_lesson(mid, len(lessons) + 1, title="מקטע חדש")
+    ac1, ac2 = st.columns(2)
+    if ac1.button("➕ הוסף מקטע"):
+        dm.upsert_lesson(mid, len(lessons) + 1)
+        dm._t("lessons").update({"duration_minutes": 60}).eq(
+            "mishmar_id", mid).eq("slot_order", len(lessons) + 1).execute()
+        dm.recompute_lesson_times(mid)
+        st.rerun()
+    if ac2.button("➕ הוסף הפסקה"):
+        row = dm._t("lessons").insert({
+            "mishmar_id": mid, "slot_order": len(lessons) + 1,
+            "is_break": True, "duration_minutes": 15}).execute()
+        dm.recompute_lesson_times(mid)
         st.rerun()
 
 

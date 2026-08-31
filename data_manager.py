@@ -1189,6 +1189,30 @@ def close_lesson_speaker(lesson_id: int, name: str,
     return {"closed": closed_name, "removed": removed}
 
 
+def upload_source_sheet(mishmar_id: int, lesson_id: int,
+                        filename: str, data: bytes) -> Optional[str]:
+    """Upload a source sheet to Supabase Storage and return its public URL.
+
+    Creates the `sources` bucket on first use (service_role may). Returns None
+    on ANY failure — the UI then falls back to a paste-a-link field, so a
+    storage hiccup never blocks the pair."""
+    try:
+        storage = get_client().storage
+        try:
+            storage.create_bucket("sources", options={"public": True})
+        except Exception:
+            pass   # already exists, or creation denied — the upload will tell
+        safe = re.sub(r"[^\w.\-]+", "_", filename or "source")
+        path = f"mishmar-{int(mishmar_id):02d}/lesson-{int(lesson_id)}-{safe}"
+        storage.from_("sources").upload(
+            path, data,
+            {"content-type": "application/octet-stream", "upsert": "true"})
+        url = storage.from_("sources").get_public_url(path)
+        return str(url) if url else None
+    except Exception:
+        return None
+
+
 def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
     _t("lessons").update({"source_url": (url or "").strip() or None}).eq(
         "id", lesson_id).execute()

@@ -460,6 +460,14 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
             # the moment the next work is laid out.
             out: dict[str, Any] = {"ok": True, "topic": topic,
                                    "tasks_marked_done": closed}
+            # The structure appears the moment the topic closes — same as the
+            # form path: the 20:00 skeleton, only if the evening is empty.
+            created = dm.create_default_timeline(mishmar_id)
+            if created:
+                out["timeline_created"] = (
+                    f"נבנה שלד ערב: {created} משבצות מ-20:00 — שלושה שיעורים, "
+                    "הפסקות, ושעת חבורות. הכותרות ריקות ומחכות לתוכן."
+                )
             progress = dm.mishmar_progress(mishmar_id=mishmar_id)
             cur = progress["phases"][progress["current"]]
             out["phase_opened"] = {
