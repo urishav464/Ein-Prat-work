@@ -52,13 +52,15 @@ SPEAKER_SOURCE_TYPES = ("original_44", "web_search", "manual")
 # ⚠️ Three documents word this differently ("✅ אישר/לימד" vs "✅ אישר" vs
 # "✅ סגור"). The code follows the work-file template; reconciling the prose is
 # Uri's call, so it is flagged rather than silently rewritten.
+# «⏳ ממתין לתשובה» מוזג לתוך «📩 נשלחה פנייה» (סכימה v2) — היו אותו מצב.
 SPEAKER_STATUSES = (
-    "⬜ לא פנינו", "📩 נשלחה פנייה", "⏳ ממתין לתשובה",
+    "⬜ לא פנינו", "📩 נשלחה פנייה",
     "✅ סגור", "❌ לא יכול/ה", "⚠️ בתנאי",
 )
 
 TASK_CATEGORIES = (
-    "נושא", "מרצים", "הזמנה", "כיבוד", "קישוט", "תוכן", "לוגיסטיקה", "אחרי",
+    "נושא", "מרצים", "הזמנה", "כיבוד", "קישוט", "תוכן", "לוגיסטיקה",
+    "יום המשמר", "אחרי",
 )
 
 # Days BEFORE the Mishmar each category is recommended to close. Negative = after.
@@ -66,7 +68,7 @@ TASK_CATEGORIES = (
 # a trainee sees a nudge; only the instructor view treats a passed date as action.
 DEADLINE_OFFSETS_DAYS = {
     "נושא": 21, "מרצים": 14, "הזמנה": 7, "כיבוד": 7,
-    "קישוט": 7, "תוכן": 7, "לוגיסטיקה": 0, "אחרי": -7,
+    "קישוט": 7, "תוכן": 7, "לוגיסטיקה": 0, "יום המשמר": 0, "אחרי": -7,
 }
 
 CACHE_TTL_DAYS_OK = 60
@@ -531,7 +533,7 @@ def bootstrap() -> dict:
 #     read as content work merely because it mentions חבורות.
 _CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("אחרי",      ("(אחרי)", "סיכום ולקחים", "תודות", "עדכון מאגר", "משוב")),
-    ("לוגיסטיקה", ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני")),
+    ("יום המשמר", ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני", "הצעת שתי")),
     ("נושא",      ("סגירת נושא", "בחירת נושא", "נושא המשמר")),
     ("מרצים",     ("מרצים", "מרצה")),
     ("הזמנה",     ("הזמנה", "הזמנת", "קנבה", "הדפסה", "הפצה")),
@@ -776,7 +778,7 @@ PHASES = (
     {"key": "content",   "label": "מרצים ותוכן", "icon": "🎤",
      "categories": ("מרצים", "תוכן")},
     {"key": "logistics", "label": "לוגיסטיקה",   "icon": "📦",
-     "categories": ("הזמנה", "כיבוד", "קישוט", "לוגיסטיקה")},
+     "categories": ("הזמנה", "כיבוד", "קישוט", "לוגיסטיקה", "יום המשמר")},
     {"key": "after",     "label": "אחרי הערב",   "icon": "🌙",
      "categories": ("אחרי",)},
 )
@@ -1057,6 +1059,139 @@ def get_outreach_for_mishmar(mishmar_id: int) -> list[dict]:
 # --------------------------------------------------------------------------
 # Lessons, feedback, chat
 # --------------------------------------------------------------------------
+
+
+LESSON_DEFAULT_MINUTES = 75
+BREAK_DEFAULT_MINUTES = 30
+EVENING_START = "20:00"
+
+
+def create_default_timeline(mishmar_id: int) -> int:
+    """The real evening skeleton: 20:00 · three 75-minute lessons with 30-minute
+    breaks · a 15-minute break · one hour of חבורות. Titles, roles and formats
+    stay EMPTY by design — the skeleton is time, the pair pours the content.
+    Returns the number of rows created; refuses (0) if any lessons exist."""
+    if get_lessons(mishmar_id):
+        return 0
+    slots = [
+        {"is_break": False, "duration_minutes": 75},
+        {"is_break": True,  "duration_minutes": 30},
+        {"is_break": False, "duration_minutes": 75},
+        {"is_break": True,  "duration_minutes": 30},
+        {"is_break": False, "duration_minutes": 75},
+        {"is_break": True,  "duration_minutes": 15},
+        {"is_break": False, "duration_minutes": 60, "lesson_role": "חבורות"},
+    ]
+    for i, slot in enumerate(slots, 1):
+        _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": i, **slot}).execute()
+    recompute_lesson_times(mishmar_id)
+    return len(slots)
+
+
+def recompute_lesson_times(mishmar_id: int, first_start: str = EVENING_START) -> None:
+    """Start times are DERIVED: 20:00 plus the cumulative durations before each
+    slot. Editing a duration reflows the whole evening — nobody hand-types
+    times that then silently overlap."""
+    rows = get_lessons(mishmar_id)
+    try:
+        h, m = (int(x) for x in (first_start or EVENING_START).split(":"))
+    except ValueError:
+        h, m = 20, 0
+    minutes = h * 60 + m
+    for r in rows:
+        stamp = f"{(minutes // 60) % 24:02d}:{minutes % 60:02d}"
+        if r.get("start_time") != stamp:
+            _t("lessons").update({"start_time": stamp}).eq("id", r["id"]).execute()
+        dur = r.get("duration_minutes") or (
+            BREAK_DEFAULT_MINUTES if r.get("is_break") else LESSON_DEFAULT_MINUTES)
+        minutes += int(dur)
+
+
+def get_lesson_speakers(mishmar_id: int) -> dict[int, list[dict]]:
+    """All candidate speakers for a Mishmar's lessons, grouped by lesson_id —
+    ONE query, per the one-query-per-list rule."""
+    lesson_ids = [l["id"] for l in get_lessons(mishmar_id)]
+    if not lesson_ids:
+        return {}
+    rows = _rows(_t("lesson_speakers").select("*")
+                 .in_("lesson_id", lesson_ids).order("id").execute())
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["lesson_id"], []).append(r)
+    return out
+
+
+def add_lesson_speaker(lesson_id: int, name: str, phone: Optional[str] = None,
+                       student_id: Optional[int] = None) -> Optional[int]:
+    """A candidate joins a lesson's list — and the shared index learns the
+    person exists (source manual, the phone as contact). The index write is an
+    upsert on the normalised name, so a known person is not duplicated."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = _one(_t("lesson_speakers").insert({
+        "lesson_id": lesson_id, "name": name, "phone": (phone or "").strip() or None,
+    }).execute())
+    try:
+        existing = get_speaker_by_name(name)
+        if not existing:
+            add_new_speaker(name=name, source_type="manual",
+                            contact=(phone or "").strip() or None,
+                            notes="נוסף כמועמד ממבנה הערב")
+        elif phone and not (existing[0].get("contact") or "").strip("TBD "):
+            _t("speakers").update({"contact": phone.strip()}).eq(
+                "id", existing[0]["id"]).execute()
+    except AmbiguousSpeaker:
+        pass   # several known people share the name — never merge on our own
+    return row.get("id") if row else None
+
+
+def update_lesson_speaker_status(candidate_id: int, status: str,
+                                 mishmar_id: Optional[int] = None,
+                                 student_id: Optional[int] = None) -> None:
+    """Candidate status routes through the journal's single writer too."""
+    if status not in SPEAKER_STATUSES:
+        raise ValueError(f"status must be one of {SPEAKER_STATUSES}")
+    row = _one(_t("lesson_speakers").update({"status": status})
+               .eq("id", candidate_id).execute())
+    if row:
+        try:
+            record_outreach(status, name=row["name"], mishmar_id=mishmar_id,
+                            student_id=student_id)
+        except AmbiguousSpeaker:
+            pass
+
+
+def close_lesson_speaker(lesson_id: int, name: str,
+                         mishmar_id: Optional[int] = None,
+                         student_id: Optional[int] = None) -> dict:
+    """«סגרתי את X»: X becomes the lesson's speaker, the journal logs ✅, and
+    the other candidates vanish — X stays as the single closed row."""
+    name = (name or "").strip()
+    cands = _rows(_t("lesson_speakers").select("*").eq("lesson_id", lesson_id).execute())
+    match = next((c for c in cands
+                  if normalize_name(c["name"]) == normalize_name(name)
+                  or normalize_name(name) in normalize_name(c["name"])), None)
+    closed_name = (match or {}).get("name") or name
+    _t("lessons").update({"speaker_name": closed_name}).eq("id", lesson_id).execute()
+    removed = []
+    for c in cands:
+        if match and c["id"] == match["id"]:
+            _t("lesson_speakers").update({"status": "✅ סגור"}).eq("id", c["id"]).execute()
+        else:
+            _t("lesson_speakers").delete().eq("id", c["id"]).execute()
+            removed.append(c["name"])
+    try:
+        record_outreach("✅ סגור", name=closed_name, mishmar_id=mishmar_id,
+                        student_id=student_id)
+    except AmbiguousSpeaker:
+        pass
+    return {"closed": closed_name, "removed": removed}
+
+
+def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
+    _t("lessons").update({"source_url": (url or "").strip() or None}).eq(
+        "id", lesson_id).execute()
 
 
 def get_lessons(mishmar_id: int) -> list[dict]:

@@ -191,6 +191,16 @@ CREATE INDEX IF NOT EXISTS idx_cache_created     ON search_cache(created_at);
 -- ---------------------------------------------------------------------------
 
 -- הוצאות בפועל למשמר. אף פעם לא עמודה שמורה.
+-- הוספת עמודה לטבלה משנה את פריסת t.*/s.* — ו-CREATE OR REPLACE VIEW אינו
+-- מסוגל להכניס עמודה באמצע. לכן קודם מפילים, ואז בונים מחדש. אין תלות בין
+-- התצוגות, והקובץ כולו נבנה מחדש בכל הרצה ממילא.
+DROP VIEW IF EXISTS v_student_progress;
+DROP VIEW IF EXISTS v_overdue_tasks;
+DROP VIEW IF EXISTS v_tasks_full;
+DROP VIEW IF EXISTS v_outreach_full;
+DROP VIEW IF EXISTS v_speaker_status;
+DROP VIEW IF EXISTS v_mishmar_budget;
+
 CREATE OR REPLACE VIEW v_mishmar_budget
 WITH (security_invoker = true) AS
 SELECT m.id                              AS mishmar_id,
@@ -339,7 +349,54 @@ GRANT USAGE ON SCHEMA public TO service_role;
 GRANT ALL ON ALL TABLES     IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES  IN SCHEMA public TO service_role;
 
+-- ---------------------------------------------------------------------------
+-- גרסה 2 — מבנה הערב המפורט. כל הפקודות אידמפוטנטיות: הרצה חוזרת בטוחה.
+-- ---------------------------------------------------------------------------
+
+-- שיעור נושא משך; הפסקות הן שורות לוז מלאות; דף מקורות נשמר כקישור.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS duration_minutes integer;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_break boolean NOT NULL DEFAULT false;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS source_url text;
+
+-- מרצים אופציונליים לשיעור: מועמדים עד שאחד נסגר. הטלפון חי רק כאן וברשומת
+-- המאגר — לעולם לא בהקשר הצ'אט ולא בתקציר המחולל.
+CREATE TABLE IF NOT EXISTS lesson_speakers (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    lesson_id  bigint NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    name       text NOT NULL,
+    phone      text,
+    status     text NOT NULL DEFAULT '⬜ לא פנינו',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_speakers_lesson ON lesson_speakers(lesson_id);
+ALTER TABLE lesson_speakers ENABLE ROW LEVEL SECURITY;
+
+-- תיאור חופשי למשימה; משוב נשמר פר-מקטע (בשם, כדי לשרוד מחיקת שורת לוז).
+ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS details text;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lesson_title text;
+
+-- מיזוג סטטוסים: «⏳ ממתין לתשובה» ≡ «📩 נשלחה פנייה». הנוסח השורד: 📩.
+UPDATE speakers         SET status = '📩 נשלחה פנייה' WHERE status LIKE '⏳%';
+UPDATE speaker_outreach SET status = '📩 נשלחה פנייה' WHERE status LIKE '⏳%';
+UPDATE lessons          SET speaker_status = '📩 נשלחה פנייה' WHERE speaker_status LIKE '⏳%';
+UPDATE lesson_speakers  SET status = '📩 נשלחה פנייה' WHERE status LIKE '⏳%';
+
+-- קטגוריית «יום המשמר»: משימות של הערב עצמו, לא לוגיסטיקה מוקדמת.
+UPDATE tasks SET category = 'יום המשמר'
+ WHERE task_description LIKE '%ביום המשמר%'
+    OR task_description LIKE '%סידור חדרים%'
+    OR task_description LIKE '%סידור חדרי%'
+    OR task_description LIKE '%קבלת פנ%'
+    OR task_description LIKE '%הצעת שתי%';
+
+-- משימות שאין סיבה שיתקיימו: «תודות».
+DELETE FROM tasks WHERE task_description LIKE '%תודות%';
+
+-- ההרשאות המפורשות חייבות לכסות גם את הטבלה החדשה.
+GRANT ALL ON lesson_speakers TO service_role;
+REVOKE ALL ON lesson_speakers FROM anon, authenticated;
+
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '1')
+VALUES ('schema_version', '2')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
