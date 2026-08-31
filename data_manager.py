@@ -735,6 +735,26 @@ def get_student(student_id: int) -> Optional[dict]:
     return _one(_t("students").select("*").eq("id", student_id).execute())
 
 
+def edit_task(task_id: int, description: Optional[str] = None,
+              details: Optional[str] = None,
+              due_date: Optional[str] = None) -> bool:
+    """Edit a task's text fields. Only non-None values are written; an empty
+    string clears the field. due_date is ISO or None."""
+    fields: dict[str, Any] = {"updated_at": _now_iso()}
+    if description is not None and description.strip():
+        fields["task_description"] = description.strip()
+    if details is not None:
+        fields["details"] = details.strip() or None
+    if due_date is not None:
+        fields["due_date"] = due_date or None
+    resp = _t("tasks").update(fields).eq("id", task_id).execute()
+    return bool(_rows(resp))
+
+
+def delete_task(task_id: int) -> bool:
+    return bool(_rows(_t("tasks").delete().eq("id", task_id).execute()))
+
+
 def get_task(task_id: int) -> Optional[dict]:
     return _one(_t("tasks").select("*").eq("id", task_id).execute())
 
@@ -1269,12 +1289,16 @@ def delete_lesson(lesson_id: int) -> bool:
 
 def add_feedback(mishmar_id: int, rating: Optional[int] = None,
                  speaker_name: Optional[str] = None, lesson_id: Optional[int] = None,
+                 lesson_title: Optional[str] = None,
                  student_id: Optional[int] = None, what_worked: Optional[str] = None,
                  what_didnt: Optional[str] = None) -> Optional[int]:
+    """lesson_title carries per-slot feedback BY NAME, so it survives slot
+    deletion and reads well years later."""
     if rating is not None and not 1 <= int(rating) <= 5:
         raise ValueError("rating must be between 1 and 5")
     row = _one(_t("feedback").insert({
         "mishmar_id": mishmar_id, "student_id": student_id, "lesson_id": lesson_id,
+        "lesson_title": lesson_title,
         "speaker_name": speaker_name, "rating": rating,
         "what_worked": what_worked, "what_didnt": what_didnt,
     }).execute())

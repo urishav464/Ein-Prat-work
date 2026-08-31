@@ -1581,24 +1581,105 @@ def _topic_and_structure(mid: int) -> None:
         st.rerun()
 
 
+def _wf_task_card(t: dict, mid: int, key_prefix: str) -> None:
+    """A workfile task card: the task is the point, the controls are small.
+    «פתח» is a door to where the task is done; edit/delete live behind tiny
+    icons; completion is one small check."""
+    with st.container(border=True):
+        chips = []
+        if t.get("category"):
+            chips.append(_chip(t["category"], "gold"))
+        if t.get("overdue"):
+            chips.append(_chip("באיחור", "red"))
+        st.markdown(
+            f"<div class='task-desc'>{_clean(t['task_description'])}</div>"
+            f"<div>{''.join(chips)}</div>",
+            unsafe_allow_html=True,
+        )
+        if t.get("details"):
+            st.caption(_clean(t["details"])[:160])
+        meta = t.get("nudge") or (f"מומלץ עד {_fmt_date(t['due_date'])}"
+                                  if t.get("due_date") else "")
+        if meta:
+            st.markdown(f"<div class='card-meta'>🕒 {_clean(meta)}</div>",
+                        unsafe_allow_html=True)
+
+        k = f"{key_prefix}-{t['id']}"
+        c1, c2, c3, c4 = st.columns([1.2, 0.7, 0.55, 0.55])
+        if t["status"] != "DONE":
+            if c1.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
+                if t.get("category") in ("מרצים", "תוכן", "נושא"):
+                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[0],
+                          lesson_focus="first_open_speaker"
+                          if t.get("category") == "מרצים" else None)
+                elif t.get("category") == "אחרי":
+                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[2])
+            if c2.button("✓", key=f"{k}-dn", help="סמן שבוצע"):
+                dm.update_task_status(t["id"], "DONE")
+                st.toast("בוצע 🎉"); st.rerun()
+        else:
+            if c1.button("↩ החזר", key=f"{k}-re"):
+                dm.update_task_status(t["id"], "TO DO"); st.rerun()
+        if c3.button("✏️", key=f"{k}-ed", help="עריכה"):
+            st.session_state["editing_task"] = (
+                None if st.session_state.get("editing_task") == t["id"] else t["id"])
+            st.rerun()
+        if c4.button("🗑", key=f"{k}-rm", help="מחיקה"):
+            dm.delete_task(t["id"])
+            st.toast("המשימה נמחקה"); st.rerun()
+
+        if st.session_state.get("editing_task") == t["id"]:
+            with st.form(f"edit-{k}", border=False):
+                desc = st.text_input("כותרת", value=t["task_description"])
+                details = st.text_area("תיאור", value=t.get("details") or "",
+                                       height=68)
+                due = st.text_input("מומלץ עד (dd.mm.yyyy)",
+                                    value=_fmt_date(t["due_date"]) if t.get("due_date") else "")
+                if st.form_submit_button("💾 שמור", type="primary"):
+                    iso = None
+                    d = _parse_date(due)
+                    if d:
+                        iso = d.isoformat()
+                    dm.edit_task(t["id"], description=desc, details=details,
+                                 due_date=iso if due.strip() else None)
+                    st.session_state["editing_task"] = None
+                    st.toast("נשמר"); st.rerun()
+
+
+def _wf_task_grid(items: list[dict], mid: int, prefix: str) -> None:
+    for i in range(0, len(items), 2):
+        cols = st.columns(2)
+        for col, t in zip(cols, items[i:i + 2]):
+            with col:
+                _wf_task_card(t, mid, prefix)
+
+
 def _tasks_tab(mid: int, progress: dict) -> None:
-    """Tasks grouped by build phase — an accordion, not three infinite
-    columns. The current phase is open; done phases show a checkmark;
-    future phases are visible but folded, because the linear path is the
-    point and nothing should attack from every direction at once."""
+    """Phase accordion of OPEN tasks; day-of work as its own group; the
+    after-work lives in the after-Mishmar section; done tasks sink to the
+    bottom, out of the way entirely."""
+    by_due = lambda t: t.get("due_date") or "9999"
+    all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
+    done = [t for t in all_tasks if t["status"] == "DONE"]
+
     for i, ph in enumerate(progress["phases"]):
-        if not ph["total"]:
+        if ph["key"] == "after":
+            continue   # lives in the אחרי-המשמר section
+        open_ts = [t for t in ph["tasks"]
+                   if t["status"] != "DONE" and t.get("category") != "יום המשמר"]
+        if not open_ts:
             continue
-        state = ("✓" if ph["complete"]
-                 else ("▸" if i == progress["current"] else "🔒"))
-        label = f"{state} {ph['icon']} {ph['label']} ({ph['done']}/{ph['total']})"
-        with st.expander(label, expanded=(i == progress["current"])):
-            if i > progress["current"] and not ph["complete"]:
-                st.caption("השלב הזה עוד לא הגיע — אפשר להציץ, שום דבר לא נעול באמת.")
-            _card_grid(
-                sorted(ph["tasks"], key=lambda t: (t["status"] == "DONE",
-                                                   t.get("due_date") or "9999")),
-                f"wf{mid}-{ph['key']}", show_mishmar=False)
+        state = "▸" if i == progress["current"] else ("✓" if ph["complete"] else "🔒")
+        with st.expander(f"{state} {ph['icon']} {ph['label']} ({len(open_ts)})",
+                         expanded=(i == progress["current"])):
+            _wf_task_grid(sorted(open_ts, key=by_due), mid, f"wf{mid}-{ph['key']}")
+
+    day_of = [t for t in all_tasks
+              if t.get("category") == "יום המשמר" and t["status"] != "DONE"]
+    if day_of:
+        with st.expander(f"🕯️ יום המשמר עצמו ({len(day_of)})"):
+            st.caption("הדברים שנעשים בערב עצמו — לא לוגיסטיקה מוקדמת.")
+            _wf_task_grid(sorted(day_of, key=by_due), mid, f"wf{mid}-day")
 
     st.divider()
     with st.form(f"addtask-{mid}"):
@@ -1610,83 +1691,120 @@ def _tasks_tab(mid: int, progress: dict) -> None:
                         category=None if cat == "(אוטומטי)" else cat)
             st.toast("נוספה משימה — שובצה לשלב לפי הקטגוריה"); st.rerun()
 
+    if done:
+        with st.expander(f"✅ בוצעו ({len(done)})"):
+            _wf_task_grid(done, mid, f"wf{mid}-done")
+
 
 def _after_tab(mid: int) -> None:
     m = dm.get_mishmar(mid)
-    lessons = dm.get_lessons(mid)
-    speakers = [l["speaker_name"] for l in lessons if l.get("speaker_name")]
+    lessons = [l for l in dm.get_lessons(mid) if not l.get("is_break")]
+    tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_mishmar(mid)]
+    after_tasks = [t for t in tasks if t.get("category") == "אחרי"]
 
-    # A speaker recorded only on a budget line — someone who came but was never
-    # added to the running order — must still be reviewable, or their feedback
-    # is unreachable and never reaches the index.
+    # --- feedback, per evening slot ---
+    st.markdown("#### 🌙 משוב על הערב — לפי מקטעים")
+    st.caption(
+        "המשוב נשמר על שמך ועל המשמר הזה, והופך את מאגר המרצים לזיכרון מוסדי. "
+        "שליחה גם סוגרת את משימת המשוב שלך."
+    )
+    existing = dm.get_feedback_for_mishmar(mid)
+    my_titles = {f.get("lesson_title") for f in existing
+                 if f.get("student_id") == st.session_state.student_id}
+
+    if not lessons:
+        st.info("אין עדיין מבנה ערב — המשוב ייפתח כשיהיו מקטעים.")
+    else:
+        with st.form(f"slot-feedback-{mid}"):
+            entries = []
+            for i, l in enumerate(lessons, 1):
+                name = l.get("title") or (
+                    "חבורות" if (l.get("lesson_role") or "") == "חבורות"
+                    else f"שיעור {i}")
+                st.markdown(
+                    f"**{_clean(name)}**"
+                    + (f" · 🎤 {_clean(l['speaker_name'])}" if l.get("speaker_name") else "")
+                    + (" · ✅ כבר נשלח" if name in my_titles else ""),
+                    unsafe_allow_html=True)
+                c1, c2 = st.columns([1, 2.6])
+                rating = c1.slider("ציון", 1, 5, 4, key=f"fb-r-{l['id']}")
+                words = c2.text_input("התייחסות", key=f"fb-w-{l['id']}",
+                                      placeholder="מה עבד, מה פחות")
+                entries.append((l, name, rating, words))
+            if st.form_submit_button("💾 שמור משוב על הערב", type="primary"):
+                n = 0
+                for l, name, rating, words in entries:
+                    if name in my_titles:
+                        continue   # one submission per slot per trainee
+                    dm.add_feedback(
+                        mid, rating=rating, lesson_id=l["id"], lesson_title=name,
+                        speaker_name=l.get("speaker_name"),
+                        student_id=st.session_state.student_id,
+                        what_worked=(words or None))
+                    n += 1
+                # feedback submitted => the trainee's feedback task closes
+                for t in tasks:
+                    if "משוב" in t["task_description"] and t["status"] != "DONE":
+                        dm.update_task_status(t["id"], "DONE")
+                st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
+                st.rerun()
+
+    if existing:
+        with st.expander(f"משוב שנרשם ({len(existing)})"):
+            for f in existing:
+                who = f.get("lesson_title") or f.get("speaker_name") or "המשמר בכללותו"
+                st.markdown(f"- **{_clean(who)}** — {'⭐' * (f.get('rating') or 0)}")
+                if f.get("what_worked"):
+                    st.caption(_clean(f["what_worked"]))
+                if f.get("what_didnt"):
+                    st.caption(f"פחות: {_clean(f['what_didnt'])}")
+
+    # --- the after-work tasks live here, in context ---
+    open_after = [t for t in after_tasks if t["status"] != "DONE"]
+    if open_after:
+        st.markdown("#### 🌙 המשימות של אחרי הערב")
+        _wf_task_grid(sorted(open_after, key=lambda t: t.get("due_date") or "9999"),
+                      mid, f"aft{mid}")
+
+    # --- budget, unchanged in substance ---
+    st.divider()
+    speakers = [l["speaker_name"] for l in lessons if l.get("speaker_name")]
     for name in dm.get_budget_speaker_names(mid):
         if name not in speakers:
             speakers.append(name)
-
-    st.subheader("סיכום תקציב")
-    st.caption(
-        f"האינדיקציה היא {dm.PER_MISHMAR_BUDGET_NIS} ₪ למשמר — ממוצע שכולל מרצים "
-        "וכיבוד יחד. חריגה במשמר בודד אינה שגיאה: היא נמשכת מהסעיף העונתי."
-    )
-    with st.form(f"budget-{mid}"):
-        st.markdown("**מרצים שהגיעו ומה שולם להם** *(0 = הגיע בהתנדבות)*")
-        paid = {}
-        for i, name in enumerate(speakers):
-            paid[name] = st.number_input(f"{name} (₪)", min_value=0.0, step=50.0, key=f"pay-{mid}-{i}")
-        if not speakers:
-            st.caption("לא רשומים מרצים במבנה הערב — אפשר להוסיף אותם בלשונית «נושא ומבנה».")
-        extra_name = st.text_input("מרצה נוסף שלא מופיע למעלה")
-        extra_amt = st.number_input("תשלום למרצה הנוסף (₪)", min_value=0.0, step=50.0)
-        refreshments = st.number_input("כיבוד (₪)", min_value=0.0, step=10.0)
-        other = st.number_input("הוצאות אחרות (₪)", min_value=0.0, step=10.0)
-        if st.form_submit_button("שמור סיכום תקציב"):
-            n = 0
-            for name, amt in paid.items():
-                dm.add_budget_entry(mid, "מרצה", actual_cost=amt, description=name); n += 1
-            if extra_name.strip():
-                dm.add_budget_entry(mid, "מרצה", actual_cost=extra_amt, description=extra_name.strip()); n += 1
-            if refreshments:
-                dm.add_budget_entry(mid, "כיבוד", actual_cost=refreshments, description="כיבוד"); n += 1
-            if other:
-                dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
-            st.toast(f"נשמרו {n} שורות תקציב"); st.rerun()
-
-    spent = (m or {}).get("budget_used") or 0
-    st.metric("סה״כ הוצאות למשמר הזה", _fmt_nis(spent))
-    if spent > dm.PER_MISHMAR_BUDGET_NIS:
-        st.info("מעל האינדיקציה — לידיעה, לא לדאגה.")
-
-    st.divider()
-    st.subheader("משוב")
-    st.caption(
-        "המשוב הוא מה שהופך את מאגר המרצים מרשימת שמות לזיכרון מוסדי — "
-        "החניך של השנה הבאה יראה לא רק שמישהו לימד כאן, אלא איך זה הלך."
-    )
-    with st.form(f"feedback-{mid}"):
-        # Explicit parens: "a + b if c else d" parses as "(a+b) if c else d",
-        # which happens to be right here but reads as if it is not.
-        target = st.selectbox("על מה המשוב?", [*speakers, "המשמר בכללותו"])
-        rating = st.slider("דירוג", 1, 5, 4)
-        worked = st.text_area("מה עבד")
-        didnt = st.text_area("מה פחות עבד")
-        if st.form_submit_button("שמור משוב"):
-            dm.add_feedback(
-                mid, rating=rating,
-                speaker_name=None if target == "המשמר בכללותו" else target,
-                student_id=st.session_state.student_id,
-                what_worked=worked or None, what_didnt=didnt or None)
-            st.toast("המשוב נשמר"); st.rerun()
-
-    existing = dm.get_feedback_for_mishmar(mid)
-    if existing:
-        st.markdown("**משוב שנרשם:**")
-        for f in existing:
-            who = f.get("speaker_name") or "המשמר בכללותו"
-            st.markdown(f"- **{_clean(who)}** — {'⭐' * (f.get('rating') or 0)}")
-            if f.get("what_worked"):
-                st.caption(f"עבד: {_clean(f['what_worked'])}")
-            if f.get("what_didnt"):
-                st.caption(f"פחות: {_clean(f['what_didnt'])}")
+    with st.expander("💰 סיכום תקציב"):
+        st.caption(
+            f"האינדיקציה היא {dm.PER_MISHMAR_BUDGET_NIS} ₪ למשמר — ממוצע שכולל מרצים "
+            "וכיבוד יחד. חריגה במשמר בודד אינה שגיאה: היא נמשכת מהסעיף העונתי."
+        )
+        with st.form(f"budget-{mid}"):
+            st.markdown("**מרצים שהגיעו ומה שולם להם** *(0 = הגיע בהתנדבות)*")
+            paid = {}
+            for i, name in enumerate(speakers):
+                paid[name] = st.number_input(f"{name} (₪)", min_value=0.0, step=50.0,
+                                             key=f"pay-{mid}-{i}")
+            if not speakers:
+                st.caption("לא רשומים מרצים במבנה הערב.")
+            extra_name = st.text_input("מרצה נוסף שלא מופיע למעלה")
+            extra_amt = st.number_input("תשלום למרצה הנוסף (₪)", min_value=0.0, step=50.0)
+            refreshments = st.number_input("כיבוד (₪)", min_value=0.0, step=10.0)
+            other = st.number_input("הוצאות אחרות (₪)", min_value=0.0, step=10.0)
+            if st.form_submit_button("שמור סיכום תקציב"):
+                n = 0
+                for name, amt in paid.items():
+                    dm.add_budget_entry(mid, "מרצה", actual_cost=amt, description=name); n += 1
+                if extra_name.strip():
+                    dm.add_budget_entry(mid, "מרצה", actual_cost=extra_amt,
+                                        description=extra_name.strip()); n += 1
+                if refreshments:
+                    dm.add_budget_entry(mid, "כיבוד", actual_cost=refreshments, description="כיבוד"); n += 1
+                if other:
+                    dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
+                st.toast(f"נשמרו {n} שורות תקציב"); st.rerun()
+        spent = (m or {}).get("budget_used") or 0
+        st.metric("סה״כ הוצאות למשמר הזה", _fmt_nis(spent))
+        if spent > dm.PER_MISHMAR_BUDGET_NIS:
+            st.info("מעל האינדיקציה — לידיעה, לא לדאגה.")
 
 
 def show_mishmar_page() -> None:
