@@ -607,6 +607,37 @@ def show_admin_dashboard() -> None:
 from datetime import date as _date_cls
 
 
+WF_SECTIONS = ["🎯 בניית הערב", "✅ משימות", "🌙 אחרי המשמר"]
+
+
+def _goto(nav: str, mishmar_id: Optional[int] = None,
+          section: Optional[str] = None, lesson_focus: Optional[int] = None) -> None:
+    """Deep-link navigation. STAGED, not direct: Streamlit forbids writing a
+    widget's session key after that widget was drawn in the current run, and
+    the nav radio always draws before any button that calls this. So the
+    request is parked under one key and applied at the very top of main(),
+    before a single widget exists. This is what turns «התחל» from a status
+    button into a door to the right place."""
+    st.session_state["_goto_req"] = {
+        "nav": nav, "workfile_mishmar": mishmar_id,
+        "wf_section": section, "wf_focus_lesson": lesson_focus,
+    }
+    st.rerun()
+
+
+def _apply_goto() -> None:
+    """First thing in main(): land any staged deep link while no widget exists."""
+    req = st.session_state.pop("_goto_req", None)
+    if not req:
+        return
+    st.session_state["nav"] = req["nav"]
+    if req.get("workfile_mishmar") is not None:
+        st.session_state["workfile_mishmar"] = req["workfile_mishmar"]
+    if req.get("wf_section") is not None:
+        st.session_state["wf_section"] = req["wf_section"]
+    st.session_state["wf_focus_lesson"] = req.get("wf_focus_lesson")
+
+
 def _parse_date(value) -> Optional[_date_cls]:
     """Both date shapes that live in this schema: tasks.due_date is a real DATE
     (ISO out of PostgREST), but mishmarim.gregorian_date is TEXT in the repo's
@@ -639,6 +670,14 @@ _STATUS_CHIP = {"TO DO": ("לעשות", "gray"),
                 "DONE": ("הושלם", "green")}
 
 
+def _section_for_category(category: Optional[str]) -> str:
+    if category in ("נושא", "מרצים", "תוכן"):
+        return WF_SECTIONS[0]      # בניית הערב
+    if category == "אחרי":
+        return WF_SECTIONS[2]      # אחרי המשמר
+    return WF_SECTIONS[1]          # משימות
+
+
 def _urgency(t: dict) -> str:
     """red = past the recommended date · yellow = within the week · green = open.
     The deck calls the dates a recommendation, so red is a nudge, not an alarm."""
@@ -652,7 +691,8 @@ def _urgency(t: dict) -> str:
     return "green"
 
 
-def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True) -> None:
+def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True,
+               link: bool = False) -> None:
     """One task as a bordered card: description, chips, soft nudge, actions."""
     urgency = _urgency(t)
     with st.container(border=True):
@@ -690,20 +730,28 @@ def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True) -> None:
                 dm.update_task_status(t["id"], "DONE")
                 st.toast(f"«{_clean(t['task_description'])[:40]}» הושלם 🎉")
                 st.rerun()
-            other = ("↩ לעשות", "TO DO") if status == "IN PROGRESS" else ("▶ התחל", "IN PROGRESS")
-            if b2.button(other[0], key=f"{key_prefix}-{t['id']}-mv"):
-                dm.update_task_status(t["id"], other[1]); st.rerun()
+            if link:
+                # «התחל» is a DOOR, not a status flip: it lands on the section
+                # of the workfile where this task is actually done.
+                if b2.button("פתח ↗", key=f"{key_prefix}-{t['id']}-go",
+                             help="פותח את המקום שבו סוגרים את המשימה"):
+                    _goto(NAV_WORKFILE, t.get("mishmar_id"),
+                          _section_for_category(t.get("category")))
+            else:
+                other = ("↩ לעשות", "TO DO") if status == "IN PROGRESS" else ("▶ התחל", "IN PROGRESS")
+                if b2.button(other[0], key=f"{key_prefix}-{t['id']}-mv"):
+                    dm.update_task_status(t["id"], other[1]); st.rerun()
 
 
 def _card_grid(items: list[dict], key_prefix: str, per_row: int = 2,
-               show_mishmar: bool = True) -> None:
+               show_mishmar: bool = True, link: bool = False) -> None:
     # st.columns mirrors under RTL, so the first card of each row lands on the
     # RIGHT — Hebrew reading order — with no extra work here.
     for i in range(0, len(items), per_row):
         cols = st.columns(per_row)
         for col, t in zip(cols, items[i:i + per_row]):
             with col:
-                _task_card(t, key_prefix, show_mishmar=show_mishmar)
+                _task_card(t, key_prefix, show_mishmar=show_mishmar, link=link)
 
 
 def _stepper_html(progress: dict) -> str:
@@ -762,8 +810,9 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
 
         nxt = progress.get("next_task")
         if nxt:
-            st.markdown(
-                f"<div style='background:#f5edda;border-radius:10px;"
+            nc1, nc2 = st.columns([4.2, 1])
+            nc1.markdown(
+                f"<div style='background:#e7edf9;border-radius:10px;"
                 f"padding:.55rem .9rem;margin:.3rem 0 .5rem'>"
                 f"⭐ <b>הצעד הבא:</b> {_clean(nxt['task_description'])}"
                 + (f" <span class='card-meta'>מומלץ עד {_fmt_date(nxt['due_date'])}</span>"
@@ -771,12 +820,15 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
                 + "</div>",
                 unsafe_allow_html=True,
             )
+            if nc2.button("פתח ↗", key=f"next-{m['id']}", type="primary"):
+                _goto(NAV_WORKFILE, m["id"],
+                      _section_for_category(nxt.get("category")))
 
         open_cur = [t for t in cur["tasks"] if t["status"] != "DONE"]
         if open_cur:
             st.markdown(f"**המשימות של שלב «{cur['label']}» ({len(open_cur)}):**")
             _card_grid(sorted(open_cur, key=lambda t: t.get("due_date") or "9999"),
-                       f"hero-{m['id']}", show_mishmar=False)
+                       f"hero-{m['id']}", show_mishmar=False, link=True)
             # A teaser, not a list: the next phase exists, and it can wait.
             ni = progress["current"] + 1
             if ni < len(progress["phases"]):
@@ -824,7 +876,10 @@ def show_student_view(student_name: str) -> None:
     today = _date_cls.today()
     upcoming = [m for m in mine
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
-    hero = min(upcoming, key=lambda m: m["gregorian_date"]) if upcoming else mine[-1]
+    # Sort by the PARSED date. gregorian_date is d.m.Y text, and a string min()
+    # puts 15.10 before 8.10 — the "wrong next Mishmar" bug.
+    hero = (min(upcoming, key=lambda m: _parse_date(m["gregorian_date"]) or today)
+            if upcoming else mine[-1])
 
     # Overdue anywhere is the one thing allowed to jump the phase queue.
     overdue = [t for t in all_tasks
@@ -832,7 +887,8 @@ def show_student_view(student_name: str) -> None:
     if overdue:
         st.markdown(f"#### 🔴 עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
         st.caption("המלצה — לא חוק. אבל אלה קודמים לכל השאר.")
-        _card_grid(sorted(overdue, key=lambda t: t.get("due_date") or "9999"), "ovd")
+        _card_grid(sorted(overdue, key=lambda t: t.get("due_date") or "9999"),
+                   "ovd", link=True)
 
     st.markdown("#### ⭐ המשמר הבא שלי")
     _next_mishmar_hero(hero, progress[hero["id"]])
@@ -1535,12 +1591,19 @@ def show_mishmar_page() -> None:
                 unsafe_allow_html=True,
             )
 
-    t1, t2, t3 = st.tabs(["🎯 בניית הערב", "✅ משימות", "🌙 אחרי המשמר"])
-    with t1:
+    # A keyed control instead of st.tabs — tabs cannot be selected
+    # programmatically, and deep links from the home page must land on a
+    # specific section.
+    if st.session_state.get("wf_section") not in WF_SECTIONS:
+        st.session_state["wf_section"] = WF_SECTIONS[0]
+    section = st.radio("אזור", WF_SECTIONS, key="wf_section",
+                       horizontal=True, label_visibility="collapsed")
+    st.divider()
+    if section == WF_SECTIONS[0]:
         _topic_and_structure(mid)
-    with t2:
+    elif section == WF_SECTIONS[1]:
         _tasks_tab(mid, progress)
-    with t3:
+    else:
         _after_tab(mid)
 
 
@@ -1757,6 +1820,7 @@ def _route_main() -> None:
 def main() -> None:
     inject_rtl()
     _init_session()
+    _apply_goto()
 
     info = bootstrap()
     if not info.get("storage_ok"):
