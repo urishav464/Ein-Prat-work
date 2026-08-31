@@ -14,6 +14,7 @@ do not expose it while the speaker index holds contact details.
 from __future__ import annotations
 
 import html
+import os
 from typing import Optional
 
 import streamlit as st
@@ -38,6 +39,28 @@ ADMIN_NAMES = {"uri", "אורי", "ori"}
 # --------------------------------------------------------------------------
 # 1. Initialisation
 # --------------------------------------------------------------------------
+
+
+@st.cache_resource
+def build_stamp() -> str:
+    """The deployed commit, visible in the sidebar — so "did the app update?"
+    is answered by looking, not guessing. Streamlit Cloud clones the repo, so
+    git is present; anything failing falls back quietly."""
+    import subprocess
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=os.path.dirname(os.path.abspath(__file__))
+                             ).stdout.strip()
+        when = subprocess.run(["git", "log", "-1", "--format=%cd", "--date=format:%d.%m %H:%M"],
+                              capture_output=True, text=True, timeout=5,
+                              cwd=os.path.dirname(os.path.abspath(__file__))
+                              ).stdout.strip()
+        if sha:
+            return f"{sha} · {when}"
+    except Exception:
+        pass
+    return "לא ידוע"
 
 
 @st.cache_resource
@@ -2072,6 +2095,7 @@ def show_sidebar() -> None:
                  key="nav", label_visibility="collapsed")
         st.divider()
         st.caption('🕯️ שנה ב׳ · תשפ״ז · 5787')
+        st.caption(f"גרסה: {build_stamp()}")
         if st.button("התנתק", width="stretch"):
             logout()
             st.rerun()
