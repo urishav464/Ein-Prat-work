@@ -42,7 +42,8 @@ Path-scoped rules load automatically when their files enter context:
 ```
 app.py                 # Streamlit UI (render only; global chat panel; phase-driven)
 data_manager.py        # the ONLY data seam — Supabase REST, seeding, phase model
-chat_agent.py          # Sonnet 5 + 13 tools + the scout; generator prompt as system prompt
+chat_agent.py          # Anthropic client + the scout (live); the 13-tool chat loop (dormant)
+chat_panel.py          # the chat UI — imported only when app.CHAT_ENABLED is True
 speaker_search.py      # discovery (mines names) + verification, throttled
 archive.py             # cross-year memory over 2025-26 work-files
 supabase_schema.sql    # tables, views, RLS + GRANTs — run in Supabase SQL Editor

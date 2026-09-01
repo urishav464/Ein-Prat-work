@@ -15,7 +15,9 @@ paths:
 
 **The workfile is two columns, not tabs.** Under RTL `st.columns` mirrors, so declaring `[evening, tasks]` puts the evening on the RIGHT (verified: x=626 vs x=80) and Streamlit stacks them on a phone. The evening column is three expanders (`WF_STRUCTURE` / `WF_LOGISTICS` / `WF_AFTER`); the tasks column is the ONLY task board, so `_tasks_tab` now renders every phase including «אחרי» — routing a phase elsewhere would make it disappear. A deep link opens a panel by setting `wf_panel` **and bumping `wf_panel_nonce`**, which is part of the expander's `key`: an expander remembers its open state client-side, so remounting is the only reliable way to force one open. A Mishmar with no topic skips the columns entirely — there is one thing to do and two columns of empty panels would hide it.
 
-**The chat is off behind `CHAT_ENABLED = False`** — panel not rendered, content full width. `render_chat_panel`, the tool loop and the `chat_messages` rows all stay; the scout behind «חיפוש מרצים» is a separate, button-triggered model call and is unaffected.
+**The chat is off behind `CHAT_ENABLED = False`** — panel not rendered, content full width. The panel UI lives in `chat_panel.py`, imported lazily only when the flag is on (moved out of `app.py` so 170 dormant lines stop costing every reader); `chat_agent.py` keeps the tool loop and the `chat_messages` rows stay. The scout behind «חיפוש מרצים» is a separate, button-triggered model call and is unaffected.
+
+**A `st.rerun()` after `form_submit_button` is a duplicate run** — the submit already reruns. It is tolerated only because reads are cached (≈100 ms, 0 queries); do not add new ones, and convert a form to keyed widgets + `on_click` when you touch it.
 
 **Probe trap: a `st.selectbox`'s current value is in `input.value`, not `inner_text`** — reading the element's text shows only the label, which looks exactly like an empty control.
 
