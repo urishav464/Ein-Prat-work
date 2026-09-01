@@ -1284,6 +1284,19 @@ def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
         st.session_state["verify_name"] = name
 
 
+CONFIDENCE_CHIP = {
+    "high": ("🟢 ודאות גבוהה", "green"),
+    "medium": ("🟡 ודאות בינונית", "yellow"),
+    "low": ("🟠 ודאות נמוכה", "gold"),
+}
+REGION_HELP = {
+    "🟢": "עד ~40 דקות מהמדרשה",
+    "🟡": "כשעה–שעה וחצי",
+    "🔴": "שעתיים ומעלה — צריך הסדר הסעה",
+    "⚪": "מיקום לא ידוע מהתוצאות",
+}
+
+
 def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
     """One researched candidate: who they are, where they are, why they fit,
     and the evidence. Everything here is grounded in what the search returned —
@@ -1292,73 +1305,77 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
     name = c["name"]
     display = f"{c['title']} {name}" if c.get("title") else name
     with st.container(border=True):
-        chips = [_chip("🌐 מהרשת", "blue")]
+        label, kind = CONFIDENCE_CHIP.get(c.get("confidence") or "low",
+                                          CONFIDENCE_CHIP["low"])
+        chips = [_chip(label, kind)]
+        flag = c.get("region_flag") or "⚪"
+        chips.append(_chip(f"{flag} {c.get('region_hint') or 'מיקום לא ידוע'}",
+                           "green" if flag == "🟢" else
+                           "yellow" if flag == "🟡" else
+                           "red" if flag == "🔴" else "gray"))
         for f in c.get("flags", []):
             chips.append(_chip(f, "yellow"))
         st.markdown(
             f"<div class='task-desc'>{_clean(display)}</div><div>{''.join(chips)}</div>",
             unsafe_allow_html=True,
         )
-        facts = []
+        st.caption(REGION_HELP.get(flag, "") + (
+            " · הוודאות הועלתה על סמך עמוד מוסדי ופעילות עדכנית"
+            if c.get("promoted") else ""))
         if c.get("affiliation"):
-            facts.append(f"🏛️ {_clean(c['affiliation'])}")
-        if c.get("region_hint"):
-            facts.append(f"📍 {_clean(c['region_hint'])}")
-        if facts:
-            st.caption(" · ".join(facts))
+            st.markdown(f"🏛️ {_clean(c['affiliation'])}")
         if c.get("bio"):
             st.markdown(_clean(c["bio"]))
         if c.get("rationale"):
             st.caption("למה מתאים: " + _clean(c["rationale"]))
+        if c.get("recent_years"):
+            st.caption("פעיל/ה לפי התוצאות בשנים: " + ", ".join(c["recent_years"][:4]))
         if c.get("already_approached"):
             st.warning("‼️ כבר פנו לאדם הזה השנה — בדקו את היומן במאגר לפני פנייה נוספת.")
         if c.get("history"):
             st.caption(f"🕓 אצלנו: {c['history']}")
         if c.get("link"):
             st.markdown(f"📄 [מאמר / ראיון בנושא]({c['link']})")
-        for ev in (c.get("evidence") or [])[:2]:
+        for ev in (c.get("evidence") or [])[:3]:
             if ev.get("href"):
                 st.caption(f"[{_clean(ev.get('title') or ev['href'])[:80]}]({ev['href']})")
         st.caption("☎️ פרטי קשר לא נשלפים מהרשת — מצאו אותם דרך העמוד המוסדי.")
 
-        ac1, ac2, ac3 = st.columns([1.6, 1.1, 0.7])
+        ac1, ac2, ac3 = st.columns([1.6, 1.2, 0.7])
         if mid:
             lessons = dm.get_lessons(mid)
-            if lessons:
-                labels = {l["slot_order"]: f"{l['slot_order']}. {l.get('title') or ''}"
-                          for l in lessons if not l.get("is_break")}
+            slots = [l for l in lessons if not l.get("is_break")]
+            labels = {l["id"]: f"{l.get('start_time') or ''} · {l.get('title') or ''}".strip(" ·")
+                      or f"מקטע {l['slot_order']}" for l in slots}
+            if labels:
+                lid = ac1.selectbox("מקטע", list(labels), format_func=lambda i: labels[i],
+                                    key=f"slot-{idx}-{name}", label_visibility="collapsed")
+                # A candidate, NOT the speaker: you gather three and close one
+                # later, in the workfile. Assigning straight from a search made
+                # the first plausible name the decision.
+                if ac2.button("➕ הוסף כמועמד", key=f"cand-{idx}-{name}", type="primary",
+                              help="מוסיף לרשימת המועמדים של המקטע — ולמאגר המשותף"):
+                    href = c.get("link") or next(
+                        (e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
+                    dm.add_new_speaker(
+                        name=display, expertise_topics=c.get("bio") or None,
+                        verification_url=href, source_type="web_search",
+                        lesson_fit=lesson or None,
+                        notes=" · ".join(x for x in [
+                            c.get("affiliation"), c.get("region_hint"),
+                            "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
+                    dm.add_lesson_speaker(lid, name,
+                                          student_id=st.session_state.student_id)
+                    st.toast(f"«{name}» נוסף כמועמד ל{labels[lid]} — ולמאגר")
+                    st.rerun()
             else:
-                labels = {i: f"שיעור {i}" for i in (1, 2, 3, 4)}
-            slot = ac1.selectbox(
-                "מקטע", list(labels), format_func=lambda i: labels[i],
-                key=f"slot-{idx}-{name}", label_visibility="collapsed")
-            if ac2.button("➕ שבץ", key=f"attach-{idx}-{name}", type="primary",
-                          help="מוסיף למאגר אם חדש, ומשבץ למקטע הנבחר"):
-                href = c.get("link") or next(
-                    (e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
-                dm.add_new_speaker(
-                    name=display,
-                    expertise_topics=c.get("bio") or None,
-                    verification_url=href, source_type="web_search",
-                    lesson_fit=lesson or None,
-                    notes=" · ".join(
-                        x for x in [c.get("affiliation"), c.get("region_hint"),
-                                    "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
-                # Attaching is not approaching: the name goes on the slot, the
-                # journal stays quiet until the pair actually reaches out.
-                dm.upsert_lesson(mid, int(slot), speaker_name=name,
-                                 student_id=st.session_state.student_id)
-                st.toast(f"«{name}» נוסף למאגר ושובץ למקטע {slot}")
-                st.rerun()
+                ac1.caption("אין עדיין מקטעים במשמר — צרו את שלד הערב קודם")
         else:
-            ac1.caption("בחרו משמר למעלה כדי לשבץ")
+            ac1.caption("בחרו משמר למעלה כדי להוסיף כמועמד")
         if ac3.button("אמת", key=f"scv-{idx}-{name}"):
             st.session_state["verify_name"] = name
 
 
-# The angle is a RECOMMENDATION, empty by default. Keyed by label rather than
-# by profile id because a selectbox whose first option is "" renders blank —
-# the reader would see a label with no value and not know it was a choice.
 LESSON_ANGLES = {
     "— בלי המלצה, לחפש בכל הזוויות —": "",
     "יסודות — היסטוריון, חוקר, איש אקדמיה": "1",
@@ -1415,15 +1432,40 @@ def show_speaker_search() -> None:
         ) if mine else None
         go = st.form_submit_button("🔎 סרוק את הרשת", type="primary")
 
-    # The scout fires ONLY here (rerun trap), and is cached per query so
-    # switching pages and returning does not re-spend the model call.
+    st.caption(
+        "סריקה יסודית מרחיבה את החיפוש עד שיש ארבעה שמות בוודאות גבוהה, "
+        "ומעמיקה על כל אחד מהם — זה לוקח דקה או שתיים, פעם אחת. "
+        "התוצאה נשמרת, ואפשר לפתוח אותה שוב בלי לשלם עליה."
+    )
+
+    # The scout fires ONLY here (rerun trap). Its result is saved, so returning
+    # to the screen — or a partner opening it — costs nothing.
     if go and (topic.strip() or lesson_topic.strip()):
-        with st.spinner("סורק את הרשת ומסנן… (עד חצי דקה)"):
-            st.session_state["scout_result"] = ca.scout_speakers(
-                topic.strip(), lesson, lesson_topic.strip())
-            st.session_state["scout_key"] = (topic.strip(), lesson_topic.strip(), lesson)
+        with st.spinner("סורק את הרשת · מעמיק על המועמדים · מסנן…"):
+            res = ca.scout_speakers(topic.strip(), lesson, lesson_topic.strip())
+        st.session_state["scout_result"] = res
         st.session_state.pop("verify_name", None)
         st.session_state.pop("verify_cache", None)
+        if not res.get("fallback"):
+            dm.save_search(topic.strip(), res, mishmar_id=mid,
+                           lesson_topic=lesson_topic.strip(), angle=lesson,
+                           student_id=st.session_state.student_id)
+
+    # Previous scans of this Mishmar — what the pair (or the partner) already tried.
+    saved = dm.get_searches(mid) if mid else dm.get_searches()
+    if saved:
+        with st.expander(f"🕘 חיפושים קודמים ({len(saved)})"):
+            for row in saved:
+                r1, r2 = st.columns([4, 1])
+                r1.markdown(
+                    f"**{_clean(row['topic'])}**"
+                    + (f" · {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
+                    + f" <span class='card-meta'>{(row.get('created_at') or '')[:10]} · "
+                    + f"{len((row.get('results_json') or {}).get('candidates') or [])} מועמדים</span>",
+                    unsafe_allow_html=True)
+                if r2.button("פתח", key=f"reopen-{row['id']}"):
+                    st.session_state["scout_result"] = row["results_json"]
+                    st.rerun()
 
     result = st.session_state.get("scout_result")
     if not result:
@@ -1437,13 +1479,30 @@ def show_speaker_search() -> None:
 
     if not result.get("fallback"):
         st.divider()
-        st.markdown(f"#### המועמדים שנבדקו ({len(result['candidates'])})")
         cands = result["candidates"]
+        strong = result.get("strong", 0)
+        target = result.get("target", 4)
+        st.markdown(f"#### המועמדים שנבדקו ({len(cands)})")
+        # Say plainly what was found. Padding four weak names into a list that
+        # LOOKS like it hit the target is the one thing this screen must not do.
+        if strong >= target:
+            st.success(f"✅ {strong} מועמדים בוודאות גבוהה — כפי שביקשנו.")
+        else:
+            st.info(
+                f"נמצאו **{strong}** בוודאות גבוהה מתוך {target} שביקשנו "
+                f"(אחרי {raw.get('rounds_used', 1)} סבבי חיפוש ו-{len(raw.get('queries') or [])} שאילתות). "
+                "השאר מוצגים עם דרגת הוודאות שלהם — אפשר לחדד את נושא השיעור ולסרוק שוב."
+            )
         for i in range(0, len(cands), 2):
             cols = st.columns(2)
             for col, c in zip(cols, cands[i:i + 2]):
                 with col:
                     _scout_card(c, mid, lesson, i)
+        if result.get("rejected"):
+            with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})"):
+                st.caption("כדי שלא תחפשו שוב את אותם שמות.")
+                for r in result["rejected"]:
+                    st.markdown(f"- **{_clean(r.get('name') or '')}** — {_clean(r.get('why') or '')}")
         with st.expander("🌐 כל מה שהחיפוש הגולמי העלה"):
             _raw_search_results(raw)
     else:
@@ -2049,6 +2108,12 @@ def _logistics_panel(mid: int, m: dict) -> None:
     """Everything the evening needs that is not a lesson: what to buy, which
     room each חבורה sits in, and the invitation that goes out."""
     items = dm.get_logistics(mid)
+    if items.get("_missing"):
+        st.warning(
+            "טבלת הלוגיסטיקה עוד לא קיימת במסד. הריצו את `supabase_schema.sql` "
+            "ב-Supabase → SQL Editor, ורשימת הכיבוד, חלוקת החללים וההזמנה ייפתחו כאן."
+        )
+        return
     _logistics_list(
         mid, "כיבוד", items.get("כיבוד", []), "🍎 רשימת הכיבוד",
         "מה קונים לערב. סימון ✓ = נקנה.",
@@ -2096,6 +2161,25 @@ def _reset_panel(mid: int, m: dict) -> None:
             st.rerun()
 
 
+def _safe(fn, *args, **kwargs) -> None:
+    """Render one panel; if it fails, say so IN that panel and let the rest of
+    the page live.
+
+    Not a blanket try/except: it wraps exactly the three evening panels. A
+    missing `logistics_items` used to raise inside the right column, which
+    aborted the whole render — so the tasks column and the reset button
+    vanished too, and the reported symptom was «the two columns are gone».
+    """
+    try:
+        fn(*args, **kwargs)
+    except Exception as exc:                      # noqa: BLE001 — deliberate
+        st.error(
+            "החלק הזה לא נטען. אם הרצתם לאחרונה גרסה חדשה — "
+            "הריצו שוב את `supabase_schema.sql` ב-Supabase."
+        )
+        st.caption(f"{type(exc).__name__}: {exc}"[:300])
+
+
 def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
     """The workfile: the EVENING on the right, the TASKS on the left.
 
@@ -2115,11 +2199,11 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
     right, left = st.columns([1.15, 1], gap="medium")
     with right:
         with _wf_panel(WF_STRUCTURE, f"{len([l for l in lessons if not l.get('is_break')])} מקטעים"):
-            _topic_and_structure(mid, tasks, lessons=lessons)
+            _safe(_topic_and_structure, mid, tasks, lessons=lessons)
         with _wf_panel(WF_LOGISTICS):
-            _logistics_panel(mid, m)
+            _safe(_logistics_panel, mid, m)
         with _wf_panel(WF_AFTER):
-            _after_tab(mid)
+            _safe(_after_tab, mid)
         _reset_panel(mid, m)
     with left:
         st.markdown("#### ✅ המשימות")
@@ -2693,6 +2777,20 @@ def main() -> None:
                 "שלושתם ב-Secrets של Streamlit. ההוראות המלאות ב-`DEPLOY.md`."
             )
         return
+    # The database can be a version behind the code — the SQL file has stamped
+    # its own version since v2, and until now nobody read it. The result was a
+    # redacted APIError three screens deep instead of one sentence here.
+    if info.get("schema_stale"):
+        have = info.get("schema_version")
+        st.error(
+            f"⚠️ **המסד מפגר אחרי הקוד.** גרסת הסכימה במסד: "
+            f"**{have if have is not None else 'לא מסומנת'}**, "
+            f"והקוד דורש **{info.get('required_version')}**.\n\n"
+            "פתחו את Supabase → SQL Editor, הדביקו את `supabase_schema.sql` "
+            "מהריפו והריצו. הקובץ אידמפוטנטי — הרצה חוזרת בטוחה. "
+            "עד אז חלקים מהמסכים יופיעו ריקים."
+        )
+
     if info.get("seeded"):
         st.toast(
             f"הועברו למסד: {info['tasks']} משימות · {info['mishmarim']} משמרים. "

@@ -218,6 +218,31 @@ def _now_iso() -> str:
     return _datetime.utcnow().isoformat()
 
 
+# The schema the CODE expects. supabase_schema.sql stamps its own number into
+# app_meta on every run, and the app compares the two on start. Without this
+# check a database one version behind looks perfectly healthy and then throws a
+# redacted APIError deep inside a screen — which is exactly how a missing
+# `logistics_items` blanked the whole workfile instead of saying «run the SQL».
+REQUIRED_SCHEMA_VERSION = 5
+
+
+def _missing_relation(exc: Exception) -> bool:
+    """Is this «that table/column does not exist» rather than a real failure?"""
+    low = f"{type(exc).__name__}: {exc}".lower()
+    return any(k in low for k in ("pgrst205", "pgrst204", "pgrst106",
+                                  "could not find the table",
+                                  "could not find the", "does not exist"))
+
+
+def schema_version() -> Optional[int]:
+    """The version stamped in the database, or None if it was never stamped."""
+    try:
+        row = _one(_t("app_meta").select("value").eq("key", "schema_version").execute())
+        return int((row or {}).get("value"))
+    except Exception:
+        return None
+
+
 def storage_ready() -> dict:
     """Cheap probe: are the credentials good and has the schema been installed?"""
     try:
@@ -226,7 +251,11 @@ def storage_ready() -> dict:
         return {"ok": False, "reason": str(exc)}
     try:
         _rows(_t("app_meta").select("key").limit(1).execute())
-        return {"ok": True, "reason": ""}
+        found = schema_version()
+        return {"ok": True, "reason": "",
+                "schema_version": found,
+                "required_version": REQUIRED_SCHEMA_VERSION,
+                "schema_stale": found is None or found < REQUIRED_SCHEMA_VERSION}
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         low = detail.lower()
@@ -525,6 +554,9 @@ def bootstrap() -> dict:
     except Exception:
         pass
     out["storage_ok"] = True
+    out["schema_version"] = ready.get("schema_version")
+    out["required_version"] = REQUIRED_SCHEMA_VERSION
+    out["schema_stale"] = bool(ready.get("schema_stale"))
     return out
 
 
@@ -1407,8 +1439,18 @@ def get_logistics(mishmar_id: int) -> dict[str, list[dict]]:
     The refreshments list and the חבורות room allocation are the same shape:
     a label, an optional detail, and whether it is handled."""
     out: dict[str, list[dict]] = {k: [] for k in LOGISTICS_KINDS}
-    for r in _rows(_t("logistics_items").select("*")
-                   .eq("mishmar_id", mishmar_id).order("id").execute()):
+    try:
+        rows = _rows(_t("logistics_items").select("*")
+                     .eq("mishmar_id", mishmar_id).order("id").execute())
+    except Exception as exc:
+        # A database that has not had the migration run yet must degrade to an
+        # empty panel with an explanation — never take the screen down. Only
+        # «no such table» is swallowed; anything else is a real bug and stays loud.
+        if _missing_relation(exc):
+            out["_missing"] = True        # type: ignore[assignment]
+            return out
+        raise
+    for r in rows:
         out.setdefault(r["kind"], []).append(r)
     return out
 
@@ -1558,6 +1600,80 @@ def backfill_speaker_domains() -> dict:
             _t("speakers").update({"domains": want or None}).eq("id", r["id"]).execute()
             written += 1
     return {"examined": len(rows), "written": written}
+
+
+# --------------------------------------------------------------------------
+# Saved speaker searches
+# --------------------------------------------------------------------------
+
+
+def save_search(topic: str, results: dict, mishmar_id: Optional[int] = None,
+                lesson_topic: str = "", angle: str = "",
+                student_id: Optional[int] = None) -> Optional[int]:
+    """Keep a scan. A thorough search costs a minute of network and a model
+    call; without this, coming back to the screen pays it again and a partner
+    cannot see what has already been tried."""
+    row = _one(_t("speaker_searches").insert({
+        "mishmar_id": mishmar_id, "student_id": student_id,
+        "topic": topic, "lesson_topic": lesson_topic or None,
+        "angle": angle or None, "results_json": results,
+    }).execute())
+    return row.get("id") if row else None
+
+
+def get_searches(mishmar_id: Optional[int] = None, limit: int = 8) -> list[dict]:
+    """Recent saved scans, newest first. Missing table degrades to none."""
+    try:
+        q = _t("speaker_searches").select("*").order("id", desc=True).limit(limit)
+        if mishmar_id is not None:
+            q = q.eq("mishmar_id", mishmar_id)
+        rows = _rows(q.execute())
+    except Exception as exc:
+        if _missing_relation(exc):
+            return []
+        raise
+    for r in rows:
+        if isinstance(r.get("results_json"), str):
+            try:
+                r["results_json"] = json.loads(r["results_json"])
+            except (ValueError, TypeError):
+                r["results_json"] = {}
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Distance from the Midrasha
+#
+# The Mishmar ends at 02:00, so a speaker who finishes at 23:30 still has to
+# drive home — distance weighs more here than it would at a daytime event.
+# The bands are the ones written in the speakers database itself.
+# --------------------------------------------------------------------------
+
+_REGION_BANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("🟢", ("ירושלים", "מעלה אדומים", "כפר אדומים", "גוש עציון", "אפרת",
+            "אלון שבות", "עלמון", "ענתות", "מבשרת", "הר הצופים", "גבעת רם")),
+    ("🟡", ("בית שמש", "מודיעין", "תל אביב", "רמת גן", "גבעתיים", "רעננה",
+            "כפר סבא", "הרצליה", "פתח תקווה", "רחובות", "נס ציונה", "המרכז",
+            "בר אילן", "בר-אילן", "אריאל", "שילה", "עפרה")),
+    ("🔴", ("חיפה", "צפת", "טבריה", "כרמיאל", "עכו", "נהריה", "הגליל", "הגולן",
+            "באר שבע", "אילת", "שדרות", "אשקלון", "אשדוד", "הנגב", "הדרום",
+            "הצפון", "ניו יורק", "בוסטון", "לונדון", "ארצות הברית")),
+)
+
+
+def region_flag(*texts: Optional[str]) -> str:
+    """🟢 / 🟡 / 🔴 by travel time to the Midrasha, or ⚪ when nothing says.
+
+    Pure and evidence-only: it reads places that appeared in what the search
+    returned. An unknown location stays ⚪ rather than being guessed at.
+    """
+    blob = " ".join(t or "" for t in texts)
+    if not blob.strip():
+        return "⚪"
+    for flag, places in _REGION_BANDS:
+        if any(p in blob for p in places):
+            return flag
+    return "⚪"
 
 
 def get_teaching_history() -> dict[str, dict]:
@@ -1880,6 +1996,7 @@ _READS = {
     "get_budget_rows":          ("budget",),
     "get_logistics":            ("logistics_items",),
     "get_teaching_history":     ("lessons", "feedback"),
+    "get_searches":             ("speaker_searches",),
 }
 _ALL = None   # «not sure» — clear everything
 _WRITES = {
@@ -1906,6 +2023,7 @@ _WRITES = {
     "toggle_logistics_item": ("logistics_items",),
     "delete_logistics_item": ("logistics_items",),
     "set_invitation": ("mishmarim",),
+    "save_search": ("speaker_searches",),
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),
     # a reset touches nearly every table — «not sure» is the honest answer

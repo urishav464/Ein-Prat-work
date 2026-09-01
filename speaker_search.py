@@ -52,6 +52,29 @@ import data_manager as dm
 # these module-level globals genuinely gate every user at once.
 # --------------------------------------------------------------------------
 
+# «Don't stop until there are four strong ones» — bounded, because we cannot
+# promise four exist for every topic. When the budget runs out the caller says
+# how many it actually found rather than padding the list with weak names.
+MIN_STRONG_CANDIDATES = 4
+MAX_DISCOVERY_QUERIES = 14
+ENRICH_TOP_N = 6
+
+# Round 2: the institutions the programme actually invites from — the list the
+# generator prompt already names. Round 3: shapes that surface active people
+# (an interview or a 2025-26 lecture proves someone is alive and teaching).
+ESCALATION_INSTITUTIONS = [
+    'site:ac.il "{topic}"',
+    '"{topic}" מכון הרטמן OR "ון ליר" OR "בית מורשה"',
+    '"{topic}" "בית אבי חי" OR "זלמן שזר" OR מכללת הרצוג',
+    '"{topic}" חוקר OR חוקרת מרצה ישראל',
+]
+ESCALATION_ACTIVITY = [
+    '"{topic}" ראיון',
+    '"{topic}" הרצאה 2025 OR 2026',
+    '"{topic}" פודקאסט עברית',
+    '"{topic}" ספר חדש ראיון',
+]
+
 MIN_INTERVAL_SEC = 4.0
 COOLDOWN_LADDER = (60, 300, 900)      # escalates while we keep getting blocked
 REGION = "il-he"
@@ -303,6 +326,26 @@ def _looks_like_person(name: str) -> bool:
     return True
 
 
+def _trim_to_name(captured: str) -> Optional[str]:
+    """The person inside a greedy capture, or None.
+
+    Both name patterns take up to three Hebrew words, so «ד״ר רות לוי מרצה»
+    captures a trailing common noun and the whole match was thrown away —
+    losing a real person, and (worse) counting her once instead of twice, which
+    is the difference between «medium» and «high» confidence. Backing off to the
+    first two words recovers her without loosening what counts as a person.
+    """
+    name = captured.strip()
+    if _looks_like_person(name):
+        return name
+    parts = [p for p in re.split(r"\s+", name) if p]
+    if len(parts) > 2:
+        shorter = " ".join(parts[:2])
+        if _looks_like_person(shorter):
+            return shorter
+    return None
+
+
 def extract_names(results: list[dict]) -> list[dict]:
     """Mine person-names out of search results.
 
@@ -321,8 +364,8 @@ def extract_names(results: list[dict]) -> list[dict]:
         blob = f"{title} {body}"
 
         for m in _RE_TITLED_NAME.finditer(blob):
-            name = m.group(1).strip()
-            if not _looks_like_person(name):
+            name = _trim_to_name(m.group(1))
+            if not name:
                 continue
             entry = found.setdefault(
                 name, {"name": name, "hits": 0, "titled": False, "evidence": []}
@@ -335,8 +378,8 @@ def extract_names(results: list[dict]) -> list[dict]:
         # Bare names only from titles, where a person's name is far more
         # likely to be the subject than in prose.
         for m in _RE_BARE_NAME.finditer(title):
-            name = m.group(1).strip()
-            if not _looks_like_person(name) or name in found:
+            name = _trim_to_name(m.group(1))
+            if not name or name in found:
                 continue
             found[name] = {
                 "name": name, "hits": 1, "titled": False, "evidence": [r],
@@ -440,35 +483,56 @@ def search_candidates(
     # a requirement, so an empty choice searches all three angles.
     if lesson in LESSON_PROFILES:
         profile = LESSON_PROFILES[lesson]
-        templates = profile["queries"][:max_queries]
+        round1 = list(profile["queries"][:max_queries])
     else:
         profile = {"label": "כל הזוויות"}
-        templates, seen_t = [], set()
+        round1, seen_t = [], set()
         for k in ("1", "2", "3"):          # round-robin so no angle is starved
-            for i, t in enumerate(LESSON_PROFILES[k]["queries"][:2]):
+            for t in LESSON_PROFILES[k]["queries"][:2]:
                 if t not in seen_t:
                     seen_t.add(t)
-                    templates.append(t)
-        templates = templates[:max_queries + 2]
+                    round1.append(t)
 
     index_hits = dm.search_speakers_by_topic(topic, lesson=lesson) if include_index else []
 
     raw: list[dict] = []
     queries: list[str] = []
     errors: list[dict] = []
+    web_names: list[dict] = []
 
-    for template in templates:
-        q = template.format(topic=subject)
-        queries.append(q)
-        try:
-            raw.extend(_fetch(q))
-        except SearchUnavailable as exc:
-            errors.append({"query": q, "error": str(exc), "manual": manual_search_links(q)})
-            # Keep going: a later query may hit the cache even while the
-            # network is down, and each failure carries its own manual link.
-            continue
+    def _run(templates: list[str]) -> None:
+        for template in templates:
+            if len(queries) >= MAX_DISCOVERY_QUERIES:
+                return
+            q = template.format(topic=subject)
+            if q in queries:
+                continue
+            queries.append(q)
+            try:
+                raw.extend(_fetch(q))
+            except SearchUnavailable as exc:
+                errors.append({"query": q, "error": str(exc),
+                               "manual": manual_search_links(q)})
+                # Keep going: a later query may hit the cache even while the
+                # network is down, and each failure carries its own manual link.
+                continue
 
-    web_names = extract_names(raw)
+    def _strong() -> int:
+        return sum(1 for e in web_names if e.get("confidence") == "high")
+
+    # ---- adaptive rounds -------------------------------------------------
+    # One pass used to be the whole search: if the first four queries returned
+    # thin results, the screen shrugged. The instruction now is «don't stop
+    # until there are four strong names» — bounded, because we cannot promise
+    # that four exist for every topic. Each round widens the net differently.
+    rounds = [round1, ESCALATION_INSTITUTIONS, ESCALATION_ACTIVITY]
+    rounds_used = 0
+    for templates in rounds:
+        _run(templates)
+        rounds_used += 1
+        web_names = extract_names(raw)
+        if _strong() >= MIN_STRONG_CANDIDATES or len(queries) >= MAX_DISCOVERY_QUERIES:
+            break
 
     # Annotate anything we already know about, so two trainees cannot approach
     # the same person unaware of each other. This runs even when the index is
@@ -482,6 +546,8 @@ def search_candidates(
         "topic": topic,
         "lesson_topic": lesson_topic,
         "subject": subject,
+        "rounds_used": rounds_used,
+        "strong_found": sum(1 for e in web_names if e.get("confidence") == "high"),
         "lesson": lesson,
         "lesson_label": profile["label"],
         "skipped": False,

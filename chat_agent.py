@@ -755,19 +755,22 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 # --------------------------------------------------------------------------
 
 SCOUT_SYSTEM = """\
-אתה סוקר מועמדים להרצאה במשמר של מדרשת עין פרת. תקבל תוצאות חיפוש גולמיות:
-שמות שנכרו מתוצאות חיפוש ברשת, עם הכותרות והקישורים שמהם הם חולצו.
+אתה סוקר מועמדים להרצאה במשמר של מדרשת עין פרת. תקבל שמות שנכרו מתוצאות חיפוש
+ברשת, ולכל שם — הכותרות, התקצירים והקישורים שנמצאו עליו, כולל בדיקת עומק.
 
-בחר את חמשת המועמדים הטובים ביותר לנושא. כללים קשיחים:
+בחר את **ארבעת** המועמדים הטובים ביותר לנושא. כללים קשיחים:
 1. **רק שמות שמופיעים בקלט.** אל תמציא שם, תואר, שיוך מוסדי או פרט קשר.
 2. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד —
    שפינוזה, לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין.
-3. כל שם מהרשת נושא דגל "⚠️ לאמת" — הוא לא אומת.
+3. כל שם נושא דגל "⚠️ לאמת" — הוא לא אומת על ידי אדם.
 4. **פרטי קשר לעולם לא.** אין טלפון, אין אימייל, גם אם הם מופיעים בתוצאה.
    במקום זה — הקישור המוסדי שבו אדם יוכל למצוא אותם.
-5. כל שדה שאי אפשר לבסס על הכותרות והקישורים שקיבלת — החזר "" ריק.
-   ניחוש הוא המצאה. עדיף שדה ריק על פרט שגוי שחניך יסתמך עליו.
+5. כל שדה שאי אפשר לבסס על מה שקיבלת — החזר "" ריק. ניחוש הוא המצאה.
+   עדיף שדה ריק על פרט שגוי שחניך יסתמך עליו.
 6. `link` חייב להיות אחד הקישורים שקיבלת בקלט, ורצוי כזה שנוגע לנושא.
+7. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
+   מרופדת גרועה מרשימה קצרה וכנה.
+8. ב-`rejected` פרט שמות ששקלת ופסלת ולמה (משפט קצר) — כדי שלא יחפשו אותם שוב.
 
 החזר JSON בלבד, במבנה:
 {"candidates": [{"name": "...", "title": "ד\"ר/הרב/... או \"\"",
@@ -776,7 +779,8 @@ SCOUT_SYSTEM = """\
   "bio": "משפט אחד — מי זה ובמה עוסק/ת",
   "rationale": "משפט אחד למה מתאים לנושא הזה",
   "link": "קישור למאמר/ראיון מתוך הקלט שמתקשר לנושא",
-  "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}]}
+  "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}],
+ "rejected": [{"name": "...", "why": "..."}]}
 """
 
 
@@ -808,19 +812,47 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
 
     # Compact inputs: the synthesis pays per token, and evidence snippets are
     # long. Project before sending, exactly like tool results are compacted.
-    index_part: list[dict] = []
+    # ---- deepen before curating ------------------------------------------
+    # Discovery mines names out of snippets; that is enough to KNOW a name and
+    # nowhere near enough to describe a person. Two extra searches per finalist
+    # (the ⚠️ לאמת checks we already had) buy the institutional page, the recent
+    # activity and the article the card wants — and let us raise confidence on
+    # evidence rather than on a guess.
+    shortlist = (raw.get("web_names") or [])[:ss.ENRICH_TOP_N]
+    for e in shortlist:
+        try:
+            v = ss.verify_speaker(e["name"], topic=raw.get("subject") or topic, depth=2)
+        except Exception:
+            continue
+        e["evidence"] = (e.get("evidence") or []) + (v.get("evidence") or [])
+        e["checklist"] = v.get("checklist") or {}
+        e["recent_years"] = v.get("recent_years") or []
+        for f in v.get("flags", []):
+            if f not in e.setdefault("flags", []):
+                e["flags"].append(f)
+        # Promotion is evidence-based: an institutional page AND recent activity.
+        blob = " ".join(f"{x.get('title','')} {x.get('body','')} {x.get('href','')}"
+                        for x in e["evidence"])
+        institutional = any(k in blob for k in
+                            ("ac.il", "org.il", "אוניברסיט", "מכון", "מכללה", "הרטמן",
+                             "ון ליר", "בית מורשה", "הרצוג", "אבי חי"))
+        if institutional and e["recent_years"] and e.get("confidence") != "high":
+            e["confidence"] = "high"
+            e["promoted"] = True
+
     web_part = [{
         "name": e.get("name"),
         "confidence": e.get("confidence"),
-        # three snippets, not two: affiliation and a topical article have to be
-        # GROUNDED in what we send, and one title rarely carries both.
+        "recent_years": e.get("recent_years") or [],
+        # snippets, not just titles: affiliation and a topical article have to
+        # be GROUNDED in what we send, and one title rarely carries both.
         "evidence": [{"title": (ev.get("title") or "")[:140],
                       "body": (ev.get("body") or "")[:220],
-                      "href": ev.get("href")} for ev in e.get("evidence", [])[:3]],
+                      "href": ev.get("href")} for ev in e.get("evidence", [])[:5]],
         "flags": e.get("flags", []),
-    } for e in raw.get("web_names", [])[:14]]
+    } for e in shortlist]
 
-    if not index_part and not web_part:
+    if not web_part:
         return {"fallback": True, "raw": raw}
 
     payload = json.dumps(
@@ -842,6 +874,7 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
         start, end = text.find("{"), text.rfind("}")
         data = json.loads(text[start:end + 1])
         candidates = data.get("candidates") or []
+        rejected = data.get("rejected") or []
     except (ChatUnavailable, Exception) as exc:
         return {"fallback": True, "raw": raw, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -880,7 +913,21 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
 
     if not vetted:
         return {"fallback": True, "raw": raw, "error": "empty synthesis"}
-    return {"fallback": False, "candidates": vetted, "raw": raw}
+
+    # Carry the mined confidence and the travel band onto each card, and report
+    # honestly how many are genuinely strong — the screen must never present
+    # four weak names as though the target was met.
+    by_name = {e["name"]: e for e in shortlist}
+    for c in vetted:
+        src = by_name.get(c["name"], {})
+        c["confidence"] = src.get("confidence") or "low"
+        c["promoted"] = bool(src.get("promoted"))
+        c["recent_years"] = src.get("recent_years") or []
+        c["region_flag"] = dm.region_flag(c.get("region_hint"), c.get("affiliation"))
+    strong = sum(1 for c in vetted if c["confidence"] == "high")
+    return {"fallback": False, "candidates": vetted, "raw": raw,
+            "rejected": [r for r in rejected if isinstance(r, dict)][:6],
+            "strong": strong, "target": ss.MIN_STRONG_CANDIDATES}
 
 
 # --------------------------------------------------------------------------

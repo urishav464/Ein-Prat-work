@@ -247,6 +247,22 @@ CREATE TABLE IF NOT EXISTS logistics_items (
 CREATE INDEX IF NOT EXISTS idx_logistics_mishmar ON logistics_items(mishmar_id, kind);
 ALTER TABLE logistics_items ENABLE ROW LEVEL SECURITY;
 
+-- חיפושי מרצים שמורים. סריקה יסודית עולה זמן וקריאת מודל, ובלי שמירה כל
+-- כניסה מחדש למסך משלמת אותה שוב — והשותף לא רואה מה כבר נבדק.
+CREATE TABLE IF NOT EXISTS speaker_searches (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    mishmar_id   integer REFERENCES mishmarim(id) ON DELETE CASCADE,
+    student_id   integer REFERENCES students(id)  ON DELETE SET NULL,
+    topic        text NOT NULL,
+    lesson_topic text,
+    angle        text,
+    results_json jsonb NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_speaker_searches_mishmar
+    ON speaker_searches(mishmar_id, id DESC);
+ALTER TABLE speaker_searches ENABLE ROW LEVEL SECURITY;
+
 -- ---------------------------------------------------------------------------
 -- 5. תצוגות
 --
@@ -416,7 +432,7 @@ GRANT ALL ON ALL TABLES     IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES  IN SCHEMA public TO service_role;
 
 -- ---------------------------------------------------------------------------
--- גרסאות 2–4 — הגירות נתונים בלבד. ההגירות המבניות עלו לסעיף 4ב, כדי
+-- גרסאות 2–5 — הגירות נתונים בלבד. ההגירות המבניות עלו לסעיף 4ב, כדי
 -- שהתצוגות ייבנו מעל הטבלאות המלאות כבר בהרצה הראשונה.
 -- ---------------------------------------------------------------------------
 
@@ -442,8 +458,10 @@ GRANT ALL ON lesson_speakers TO service_role;
 REVOKE ALL ON lesson_speakers FROM anon, authenticated;
 GRANT ALL ON logistics_items TO service_role;
 REVOKE ALL ON logistics_items FROM anon, authenticated;
+GRANT ALL ON speaker_searches TO service_role;
+REVOKE ALL ON speaker_searches FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '4')
+VALUES ('schema_version', '5')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
