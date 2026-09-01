@@ -1450,6 +1450,16 @@ def show_speaker_search() -> None:
             for col, c in zip(cols, cands[i:i + 2]):
                 with col:
                     _scout_card(c, mid, lesson, i)
+        # What the curation call cost, so the cache claim is checkable on the
+        # live deploy rather than asserted: cache_read > 0 on the second search
+        # of an evening means the prefix is being served at a tenth of the price.
+        u = result.get("usage") or {}
+        if u.get("input") is not None:
+            st.caption(
+                f"עלות הסינון: {u['input']:,} טוקנים נכנסים · {u.get('output') or 0:,} יוצאים · "
+                f"מהמטמון: {u.get('cache_read') or 0:,}"
+                + (f" · נכתב למטמון: {u['cache_write']:,}" if u.get("cache_write") else "")
+            )
         if result.get("rejected"):
             with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})"):
                 st.caption("כדי שלא תחפשו שוב את אותם שמות.")

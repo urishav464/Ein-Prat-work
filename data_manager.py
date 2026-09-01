@@ -1983,6 +1983,11 @@ _READS = {
     "get_logistics":            ("logistics_items",),
     "get_teaching_history":     ("lessons", "feedback"),
     "get_searches":             ("speaker_searches",),
+    # the three the audit found outside the registry: a speaker lookup used
+    # by every write path, and the web-search cache — one DB round-trip per
+    # _fetch, so a thorough scan paid up to 26 lookups before any network.
+    "resolve_speaker":          ("speakers",),
+    "cache_get":                ("search_cache",),
 }
 _ALL = None   # «not sure» — clear everything
 _WRITES = {
@@ -2010,6 +2015,7 @@ _WRITES = {
     "delete_logistics_item": ("logistics_items",),
     "set_invitation": ("mishmarim",),
     "save_search": ("speaker_searches",),
+    "cache_put": ("search_cache",),
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),
     # a reset touches nearly every table — «not sure» is the honest answer

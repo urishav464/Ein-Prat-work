@@ -781,6 +781,30 @@ SCOUT_SYSTEM = """\
   "link": "קישור למאמר/ראיון מתוך הקלט שמתקשר לנושא",
   "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}],
  "rejected": [{"name": "...", "why": "..."}]}
+
+--- חומר עזר קבוע (זהה בכל קריאה) ---
+
+המוסדות שהתוכנית מזמינה מהם, לזיהוי שיוך מוסדי בתוצאות: האוניברסיטה העברית,
+בר-אילן, תל אביב, בן-גוריון, חיפה, מכון שלום הרטמן, מכון ון ליר, בית אבי חי,
+בית מורשה, מכללת הרצוג, מרכז זלמן שזר, מכון פרדס, עלמא, בינה, קולות, המדרשה
+באורנים, ישיבת הקיבוץ הדתי, מכון הדר, מדרשת עין פרת עצמה.
+
+רצועות מרחק מהמדרשה (כפר אדומים) — הערב נגמר ב-02:00, ולכן מרחק שוקל יותר
+מאשר באירוע יום: 🟢 עד ~40 דק׳ — ירושלים · מעלה אדומים · כפר אדומים · גוש
+עציון · אפרת · מבשרת. 🟡 ~1–1.5 שעות — בית שמש · מודיעין · תל אביב · המרכז ·
+רעננה · פתח תקווה · רחובות. 🔴 שעתיים ומעלה — חיפה · הגליל · הגולן · באר שבע ·
+אילת · הנגב · חו״ל. ⚪ לא ידוע מהתוצאות. אל תנחש רצועה — אם אין מקום בתוצאות,
+השאר region_hint ריק.
+
+דוגמה קצרה לרשומה תקינה (השדות ריקים כשאין ביסוס):
+{"name": "רות לוי", "title": "ד\"ר", "affiliation": "החוג למחשבת ישראל, האוניברסיטה העברית",
+ "region_hint": "ירושלים", "bio": "חוקרת הגות יהודית מודרנית, מלמדת גם במכון הרטמן",
+ "rationale": "מאמרה על תשובה וזיכרון נוגע ישירות בשאלת הערב",
+ "link": "https://…/article", "evidence": [{"title": "…", "href": "https://…"}],
+ "flags": ["⚠️ לאמת"]}
+
+דוגמה לדחייה נכונה: {"name": "ברוך שפינוזה", "why": "הוגה היסטורי — טקסט ללמוד, לא אדם להזמין"}.
+דוגמה לשדה ריק נכון: affiliation "" כשהתוצאות מזכירות רק את שם המאמר ולא מוסד.
 """
 
 
@@ -846,9 +870,11 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
         "recent_years": e.get("recent_years") or [],
         # snippets, not just titles: affiliation and a topical article have to
         # be GROUNDED in what we send, and one title rarely carries both.
-        "evidence": [{"title": (ev.get("title") or "")[:140],
-                      "body": (ev.get("body") or "")[:220],
-                      "href": ev.get("href")} for ev in e.get("evidence", [])[:5]],
+        # four snippets, trimmed: measured ≈4.9k tokens per call at 5×(140+220),
+        # ≈3.1k at 4×(120+160) — the grounding survives, a third of the bill does not.
+        "evidence": [{"title": (ev.get("title") or "")[:120],
+                      "body": (ev.get("body") or "")[:160],
+                      "href": ev.get("href")} for ev in e.get("evidence", [])[:4]],
         "flags": e.get("flags", []),
     } for e in shortlist]
 
@@ -863,12 +889,27 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
 
     try:
         client = get_client()
+        # The system prompt is the only stable part of this request — the
+        # payload is unique per search. Sonnet 5 caches a prefix only from
+        # 1024 tokens up, which is why SCOUT_SYSTEM carries a fixed reference
+        # block; the 1h TTL fits how searches cluster in one evening. `medium`
+        # effort: curating six names into JSON is not a hard-reasoning task,
+        # and the default `high` spends thinking tokens it does not need.
         resp = client.messages.create(
             model=MODEL,
             max_tokens=2000,
-            system=SCOUT_SYSTEM,
+            system=[{"type": "text", "text": SCOUT_SYSTEM,
+                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            output_config={"effort": "medium"},
             messages=[{"role": "user", "content": payload}],
         )
+        usage = getattr(resp, "usage", None)
+        usage_out = {
+            "input": getattr(usage, "input_tokens", None),
+            "output": getattr(usage, "output_tokens", None),
+            "cache_read": getattr(usage, "cache_read_input_tokens", None),
+            "cache_write": getattr(usage, "cache_creation_input_tokens", None),
+        } if usage else {}
         text = "".join(b.text for b in resp.content
                        if getattr(b, "type", None) == "text")
         start, end = text.find("{"), text.rfind("}")
@@ -927,7 +968,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
     strong = sum(1 for c in vetted if c["confidence"] == "high")
     return {"fallback": False, "candidates": vetted, "raw": raw,
             "rejected": [r for r in rejected if isinstance(r, dict)][:6],
-            "strong": strong, "target": ss.MIN_STRONG_CANDIDATES}
+            "strong": strong, "target": ss.MIN_STRONG_CANDIDATES,
+            "usage": usage_out}
 
 
 # --------------------------------------------------------------------------
