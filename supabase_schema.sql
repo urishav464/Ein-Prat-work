@@ -183,6 +183,46 @@ CREATE INDEX IF NOT EXISTS idx_chat_lookup       ON chat_messages(mishmar_id, st
 CREATE INDEX IF NOT EXISTS idx_cache_created     ON search_cache(created_at);
 
 -- ---------------------------------------------------------------------------
+-- 4ב. הגירות עמודה — חייבות לרוץ **לפני** התצוגות
+--
+-- ‏`v_tasks_full` בנויה על `SELECT t.*`, ולכן פריסת העמודות שלה נקבעת ברגע
+-- שהיא נוצרת. הגירה שרצה אחרי בניית התצוגות מוסיפה עמודה לטבלה אבל **לא**
+-- לתצוגה — והאפליקציה קוראת דרך התצוגה. זה בדיוק מה שקרה ל-`details`:
+-- בהרצה ראשונה הוא נעדר מ-`v_tasks_full` והתיאור החופשי פשוט לא הגיע למסך,
+-- עד שהקובץ רץ פעם שנייה. לכן כל ADD COLUMN יושב כאן, מעל סעיף 5.
+-- ---------------------------------------------------------------------------
+
+-- שיעור נושא משך; הפסקות הן שורות לוז מלאות; דף מקורות נשמר כקישור.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS duration_minutes integer;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_break boolean NOT NULL DEFAULT false;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS source_url text;
+
+-- מרצים אופציונליים לשיעור: מועמדים עד שאחד נסגר. הטלפון חי רק כאן וברשומת
+-- המאגר — לעולם לא בהקשר הצ'אט ולא בתקציר המחולל.
+CREATE TABLE IF NOT EXISTS lesson_speakers (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    lesson_id  bigint NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    name       text NOT NULL,
+    phone      text,
+    status     text NOT NULL DEFAULT '⬜ לא פנינו',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_speakers_lesson ON lesson_speakers(lesson_id);
+ALTER TABLE lesson_speakers ENABLE ROW LEVEL SECURITY;
+
+-- תיאור חופשי למשימה; משוב נשמר פר-מקטע (בשם, כדי לשרוד מחיקת שורת לוז).
+ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS details text;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lesson_title text;
+
+-- משימה יכולה להצביע על מקטע מסוים בערב: «לסגור מי מעביר חבורות סבב א׳» היא
+-- משימה של שורת לוז אחת, ולא של המשמר בכללותו. NULL הוא תשובה לגיטימית —
+-- רוב המשימות (כיבוד, קישוט, הזמנה) אינן שייכות לאף מקטע. ON DELETE SET NULL:
+-- מחיקת מקטע מנתקת את המשימה, לא מוחקת אותה.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lesson_id bigint
+    REFERENCES lessons(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_lesson ON tasks(lesson_id);
+
+-- ---------------------------------------------------------------------------
 -- 5. תצוגות
 --
 -- PostgREST לא יודע לבטא צירופים ואגרגציות מורכבות, ולכן כל מה שדורש JOIN או
@@ -350,30 +390,9 @@ GRANT ALL ON ALL TABLES     IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES  IN SCHEMA public TO service_role;
 
 -- ---------------------------------------------------------------------------
--- גרסה 2 — מבנה הערב המפורט. כל הפקודות אידמפוטנטיות: הרצה חוזרת בטוחה.
+-- גרסאות 2–3 — הגירות נתונים בלבד. ההגירות המבניות עלו לסעיף 4ב, כדי
+-- שהתצוגות ייבנו מעל הטבלאות המלאות כבר בהרצה הראשונה.
 -- ---------------------------------------------------------------------------
-
--- שיעור נושא משך; הפסקות הן שורות לוז מלאות; דף מקורות נשמר כקישור.
-ALTER TABLE lessons ADD COLUMN IF NOT EXISTS duration_minutes integer;
-ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_break boolean NOT NULL DEFAULT false;
-ALTER TABLE lessons ADD COLUMN IF NOT EXISTS source_url text;
-
--- מרצים אופציונליים לשיעור: מועמדים עד שאחד נסגר. הטלפון חי רק כאן וברשומת
--- המאגר — לעולם לא בהקשר הצ'אט ולא בתקציר המחולל.
-CREATE TABLE IF NOT EXISTS lesson_speakers (
-    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lesson_id  bigint NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
-    name       text NOT NULL,
-    phone      text,
-    status     text NOT NULL DEFAULT '⬜ לא פנינו',
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_lesson_speakers_lesson ON lesson_speakers(lesson_id);
-ALTER TABLE lesson_speakers ENABLE ROW LEVEL SECURITY;
-
--- תיאור חופשי למשימה; משוב נשמר פר-מקטע (בשם, כדי לשרוד מחיקת שורת לוז).
-ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS details text;
-ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lesson_title text;
 
 -- מיזוג סטטוסים: «⏳ ממתין לתשובה» ≡ «📩 נשלחה פנייה». הנוסח השורד: 📩.
 UPDATE speakers         SET status = '📩 נשלחה פנייה' WHERE status LIKE '⏳%';
@@ -398,5 +417,5 @@ REVOKE ALL ON lesson_speakers FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '2')
+VALUES ('schema_version', '3')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;

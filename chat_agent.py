@@ -388,12 +388,18 @@ TOOLS: list[dict] = [
     },
     {
         "name": "add_task",
-        "description": "מוסיף משימה חדשה למשמר. תאריך היעד נגזר אוטומטית מהקטגוריה.",
+        "description": (
+            "מוסיף משימה חדשה למשמר. תאריך היעד נגזר אוטומטית מהקטגוריה. "
+            "אם המשימה שייכת למקטע מסוים בערב (למשל «מי מעביר את החבורות») — "
+            "העבירו את slot_order של אותו מקטע, והמשימה תיפתח ישירות שם."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "description": {"type": "string"},
                 "category": {"type": "string", "enum": list(dm.TASK_CATEGORIES)},
+                "slot_order": {"type": "integer",
+                               "description": "מספר המקטע בלוז, אם המשימה שייכת לאחד"},
             },
             "required": ["description"],
         },
@@ -615,9 +621,18 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
             return {"ok": True, "slot": slot, "source_url": args["url"]}
 
         if name == "add_task":
+            # The slot is resolved INSIDE the context Mishmar — the model names
+            # a slot_order, never a lesson id and never another Mishmar.
+            lesson_id = None
+            if args.get("slot_order") is not None:
+                lesson = next((l for l in dm.get_lessons(mishmar_id)
+                               if l["slot_order"] == int(args["slot_order"])), None)
+                if lesson is None:
+                    return {"error": f"אין מקטע {args['slot_order']} בלוז של המשמר הזה."}
+                lesson_id = lesson["id"]
             tid = dm.add_task(
                 mishmar_id, args["description"],
-                category=args.get("category"),
+                category=args.get("category"), lesson_id=lesson_id,
             )
             return {"ok": True, "task": dm.get_task(tid) or {"id": tid}}
 

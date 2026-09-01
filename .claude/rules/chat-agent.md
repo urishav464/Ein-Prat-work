@@ -21,7 +21,7 @@ A turn re-sends its whole history on every API call, and a tool-using turn makes
 ## The evening-builder tools (the pair's main work surface)
 
 - `save_lesson` takes `duration_minutes`, never a start time — times are derived (`recompute_lesson_times`) and every save reflows the evening; the tool returns the recomputed schedule so the model reports real times.
-- `add_candidate_speaker` / `close_speaker` / `set_source_sheet` resolve `slot_order` inside the context's Mishmar only. `close_speaker` is the «סגרתי את X» flow: X becomes the lesson's speaker, the journal logs ✅, the other candidates are removed.
+- `add_candidate_speaker` / `close_speaker` / `set_source_sheet` / `add_task(slot_order=…)` resolve `slot_order` inside the context's Mishmar only — a task the model ties to a slot gets an explicit `tasks.lesson_id`; the model never sees a lesson id. `close_speaker` is the «סגרתי את X» flow: X becomes the lesson's speaker, the journal logs ✅, the other candidates are removed.
 - `close_topic` returns `phase_opened` (the newly-current phase + open tasks) and `index_matches` — **a closed topic is a sentence, so the matcher falls back to its meaningful words** — and builds the default timeline when the evening is empty. An iron rule makes the model unfold all of that in the SAME response.
 - **Phones never enter chat context.** `render_context` shows candidates as name+status only; the test suite asserts a phone string does not appear.
 

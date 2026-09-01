@@ -105,6 +105,10 @@ RTL_CSS = """
   [data-testid="stAppViewContainer"],
   [data-testid="stSidebar"],
   [data-testid="stMarkdownContainer"],
+  /* st.caption renders stCaptionContainer INSTEAD of stMarkdownContainer, so
+     for a long time no caption in the app was ever told it is Hebrew — every
+     one of them hugged the left edge. */
+  [data-testid="stCaptionContainer"],
   [data-testid="stMetric"] {
       direction: rtl;
       text-align: right;
@@ -129,24 +133,75 @@ RTL_CSS = """
       background: #ebe4d3;
       border-inline-end: 1px solid #d9cfb8;
   }
-  /* Collapse under RTL: Streamlit's collapse animation translates the panel
-     toward the LEFT while our layout holds it on the RIGHT, leaving a broken
-     1px strip of letter-stacked nav in mid-screen. Kill the remnants: hide
-     the content the moment the sidebar reports collapsed, and give the
-     content a minimum width so mid-animation text never letter-wraps. */
+  /* Collapse under RTL. Streamlit 1.62 styles the panel with
+       transform: isCollapsed ? translateX(-<width>px) : none
+     — correct for its native LEFT sidebar, wrong for ours, which RTL holds on
+     the RIGHT: the panel slides ACROSS the content instead of off the near
+     edge. Kill the slide outright and let the width transition (which
+     Streamlit already animates over the same 300ms) do the collapsing. The
+     content keeps a min-width so it is clipped rather than reflowed into a
+     column of stacked letters mid-animation. */
+  section[data-testid="stSidebar"] {
+      transform: none !important;
+      overflow: hidden !important;
+  }
   [data-testid="stSidebarContent"] { min-width: 244px; }
   section[data-testid="stSidebar"][aria-expanded="false"] {
       width: 0 !important;
       min-width: 0 !important;
-      overflow: hidden !important;
+      max-width: 0 !important;
       border: none !important;
   }
-  section[data-testid="stSidebar"][aria-expanded="false"] * { display: none !important; }
-  /* every control in the sidebar tracks its full width */
+  section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
+      opacity: 0;
+      transition: opacity 120ms ease;
+  }
+  /* every control in the sidebar tracks its full width, and its label sits in
+     the middle of it — a 100%-wide button with a right-hugging label reads as
+     a bug, not as Hebrew. */
+  /* The nav radiogroup and its labels are flex items inside flex COLUMNS whose
+     align-items is flex-start — so `width: 100%` alone still shrank each card
+     to its own text. `align-self: stretch` is the rule that actually makes
+     them span the panel. */
+  [data-testid="stSidebar"] .stButton,
   [data-testid="stSidebar"] .stButton button,
-  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { width: 100%; }
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+      width: 100%;
+      box-sizing: border-box;
+  }
+  /* Streamlit sizes the radio's own element container to its CONTENT
+     (measured: 137px inside a 239px block), so the cards stopped short of the
+     panel edge no matter what the label said. The container is the thing that
+     has to stretch. */
+  [data-testid="stSidebar"] [data-testid="stElementContainer"],
+  [data-testid="stSidebar"] [data-testid="stRadio"],
+  [data-testid="stSidebar"] div[role="radiogroup"] {
+      width: 100% !important;
+      align-self: stretch;
+      align-items: stretch;
+      box-sizing: border-box;
+  }
+  [data-testid="stSidebar"] .stButton button {
+      justify-content: center;
+      text-align: center;
+  }
+  /* The label's inner wrappers are flex rows; under RTL their content packs
+     to the RIGHT, so centring the <p> alone centred it inside a 97px box that
+     was itself right-aligned in a 208px row. The ROWS have to centre. */
+  [data-testid="stSidebar"] div[role="radiogroup"] > label > div,
+  [data-testid="stSidebar"] div[role="radiogroup"] > label > div > div {
+      width: 100%;
+      justify-content: center;
+      text-align: center;
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+      text-align: center;
+  }
+  [data-testid="stSidebar"] div[role="radiogroup"] > label p { text-align: center; }
   [data-testid="stSidebar"] div[role="radiogroup"] > label {
-      display: flex; align-items: center;
+      align-self: stretch;
+      box-sizing: border-box;
+      display: flex; align-items: center; justify-content: center;
       background: #ffffff;
       border: 1px solid #e8e2d4;
       border-radius: 12px;
@@ -569,7 +624,21 @@ def show_admin_dashboard() -> None:
     c1.metric("משמרים", len(mishmarim))
     c2.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
     c3.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
-    c4.metric("אינדיקציה למשמר", _fmt_nis(budget["nominal_per_mishmar"]))
+    # What a Mishmar that ALREADY HAPPENED cost, on average. The old tile here
+    # showed the ₪500 indication — a constant, which tells nobody anything.
+    # Dividing by all 21 would read as a collapsing average all season, so the
+    # denominator is the evenings behind us, and it says which those are.
+    avg = budget["avg_per_past"]
+    with c4:
+        if avg is None:
+            st.metric("ממוצע הוצאות למשמר", "—")
+            st.caption("עוד לא התקיים משמר")
+        else:
+            st.metric("ממוצע הוצאות למשמר", _fmt_nis(avg),
+                      delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
+                      delta_color="off")
+            st.caption(f"על פני {budget['past_count']} משמרים שהתקיימו · "
+                       f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])}")
     if total_all:
         st.progress(done_all / total_all,
                     text=f"התקדמות העונה: {done_all}/{total_all} משימות הושלמו")
@@ -604,13 +673,21 @@ def show_admin_dashboard() -> None:
                             f"{_fmt_date(t['gregorian_date'])} · {_clean(t.get('nudge') or '')}</div>",
                             unsafe_allow_html=True,
                         )
-                        # The instructor can advance a trainee's task directly,
-                        # for the common case where the work happened but
-                        # nobody updated the board.
-                        b1, b2 = st.columns(2)
-                        if b1.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary"):
+                        # A door first. Until now this card could only flip a
+                        # status — the instructor could see that a task was
+                        # late and had no way to reach the Mishmar it belongs
+                        # to, which is exactly how «the overdue tasks don't
+                        # appear in the Mishmar» happens: they do, one screen
+                        # and three clicks away, in a folded phase.
+                        b1, b2, b3 = st.columns([1.1, 1, 1])
+                        if b1.button("פתח ↗", key=f"ov-go-{t['id']}",
+                                     help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
+                            _goto(NAV_WORKFILE, t["mishmar_id"],
+                                  _section_for_category(t.get("category")),
+                                  task_focus=t["id"])
+                        if b2.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary"):
                             dm.update_task_status(t["id"], "DONE"); st.rerun()
-                        if b2.button("▶ בתהליך", key=f"ov-ip-{t['id']}"):
+                        if b3.button("▶ בתהליך", key=f"ov-ip-{t['id']}"):
                             dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
 
     # ---- The pipeline: what the flat table never told anyone ----
@@ -698,16 +775,24 @@ WF_SECTIONS = ["🎯 בניית הערב", "✅ משימות", "🌙 אחרי ה
 
 
 def _goto(nav: str, mishmar_id: Optional[int] = None,
-          section: Optional[str] = None, lesson_focus: Optional[int] = None) -> None:
+          section: Optional[str] = None, lesson_focus=None,
+          task_focus: Optional[int] = None) -> None:
     """Deep-link navigation. STAGED, not direct: Streamlit forbids writing a
     widget's session key after that widget was drawn in the current run, and
     the nav radio always draws before any button that calls this. So the
     request is parked under one key and applied at the very top of main(),
     before a single widget exists. This is what turns «התחל» from a status
-    button into a door to the right place."""
+    button into a door to the right place.
+
+    `lesson_focus` is a lesson id or the sentinel «first_open_speaker».
+    `task_focus` is a task id: the landing page resolves it to a slot — its
+    explicit `lesson_id`, else `suggest_lesson_for_task` — which is how the
+    instructor's overdue card can open the right slot without the dashboard
+    loading a timeline for all 21 Mishmarim."""
     st.session_state["_goto_req"] = {
         "nav": nav, "workfile_mishmar": mishmar_id,
         "wf_section": section, "wf_focus_lesson": lesson_focus,
+        "wf_focus_task": task_focus,
     }
     st.rerun()
 
@@ -723,6 +808,7 @@ def _apply_goto() -> None:
     if req.get("wf_section") is not None:
         st.session_state["wf_section"] = req["wf_section"]
     st.session_state["wf_focus_lesson"] = req.get("wf_focus_lesson")
+    st.session_state["wf_focus_task"] = req.get("wf_focus_task")
 
 
 def _parse_date(value) -> Optional[_date_cls]:
@@ -1531,7 +1617,7 @@ def _speaker_status_chip(status: Optional[str]) -> str:
     return _chip(status, kind)
 
 
-def _topic_and_structure(mid: int) -> None:
+def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
     m = dm.get_mishmar(mid)
 
     # --- the topic: a hero form until it exists, a quiet line after ---
@@ -1579,14 +1665,30 @@ def _topic_and_structure(mid: int) -> None:
         return
 
     candidates = dm.get_lesson_speakers(mid)
+    linked = dm.get_tasks_for_lesson(tasks=tasks)
     editing = st.session_state.get("editing_lesson")
     focus = st.session_state.pop("wf_focus_lesson", None)
+
+    # A task that arrived through a «פתח» door resolves to ONE slot here: its
+    # explicit lesson_id if a human tied it, otherwise the wording-based guess.
+    # A guess that lands nowhere is a legitimate outcome — the section still
+    # opens, just without a slot singled out.
+    focus_task_id = st.session_state.pop("wf_focus_task", None)
+    focus_task = next((t for t in tasks if t["id"] == focus_task_id), None) \
+        if focus_task_id else None
+    if focus_task and focus in (None, "first_open_speaker"):
+        focus = focus_task.get("lesson_id") or dm.suggest_lesson_for_task(focus_task, lessons)
+
+    highlight = focus if isinstance(focus, int) else None
     if focus == "first_open_speaker":
         for l in lessons:
             if not l.get("is_break") and not l.get("speaker_name") \
                     and (l.get("lesson_role") or "") != "חבורות":
                 st.session_state["editing_lesson"] = editing = l["id"]
                 break
+    if focus_task:
+        where = "" if highlight else " — לא זוהה מקטע ספציפי, בחרו למטה"
+        st.info(f"⤴ הגעתם מהמשימה «{_clean(focus_task['task_description'])}»{where}")
 
     lesson_no = 0
     for l in lessons:
@@ -1612,9 +1714,11 @@ def _topic_and_structure(mid: int) -> None:
 
         lesson_no += 1
         cands = candidates.get(l["id"], [])
+        is_chavurot = (l.get("lesson_role") or "") == "חבורות"
+        my_tasks = linked.get(l["id"], [])
         with st.container(border=True):
             head = _clean(l.get("title") or "") or f"שיעור {lesson_no} — ללא כותרת"
-            if (l.get("lesson_role") or "") == "חבורות" and not l.get("title"):
+            if is_chavurot and not l.get("title"):
                 head = "חבורות"
             chips = []
             if l.get("lesson_role"):
@@ -1623,12 +1727,23 @@ def _topic_and_structure(mid: int) -> None:
                 chips.append(_chip(l["format"], "gray"))
             if not l.get("speaker_name") and cands:
                 chips.append(_chip(f"{len(cands)} מועמדים", "blue"))
+            open_here = [t for t in my_tasks if t["status"] != "DONE"]
+            if open_here:
+                kind = "red" if any(t.get("overdue") for t in open_here) else "gray"
+                chips.append(_chip(f"{len(open_here)} משימות", kind))
             st.markdown(
                 f"<div class='task-desc'>"
                 f"<span class='chip chip-blue' dir='ltr'>{_slot_times(l)}</span> {head}</div>"
                 f"<div>{''.join(chips)}</div>",
                 unsafe_allow_html=True,
             )
+            if highlight == l["id"]:
+                st.markdown(
+                    "<div style='background:#e7edf9;border-right:4px solid #1d3e7d;"
+                    "border-radius:8px;padding:.4rem .7rem;margin:.3rem 0'>"
+                    "⤴ <b>כאן סוגרים את המשימה שהגעתם ממנה.</b></div>",
+                    unsafe_allow_html=True,
+                )
             if l.get("description"):
                 st.caption(_clean(l["description"])[:180])
             if l.get("source_url"):
@@ -1636,16 +1751,42 @@ def _topic_and_structure(mid: int) -> None:
 
             _candidate_rows(mid, l, cands)
 
-            # the slot's derived work, as small doors to the tasks board
+            # The tasks that belong to THIS slot, closable where the work is.
+            # This is the half that was missing: the board could point at the
+            # evening, and the evening could not point back.
+            for t in open_here:
+                tc1, tc2 = st.columns([5, 1])
+                tc1.markdown(
+                    f"<div class='card-meta' style='opacity:.9'>📌 "
+                    f"{_clean(t['task_description'])}"
+                    + (_chip("באיחור", "red") if t.get("overdue") else "")
+                    + "</div>", unsafe_allow_html=True)
+                if tc2.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע"):
+                    dm.update_task_status(t["id"], "DONE")
+                    st.toast("בוצע 🎉"); st.rerun()
+
+            # The slot's open work. Each button either OPENS the task that
+            # already covers it or CREATES one tied to this slot — no longer a
+            # dead-end that merely opens the board and leaves you to search.
             todo = []
-            if not l.get("speaker_name") and (l.get("lesson_role") or "") != "חבורות":
-                todo.append("🎤 סגירת מרצה")
+            if not l.get("speaker_name"):
+                if is_chavurot:
+                    todo.append(("👥 מי מעביר", "תוכן",
+                                 f"לסגור מי מעביר {head}"))
+                else:
+                    todo.append(("🎤 סגירת מרצה", "מרצים",
+                                 f"סגירת מרצה — {head}"))
             if not l.get("source_url"):
-                todo.append("📎 דף מקורות")
-            tc = st.columns([1, 1, 1, 1])
-            for i, label in enumerate(todo):
+                todo.append(("📎 דף מקורות", "תוכן", f"דף מקורות — {head}"))
+            tc = st.columns([1.1, 1.1, 0.9, 0.9])
+            for i, (label, category, text) in enumerate(todo[:2]):
                 if tc[i].button(label, key=f"td-{l['id']}-{i}",
-                                help="פותח את לוח המשימות"):
+                                help="פותח את המשימה — או פותח אותה אם עוד אין"):
+                    existing = next((t for t in open_here
+                                     if t.get("category") == category), None)
+                    if existing is None:
+                        dm.add_task(mid, text, category=category, lesson_id=l["id"])
+                        st.toast(f"נפתחה משימה «{text}» וקושרה למקטע")
                     _goto(NAV_WORKFILE, mid, WF_SECTIONS[1])
             if tc[3].button("✏️ עריכה", key=f"ed-{l['id']}"):
                 st.session_state["editing_lesson"] = (
@@ -1670,16 +1811,42 @@ def _topic_and_structure(mid: int) -> None:
         st.rerun()
 
 
-def _wf_task_card(t: dict, mid: int, key_prefix: str) -> None:
+def _slot_label(l: dict, index: int) -> str:
+    """How a slot is named in a task's «שייך למקטע» line."""
+    title = (l.get("title") or "").strip()
+    if not title and (l.get("lesson_role") or "") == "חבורות":
+        title = "חבורות"
+    return f"{l.get('start_time') or '--:--'} · {title or f'מקטע {index}'}"
+
+
+def _wf_task_card(t: dict, mid: int, key_prefix: str,
+                  lessons: Optional[list[dict]] = None) -> None:
     """A workfile task card: the task is the point, the controls are small.
     «פתח» is a door to where the task is done; edit/delete live behind tiny
-    icons; completion is one small check."""
+    icons; completion is one small check.
+
+    When the Mishmar has a timeline, the card also says WHICH slot the task
+    belongs to — the explicit link if one was made, otherwise the guess, shown
+    as a guess."""
+    lessons = lessons or []
+    slots = [l for l in lessons if not l.get("is_break")]
+    slot_id = t.get("lesson_id")
+    guessed = False
+    if not slot_id and slots:
+        slot_id = dm.suggest_lesson_for_task(t, lessons)
+        guessed = bool(slot_id)
+    slot = next((l for l in slots if l["id"] == slot_id), None)
+
     with st.container(border=True):
         chips = []
         if t.get("category"):
             chips.append(_chip(t["category"], "gold"))
         if t.get("overdue"):
             chips.append(_chip("באיחור", "red"))
+        if slot:
+            idx = slots.index(slot) + 1
+            chips.append(_chip(("≈ " if guessed else "🔗 ") + _slot_label(slot, idx),
+                               "blue"))
         st.markdown(
             f"<div class='task-desc'>{_clean(t['task_description'])}</div>"
             f"<div>{''.join(chips)}</div>",
@@ -1697,12 +1864,11 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str) -> None:
         c1, c2, c3, c4 = st.columns([1.2, 0.7, 0.55, 0.55])
         if t["status"] != "DONE":
             if c1.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
-                if t.get("category") in ("מרצים", "תוכן", "נושא"):
-                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[0],
-                          lesson_focus="first_open_speaker"
-                          if t.get("category") == "מרצים" else None)
-                elif t.get("category") == "אחרי":
+                if t.get("category") == "אחרי":
                     _goto(NAV_WORKFILE, mid, WF_SECTIONS[2])
+                elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):
+                    # the evening builder resolves the exact slot from the task
+                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[0], task_focus=t["id"])
             if c2.button("✓", key=f"{k}-dn", help="סמן שבוצע"):
                 dm.update_task_status(t["id"], "DONE")
                 st.toast("בוצע 🎉"); st.rerun()
@@ -1724,6 +1890,18 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str) -> None:
                                        height=68)
                 due = st.text_input("מומלץ עד (dd.mm.yyyy)",
                                     value=_fmt_date(t["due_date"]) if t.get("due_date") else "")
+                # Tying a task to a slot by hand — this is what turns the guess
+                # above into a fact. «לא שייך למקטע» is the honest default:
+                # כיבוד, קישוט and הזמנה belong to the evening, not to a slot.
+                choices = [None] + [l["id"] for l in slots]
+                labels = {l["id"]: _slot_label(l, i + 1)
+                          for i, l in enumerate(slots)}
+                new_slot = st.selectbox(
+                    "שייך למקטע בערב", choices,
+                    index=choices.index(t["lesson_id"])
+                    if t.get("lesson_id") in choices else 0,
+                    format_func=lambda i: labels.get(i, "— לא שייך למקטע —"),
+                    key=f"{k}-slot") if slots else None
                 if st.form_submit_button("💾 שמור", type="primary"):
                     iso = None
                     d = _parse_date(due)
@@ -1731,25 +1909,40 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str) -> None:
                         iso = d.isoformat()
                     dm.edit_task(t["id"], description=desc, details=details,
                                  due_date=iso if due.strip() else None)
+                    if slots and new_slot != t.get("lesson_id"):
+                        dm.link_task_to_lesson(t["id"], new_slot)
                     st.session_state["editing_task"] = None
                     st.toast("נשמר"); st.rerun()
 
 
-def _wf_task_grid(items: list[dict], mid: int, prefix: str) -> None:
+def _wf_task_grid(items: list[dict], mid: int, prefix: str,
+                  lessons: Optional[list[dict]] = None) -> None:
     for i in range(0, len(items), 2):
         cols = st.columns(2)
         for col, t in zip(cols, items[i:i + 2]):
             with col:
-                _wf_task_card(t, mid, prefix)
+                _wf_task_card(t, mid, prefix, lessons=lessons)
 
 
-def _tasks_tab(mid: int, progress: dict) -> None:
+def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -> None:
     """Phase accordion of OPEN tasks; day-of work as its own group; the
     after-work lives in the after-Mishmar section; done tasks sink to the
     bottom, out of the way entirely."""
     by_due = lambda t: t.get("due_date") or "9999"
     all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
     done = [t for t in all_tasks if t["status"] == "DONE"]
+
+    # Overdue first, pinned open, spanning EVERY phase — including אחרי and
+    # יום המשמר, which the phase accordion below deliberately routes elsewhere.
+    # Without this a task the instructor's dashboard is shouting about sits
+    # folded inside a shut phase, and the board looks like it lost it.
+    late = sorted([t for t in all_tasks
+                   if t["status"] != "DONE" and t.get("overdue")], key=by_due)
+    if late:
+        st.markdown(f"#### ⏰ עברו את התאריך המומלץ ({len(late)})")
+        st.caption("התאריכים הם המלצה, לא חוק — אבל אלה המשימות שמחזיקות את הערב.")
+        _wf_task_grid(late, mid, f"wf{mid}-late", lessons)
+        st.divider()
 
     for i, ph in enumerate(progress["phases"]):
         if ph["key"] == "after":
@@ -1759,16 +1952,20 @@ def _tasks_tab(mid: int, progress: dict) -> None:
         if not open_ts:
             continue
         state = "▸" if i == progress["current"] else ("✓" if ph["complete"] else "🔒")
-        with st.expander(f"{state} {ph['icon']} {ph['label']} ({len(open_ts)})",
-                         expanded=(i == progress["current"])):
-            _wf_task_grid(sorted(open_ts, key=by_due), mid, f"wf{mid}-{ph['key']}")
+        # a folded phase must still declare its lateness
+        n_late = sum(1 for t in open_ts if t.get("overdue"))
+        badge = f" · {n_late} באיחור" if n_late else ""
+        with st.expander(f"{state} {ph['icon']} {ph['label']} ({len(open_ts)}{badge})",
+                         expanded=(i == progress["current"] or bool(n_late))):
+            _wf_task_grid(sorted(open_ts, key=by_due), mid, f"wf{mid}-{ph['key']}",
+                           lessons)
 
     day_of = [t for t in all_tasks
               if t.get("category") == "יום המשמר" and t["status"] != "DONE"]
     if day_of:
         with st.expander(f"🕯️ יום המשמר עצמו ({len(day_of)})"):
             st.caption("הדברים שנעשים בערב עצמו — לא לוגיסטיקה מוקדמת.")
-            _wf_task_grid(sorted(day_of, key=by_due), mid, f"wf{mid}-day")
+            _wf_task_grid(sorted(day_of, key=by_due), mid, f"wf{mid}-day", lessons)
 
     st.divider()
     with st.form(f"addtask-{mid}"):
@@ -1780,9 +1977,15 @@ def _tasks_tab(mid: int, progress: dict) -> None:
                         category=None if cat == "(אוטומטי)" else cat)
             st.toast("נוספה משימה — שובצה לשלב לפי הקטגוריה"); st.rerun()
 
+    after_open = [t for t in all_tasks
+                  if t.get("category") == "אחרי" and t["status"] != "DONE"]
+    if after_open:
+        st.caption(f"🌙 עוד {len(after_open)} משימות של **אחרי** הערב — "
+                   f"הן נסגרות במקטע «{WF_SECTIONS[2]}».")
+
     if done:
         with st.expander(f"✅ בוצעו ({len(done)})"):
-            _wf_task_grid(done, mid, f"wf{mid}-done")
+            _wf_task_grid(done, mid, f"wf{mid}-done", lessons)
 
 
 def _after_tab(mid: int) -> None:
@@ -1853,7 +2056,7 @@ def _after_tab(mid: int) -> None:
     if open_after:
         st.markdown("#### המשימות של אחרי הערב")
         _wf_task_grid(sorted(open_after, key=lambda t: t.get("due_date") or "9999"),
-                      mid, f"aft{mid}")
+                      mid, f"aft{mid}", lessons)
 
     # --- budget, unchanged in substance ---
     st.divider()
@@ -1947,9 +2150,10 @@ def show_mishmar_page() -> None:
                        horizontal=True, label_visibility="collapsed")
     st.divider()
     if section == WF_SECTIONS[0]:
-        _topic_and_structure(mid)
+        _topic_and_structure(mid, tasks)
     elif section == WF_SECTIONS[1]:
-        _tasks_tab(mid, progress)
+        # one query for the timeline, so every task card can name its slot
+        _tasks_tab(mid, progress, dm.get_lessons(mid))
     else:
         _after_tab(mid)
 

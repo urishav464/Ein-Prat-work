@@ -716,7 +716,13 @@ def update_task_status(task_id: int, new_status: str) -> bool:
 
 def add_task(mishmar_id: int, task_description: str,
              student_id: Optional[int] = None, status: str = "TO DO",
-             category: Optional[str] = None) -> Optional[int]:
+             category: Optional[str] = None,
+             lesson_id: Optional[int] = None,
+             details: Optional[str] = None) -> Optional[int]:
+    """`lesson_id` ties the task to one slot of the evening. It is never
+    guessed here — seeding inserts hundreds of rows and a lookup per row would
+    be hundreds of queries. A caller that KNOWS the slot passes it; everyone
+    else leaves it NULL and the door falls back to suggest_lesson_for_task."""
     if status not in TASK_STATUSES:
         raise ValueError(f"status must be one of {TASK_STATUSES}, got {status!r}")
     category = category or classify_task(task_description)
@@ -724,7 +730,8 @@ def add_task(mishmar_id: int, task_description: str,
     resp = _t("tasks").insert({
         "mishmar_id": mishmar_id, "student_id": student_id,
         "task_description": task_description, "status": status,
-        "category": category,
+        "category": category, "lesson_id": lesson_id,
+        "details": details,
         "due_date": compute_due_date(m["gregorian_date"], category) if m else None,
     }).execute()
     row = _one(resp)
@@ -892,19 +899,35 @@ def add_budget_entry(mishmar_id: int, expense_type: str, amount: float = 0,
     return row.get("id") if row else None
 
 
-def get_budget_summary() -> dict:
+def get_budget_summary(today: Optional[_date] = None) -> dict:
     """Season-wide spend. There is no ceiling to compare against, by decision:
-    `over_nominal` is information, not an alarm."""
+    `over_nominal` is information, not an alarm.
+
+    The number the instructor actually asked for is `avg_per_past`: what a
+    Mishmar that ALREADY HAPPENED cost on average. Dividing by all 21 would
+    read as a collapsing average all season; dividing by the evenings behind
+    us is the only honest denominator. `gregorian_date` is d.m.Y TEXT, so the
+    comparison goes through `parse_gregorian` and never through string order.
+    """
+    today = today or _date.today()
     per = []
     for m in get_all_mishmarim():
+        when = parse_gregorian(m["gregorian_date"])
         per.append({"id": m["id"], "gregorian_date": m["gregorian_date"],
-                    "topic": m.get("topic"), "spent": m.get("budget_used") or 0})
+                    "topic": m.get("topic"), "spent": m.get("budget_used") or 0,
+                    "past": bool(when and when < today)})
+    past = [r for r in per if r["past"]]
+    past_spent = sum(r["spent"] for r in past)
     return {
         "per_mishmar": per,
         "total_spent": sum(r["spent"] for r in per),
         "nominal_per_mishmar": PER_MISHMAR_BUDGET_NIS,
         "season_ceiling": SEASON_BUDGET_CEILING_NIS,
         "over_nominal": [r["id"] for r in per if r["spent"] > PER_MISHMAR_BUDGET_NIS],
+        "past_count": len(past),
+        "past_spent": past_spent,
+        # None, not 0 — «no Mishmar has happened yet» is not «costs nothing».
+        "avg_per_past": (past_spent / len(past)) if past else None,
     }
 
 
@@ -1285,6 +1308,134 @@ def upsert_lesson(mishmar_id: int, slot_order: int, title: Optional[str] = None,
 
 def delete_lesson(lesson_id: int) -> bool:
     return bool(_rows(_t("lessons").delete().eq("id", lesson_id).execute()))
+
+
+# --------------------------------------------------------------------------
+# Tasks ↔ evening slots
+#
+# «לסגור מי מעביר חבורות סבב א׳» is a task about ONE row of the running order,
+# not about the Mishmar in general. Two ways a task knows its slot:
+#
+#   1. `tasks.lesson_id` — an EXPLICIT link, written when a human (or the chat)
+#      creates the task from a slot, or picks a slot in the task editor.
+#   2. `suggest_lesson_for_task` — a pure guess from the task's own wording,
+#      used only as a fallback for the «פתח» door. Nothing is persisted from a
+#      guess: a wrong door costs a click, a wrong stored link is wrong data.
+#
+# NULL is the common, correct answer — כיבוד, קישוט and הזמנה belong to no slot.
+# --------------------------------------------------------------------------
+
+# Hebrew ordinals as they actually appear in the seeded task list, plus the
+# digit forms. The geresh/gershayim are stripped before matching, so 'סבב א׳',
+# "סבב א'" and 'סבב א' are one key.
+_ORDINALS = {
+    "ראשון": 1, "ראשונה": 1, "א": 1,
+    "שני": 2, "שנייה": 2, "שניה": 2, "ב": 2,
+    "שלישי": 3, "שלישית": 3, "ג": 3,
+    "רביעי": 4, "רביעית": 4, "ד": 4,
+}
+
+_GERESH = str.maketrans("", "", "׳״'\"")
+
+
+def _norm_task_text(text: Optional[str]) -> str:
+    return (text or "").translate(_GERESH)
+
+
+def _is_chavurot(lesson: dict) -> bool:
+    return ("חבורות" in (lesson.get("lesson_role") or "")
+            or "חבורות" in (lesson.get("format") or "")
+            or "חבורות" in (lesson.get("title") or "")
+            or "חברותות" in (lesson.get("title") or ""))
+
+
+def suggest_lesson_for_task(task: dict, lessons: list[dict]) -> Optional[int]:
+    """The slot a task is probably about — or None, which is a real answer.
+
+    Pure: no queries, no writes. Callers already hold both lists, so the door
+    on every task card costs nothing. Ambiguity resolves to None on purpose —
+    the repo's standing rule is that we never invent a link we cannot justify.
+    """
+    text = _norm_task_text(task.get("task_description")) + " " + \
+        _norm_task_text(task.get("details"))
+    if not text.strip():
+        return None
+    slots = [l for l in lessons if not l.get("is_break")]
+    if not slots:
+        return None
+
+    # 1. a closed speaker named in the task text — the strongest signal there is.
+    for l in slots:
+        name = (l.get("speaker_name") or "").strip()
+        if len(name) >= 3 and name in text:
+            return l["id"]
+
+    # 2. חבורות: pick the round if the text names one, else the only such slot.
+    if "חבורות" in text or "חברותות" in text:
+        rounds = [l for l in slots if _is_chavurot(l)]
+        if rounds:
+            n = _round_number(text)
+            if n and n <= len(rounds):
+                return rounds[n - 1]["id"]
+            if len(rounds) == 1:
+                return rounds[0]["id"]
+            return None            # several rounds, no round named — don't guess
+        return None
+
+    # 3. an explicit ordinal or number on a lesson/slot word.
+    n = _slot_number(text)
+    if n and n <= len(slots):
+        return slots[n - 1]["id"]
+
+    # 4. the slot's own title, when the pair gave it one worth matching.
+    for l in slots:
+        title = _norm_task_text(l.get("title")).strip()
+        if len(title) >= 4 and title in text:
+            return l["id"]
+    return None
+
+
+def _round_number(text: str) -> Optional[int]:
+    m = re.search(r"סבב\s+(\S+)", text)
+    if not m:
+        return None
+    token = m.group(1).strip(" .,:־-")
+    if token.isdigit():
+        return int(token)
+    return _ORDINALS.get(token)
+
+
+def _slot_number(text: str) -> Optional[int]:
+    m = re.search(r"(?:שיעור|מקטע|מפגש)\s+(\S+)", text)
+    if not m:
+        return None
+    token = m.group(1).strip(" .,:־-")
+    if token.isdigit():
+        return int(token)
+    return _ORDINALS.get(token)
+
+
+def link_task_to_lesson(task_id: int, lesson_id: Optional[int]) -> bool:
+    """Tie a task to one slot of the evening — or untie it with None."""
+    resp = _t("tasks").update(
+        {"lesson_id": lesson_id, "updated_at": _now_iso()}
+    ).eq("id", task_id).execute()
+    return bool(_rows(resp))
+
+
+def get_tasks_for_lesson(mishmar_id: Optional[int] = None,
+                         tasks: Optional[list[dict]] = None) -> dict[int, list[dict]]:
+    """Every EXPLICITLY linked task of a Mishmar, grouped by lesson_id.
+
+    Takes preloaded rows so the workfile — which already holds every task —
+    groups them for free instead of paying a second query per render."""
+    if tasks is None:
+        tasks = get_tasks_for_mishmar(mishmar_id)
+    out: dict[int, list[dict]] = {}
+    for t in tasks:
+        if t.get("lesson_id"):
+            out.setdefault(t["lesson_id"], []).append(t)
+    return out
 
 
 def add_feedback(mishmar_id: int, rating: Optional[int] = None,
