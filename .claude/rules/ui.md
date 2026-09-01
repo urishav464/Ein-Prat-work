@@ -66,3 +66,25 @@ No `[auth]` in secrets → name-only login, development only. `[auth]` present �
 More probe traps that produced false test results here: **input placeholders never appear in `inner_text`** — assert with element locators, not body text; `st.pills` renders as `[data-testid="stButtonGroup"]`; and **kill test Streamlit processes only by matching `/proc/<pid>/exe` to python** — `pkill -f`/cmdline matching kills your own shell, whose command line contains the pattern (exit 144, repeatedly).
 
 **Subagent files and hot-reload.** The docs say `.claude/agents/` is watched and a change serves within seconds on the CLI. In this remote/SDK session a diagnostic asked the agent to quote its own instructions and it quoted the PRE-rewrite file — so after editing an agent here, verify with that same diagnostic before trusting a round-trip, and treat a new session as the reliable reload.
+
+## Micro-interactions in use (Streamlit 1.62) and their probe facts
+
+- **Reset is a `@st.dialog`** (`_reset_dialog`), opened from `_reset_panel`'s button with a plain
+  `if st.button(...)` — opening a dialog IS a rerun, so `on_click` buys nothing there. Inside the
+  dialog `st.rerun()` closes it and restarts the page; this works from within the `_workfile_body`
+  fragment. Probe: `[role=dialog]`; the confirm button is disabled until the checkbox is ticked.
+- **The search narrates through `st.status`**: `scout_speakers(..., progress=fn)` threads a
+  callback down to `search_candidates`, which reports each round; the scout adds a line per
+  enriched name and one before curation. `status.update(label=…)` + one `st.empty()` list. A
+  callback that raises would abort the search — keep `_stage` trivial.
+- **Per-slot ratings are `st.feedback("stars")`**: returns `0–4` or `None`; the form maps to
+  `1–5` and **skips unrated slots** (an unrated slot is not a 4). Probe: `[data-testid=stFeedback]`
+  → `[data-testid=stFeedbackButton]`; the icons' `inner_text` is the literal word `star`.
+- **The angle picker is `st.segmented_control`** with short labels (`LESSON_ANGLES`) and the
+  explanations in `help` (`ANGLE_HINTS`). Probe: `[data-testid=stButtonGroup]`; it returns `None`
+  when nothing is selected, so the code falls back to «בלי המלצה».
+- **Project hooks**: `.claude/settings.json` runs `.claude/hooks/guard-bash.sh` before every Bash
+  call. It matches the secrets file as a *path token* (start / whitespace / quote / `=` / redirect /
+  paren before it), so writing docs that mention the file in backticks passes; a quote-preceded
+  prose mention is blocked on purpose. The push check needs an actual invocation (`git push` followed by whitespace) and inspects only that line's arguments, so a commit message describing the rule still commits. Tests live outside the repo (`/tmp/pwtest/hooktest.py`),
+  because the command strings they feed would trip the hook if typed into a live Bash call.

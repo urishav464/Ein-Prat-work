@@ -449,8 +449,12 @@ def search_candidates(
     max_queries: int = 4,
     lesson_topic: str = "",
     include_index: bool = True,
+    progress=None,
 ) -> dict:
     """DISCOVERY: find candidate speakers for a topic, from index AND from the web.
+
+    `progress` is an optional callable taking one Hebrew line; the screen uses
+    it to show which round is running instead of a blind spinner.
 
     Returns index hits, newly mined web names, the raw results behind them, and
     every query used (so a student can rerun any of them by hand).
@@ -526,8 +530,11 @@ def search_candidates(
     # until there are four strong names» — bounded, because we cannot promise
     # that four exist for every topic. Each round widens the net differently.
     rounds = [round1, ESCALATION_INSTITUTIONS, ESCALATION_ACTIVITY]
+    round_labels = ("סורק את הרשת", "מרחיב למוסדות ואקדמיה", "מרחיב לפעילות אחרונה — ראיונות, הרצאות, פודקאסטים")
     rounds_used = 0
     for templates in rounds:
+        if progress:
+            progress(f"{round_labels[rounds_used]} · סבב {rounds_used + 1}")
         _run(templates)
         rounds_used += 1
         web_names = extract_names(raw)

@@ -1329,11 +1329,19 @@ def _add_candidate(c: dict, display: str, name: str, lesson: str,
     st.toast(f"«{name}» נוסף כמועמד ל{slot_label} — ולמאגר")
 
 
+# The angle picker is a segmented control, so the labels stay short; the
+# explanation of each lives in ANGLE_HINTS (rendered as the control's help).
 LESSON_ANGLES = {
-    "— בלי המלצה, לחפש בכל הזוויות —": "",
-    "יסודות — היסטוריון, חוקר, איש אקדמיה": "1",
-    "ערעור / טוויסט — פילוסוף, הוגה, מחשבת ישראל": "2",
-    "זווית מפתיעה — אמנות, קולנוע, פסיכולוגיה, סוציולוגיה": "3",
+    "בלי המלצה": "",
+    "יסודות": "1",
+    "ערעור / טוויסט": "2",
+    "זווית מפתיעה": "3",
+}
+ANGLE_HINTS = {
+    "בלי המלצה": "לחפש בכל הזוויות",
+    "יסודות": "היסטוריון, חוקר, איש אקדמיה",
+    "ערעור / טוויסט": "פילוסוף, הוגה, מחשבת ישראל",
+    "זווית מפתיעה": "אמנות, קולנוע, פסיכולוגיה, סוציולוגיה",
 }
 
 
@@ -1375,8 +1383,11 @@ def show_speaker_search() -> None:
                               placeholder="למשל: תשובה")
         lesson_topic = f2.text_input("נושא השיעור", placeholder="למשל: חרטה ואחריות")
         g1, g2 = st.columns([1.4, 1.2])
-        lesson = LESSON_ANGLES[g1.selectbox(
-            "המלצה: איזו זווית? (רשות)", options=list(LESSON_ANGLES))]
+        angle = g1.segmented_control(
+            "המלצה: איזו זווית? (רשות)", options=list(LESSON_ANGLES),
+            default="בלי המלצה", key="scout-angle",
+            help="  \n".join(f"**{k}** — {v}" for k, v in ANGLE_HINTS.items()))
+        lesson = LESSON_ANGLES[angle or "בלי המלצה"]
         labels = {m["id"]: f"#{m['id']:02d} · {m['gregorian_date']}" for m in mine}
         mid = g2.selectbox(
             "לאיזה משמר משבצים?", [None, *labels],
@@ -1394,8 +1405,23 @@ def show_speaker_search() -> None:
     # The scout fires ONLY here (rerun trap). Its result is saved, so returning
     # to the screen — or a partner opening it — costs nothing.
     if go and (topic.strip() or lesson_topic.strip()):
-        with st.spinner("סורק את הרשת · מעמיק על המועמדים · מסנן…"):
-            res = ca.scout_speakers(topic.strip(), lesson, lesson_topic.strip())
+        # A minute-long call gets a running log, not a spinner: each round and
+        # each name being deepened is written as it happens, then collapses.
+        with st.status("סורק את הרשת…", expanded=True) as status:
+            log, stages = st.empty(), []
+
+            def _stage(line: str) -> None:
+                stages.append(line)
+                status.update(label=line)
+                log.markdown("\n".join(f"- {_clean(x)}" for x in stages))
+
+            res = ca.scout_speakers(topic.strip(), lesson, lesson_topic.strip(),
+                                    progress=_stage)
+            n_found = len(res.get("candidates") or [])
+            status.update(
+                label=("הסריקה הסתיימה" if res.get("fallback")
+                       else f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"),
+                state="complete", expanded=False)
         st.session_state["scout_result"] = res
         st.session_state.pop("verify_name", None)
         st.session_state.pop("verify_cache", None)
@@ -2090,26 +2116,34 @@ def _logistics_panel(mid: int, m: dict) -> None:
         st.caption(f"📎 [הפוסטר]({m['invitation_url']})")
 
 
+@st.dialog("⚠️ איפוס המשמר")
+def _reset_dialog(mid: int) -> None:
+    """Start the evening over. A modal, deliberately two steps and deliberately
+    loud — it deletes a season's worth of a pair's work."""
+    st.markdown(
+        "מוחק את **כל** מה שנבנה כאן — מבנה הערב והמרצים, המשימות, הלוגיסטיקה, "
+        "התקציב והמשוב — ומחזיר את המשמר לנקודת ההתחלה: בחירת נושא, "
+        "עם רשימת המשימות המקורית. "
+        "**יומן הפניות למרצים לא נמחק** — הוא הזיכרון המשותף של כל הזוגות, "
+        "ומחיקה שלו הייתה מוחקת מידע של אחרים."
+    )
+    ok = st.checkbox(f"אני מבין/ה — לאפס את משמר #{mid:02d}", key=f"rst-ok-{mid}")
+    if st.button("🗑 אפס את המשמר", key=f"rst-{mid}", type="primary", disabled=not ok):
+        res = dm.reset_mishmar(mid)
+        st.session_state["editing_lesson"] = None
+        st.session_state["editing_task"] = None
+        st.toast(
+            f"המשמר אופס · נמחקו {res['lessons']} מקטעים, {res['tasks']} משימות · "
+            f"הוחזרו {res['tasks_restored']} משימות מקוריות")
+        st.rerun()   # closes the dialog and restarts the page on the empty Mishmar
+
+
 def _reset_panel(mid: int, m: dict) -> None:
-    """Start the evening over. Deliberately two steps and deliberately loud —
-    it deletes a season's worth of a pair's work."""
-    with st.expander("⚠️ איפוס המשמר"):
-        st.caption(
-            "מוחק את **כל** מה שנבנה כאן — מבנה הערב והמרצים, המשימות, הלוגיסטיקה, "
-            "התקציב והמשוב — ומחזיר את המשמר לנקודת ההתחלה: בחירת נושא, "
-            "עם רשימת המשימות המקורית. "
-            "**יומן הפניות למרצים לא נמחק** — הוא הזיכרון המשותף של כל הזוגות, "
-            "ומחיקה שלו הייתה מוחקת מידע של אחרים."
-        )
-        ok = st.checkbox(f"אני מבין/ה — לאפס את משמר #{mid:02d}", key=f"rst-ok-{mid}")
-        if st.button("🗑 אפס את המשמר", key=f"rst-{mid}", disabled=not ok):
-            res = dm.reset_mishmar(mid)
-            st.session_state["editing_lesson"] = None
-            st.session_state["editing_task"] = None
-            st.toast(
-                f"המשמר אופס · נמחקו {res['lessons']} מקטעים, {res['tasks']} משימות · "
-                f"הוחזרו {res['tasks_restored']} משימות מקוריות")
-            st.rerun()
+    # The door to the dialog. Opening a dialog IS a rerun, so this is the one
+    # button here that legitimately stays an `if`, not an on_click.
+    if st.button("⚠️ איפוס המשמר…", key=f"rst-open-{mid}",
+                 help="מוחק את כל מה שנבנה במשמר הזה ומחזיר אותו להתחלה — שני שלבים, עם אישור"):
+        _reset_dialog(mid)
 
 
 def _safe(fn, *args, **kwargs) -> None:
@@ -2337,6 +2371,7 @@ def _after_tab(mid: int) -> None:
     st.markdown("#### משוב על הערב — לפי מקטעים")
     st.caption(
         "המשוב נשמר על שמך ועל המשמר הזה, והופך את מאגר המרצים לזיכרון מוסדי. "
+        "דרגו רק מקטעים שהייתם בהם — מקטע בלי כוכבים לא נשמר. "
         "שליחה גם סוגרת את משימת המשוב שלך."
     )
     existing = dm.get_feedback_for_mishmar(mid)
@@ -2358,27 +2393,33 @@ def _after_tab(mid: int) -> None:
                     + (" · ✅ כבר נשלח" if name in my_titles else ""),
                     unsafe_allow_html=True)
                 c1, c2 = st.columns([1, 2.6])
-                rating = c1.slider("ציון", 1, 5, 4, key=f"fb-r-{l['id']}")
+                with c1:
+                    st.caption("ציון")
+                    stars = st.feedback("stars", key=f"fb-r-{l['id']}")
+                rating = None if stars is None else stars + 1   # 0-based → 1–5
                 words = c2.text_input("התייחסות", key=f"fb-w-{l['id']}",
                                       placeholder="מה עבד, מה פחות")
                 entries.append((l, name, rating, words))
             if st.form_submit_button("💾 שמור משוב על הערב", type="primary"):
                 n = 0
                 for l, name, rating, words in entries:
-                    if name in my_titles:
-                        continue   # one submission per slot per trainee
+                    if name in my_titles or rating is None:
+                        continue   # one submission per slot per trainee; unrated = skipped
                     dm.add_feedback(
                         mid, rating=rating, lesson_id=l["id"], lesson_title=name,
                         speaker_name=l.get("speaker_name"),
                         student_id=st.session_state.student_id,
                         what_worked=(words or None))
                     n += 1
-                # feedback submitted => the trainee's feedback task closes
-                for t in tasks:
-                    if "משוב" in t["task_description"] and t["status"] != "DONE":
-                        dm.update_task_status(t["id"], "DONE")
-                st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
-                st.rerun()
+                if n == 0:
+                    st.toast("לא סומנו כוכבים — לא נשמר משוב")
+                else:
+                    # feedback submitted => the trainee's feedback task closes
+                    for t in tasks:
+                        if "משוב" in t["task_description"] and t["status"] != "DONE":
+                            dm.update_task_status(t["id"], "DONE")
+                    st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
+                    st.rerun()
 
     if existing:
         with st.expander(f"משוב שנרשם ({len(existing)})"):

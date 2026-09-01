@@ -23,7 +23,7 @@ Without a venv, `Authlib`→`cryptography` fails on Debian/Ubuntu system Python 
 - **Storage is Supabase only — never SQLite, never local files as a database.** `data_manager.py` is the ONLY module that talks to storage. The REST API cannot CREATE TABLE, so structure lives in `supabase_schema.sql`, run manually in the Supabase SQL Editor; a schema change means editing that file AND telling the user to re-run it (idempotent). Joins/aggregates are views in that file — PostgREST cannot express them.
 - **Secrets come from `st.secrets` (Streamlit Secrets): `SUPABASE_URL`, `SUPABASE_KEY` (service_role), `ANTHROPIC_API_KEY`. Never generate or read `.env` files** — the user has no local dev environment. Full setup: `DEPLOY.md`.
 - **Never invent content**: topics, speakers, texts, dates, contact details, budget figures. Unknown stays `TBD`. Never propose a speaker who is not alive and active.
-- **Git:** all development on `claude/mishmer-generator-setup-h5gxqx`. **`main` is empty** — Streamlit Cloud deploys from the working branch. Commit and push when a piece of work completes.
+- **Git:** all development on `claude/mishmer-generator-setup-h5gxqx`. **`main` is empty** — Streamlit Cloud deploys from the working branch. Commit and push when a piece of work completes. Enforced, not advisory: `.claude/hooks/guard-bash.sh` (PreToolUse on Bash) blocks `git push` to `main` or with `--force`, and any Bash access to the Streamlit secrets file.
 
 ## Where the detailed knowledge lives
 

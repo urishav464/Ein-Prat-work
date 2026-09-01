@@ -819,7 +819,8 @@ def _history_line(name: str) -> Optional[str]:
     return None
 
 
-def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict:
+def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
+                   progress=None) -> dict:
     """One web search → 5 researched candidates, or a fallback rendered raw.
 
     Gathers through the throttled discovery path and spends exactly ONE model
@@ -830,7 +831,7 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
     {"fallback": True, "raw": ...} so the screen keeps working.
     """
     raw = ss.search_candidates(topic, lesson=lesson, lesson_topic=lesson_topic,
-                               include_index=False)
+                               include_index=False, progress=progress)
     if raw.get("skipped"):
         return {"fallback": True, "raw": raw}
 
@@ -843,7 +844,9 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
     # activity and the article the card wants — and let us raise confidence on
     # evidence rather than on a guess.
     shortlist = (raw.get("web_names") or [])[:ss.ENRICH_TOP_N]
-    for e in shortlist:
+    for k, e in enumerate(shortlist, 1):
+        if progress:
+            progress(f"מעמיק על {e['name']} ({k}/{len(shortlist)})")
         try:
             v = ss.verify_speaker(e["name"], topic=raw.get("subject") or topic, depth=2)
         except Exception:
@@ -895,6 +898,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict
         # block; the 1h TTL fits how searches cluster in one evening. `medium`
         # effort: curating six names into JSON is not a hard-reasoning task,
         # and the default `high` spends thinking tokens it does not need.
+        if progress:
+            progress("מסנן ומדרג — ארבעה שמות שנבדקו")
         resp = client.messages.create(
             model=MODEL,
             max_tokens=2000,
