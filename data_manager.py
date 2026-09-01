@@ -1135,6 +1135,7 @@ def recompute_lesson_times(mishmar_id: int, first_start: str = EVENING_START) ->
     """Start times are DERIVED: 20:00 plus the cumulative durations before each
     slot. Editing a duration reflows the whole evening — nobody hand-types
     times that then silently overlap."""
+    _invalidate(('lessons',))          # the caller may have just inserted rows
     rows = get_lessons(mishmar_id)
     try:
         h, m = (int(x) for x in (first_start or EVENING_START).split(":"))
@@ -1150,10 +1151,13 @@ def recompute_lesson_times(mishmar_id: int, first_start: str = EVENING_START) ->
         minutes += int(dur)
 
 
-def get_lesson_speakers(mishmar_id: int) -> dict[int, list[dict]]:
+def get_lesson_speakers(mishmar_id: int,
+                        lessons: Optional[list[dict]] = None) -> dict[int, list[dict]]:
     """All candidate speakers for a Mishmar's lessons, grouped by lesson_id —
-    ONE query, per the one-query-per-list rule."""
-    lesson_ids = [l["id"] for l in get_lessons(mishmar_id)]
+    ONE query, per the one-query-per-list rule. Pass the lessons you already
+    hold and it is exactly one."""
+    lesson_ids = [l["id"] for l in (lessons if lessons is not None
+                                    else get_lessons(mishmar_id))]
     if not lesson_ids:
         return {}
     rows = _rows(_t("lesson_speakers").select("*")
@@ -1308,6 +1312,31 @@ def upsert_lesson(mishmar_id: int, slot_order: int, title: Optional[str] = None,
 
 def delete_lesson(lesson_id: int) -> bool:
     return bool(_rows(_t("lessons").delete().eq("id", lesson_id).execute()))
+
+
+def set_lesson_duration(mishmar_id: int, lesson_id: int, minutes: int) -> None:
+    """Change one slot's length and reflow the evening's start times."""
+    _t("lessons").update({"duration_minutes": int(minutes)}).eq("id", lesson_id).execute()
+    recompute_lesson_times(mishmar_id)
+
+
+def add_lesson_slot(mishmar_id: int, minutes: int = 60) -> None:
+    """Append an empty lesson slot at the end of the evening."""
+    order = len(get_lessons(mishmar_id)) + 1
+    _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": order,
+                          "duration_minutes": int(minutes)}).execute()
+    recompute_lesson_times(mishmar_id)
+
+
+def add_break(mishmar_id: int, minutes: int = 15) -> None:
+    order = len(get_lessons(mishmar_id)) + 1
+    _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": order,
+                          "is_break": True, "duration_minutes": int(minutes)}).execute()
+    recompute_lesson_times(mishmar_id)
+
+
+def delete_lesson_candidate(candidate_id: int) -> bool:
+    return bool(_rows(_t("lesson_speakers").delete().eq("id", candidate_id).execute()))
 
 
 # --------------------------------------------------------------------------
@@ -1550,3 +1579,123 @@ if __name__ == "__main__":
     if ready["ok"]:
         print(bootstrap())
         print("scope:", PROGRAMME, ACADEMIC_YEAR_HE, "—", INSTITUTION)
+
+
+# --------------------------------------------------------------------------
+# The read cache — why a click costs one run and (almost) no network
+#
+# Streamlit reruns the whole script per interaction, and a run here used to
+# make 9–24 SEQUENTIAL round-trips to Supabase (the same `mishmarim` rows
+# fetched 3–7 times by different screens' helpers). At ~150–300 ms each that
+# is the 3–6 s the trainees felt on every click. Pure reads are memoised per
+# process with a short TTL; EVERY write clears the whole cache, so a change by
+# anyone is visible to everyone on the next run. Streamlit Cloud is a single
+# process, which is what makes that invalidation global.
+#
+# Off switch for tests and scripts that write around the seam:
+#   MISHMAR_NO_CACHE=1
+# --------------------------------------------------------------------------
+
+import functools as _functools
+
+CACHE_TTL_SECONDS = 120
+
+# Each read names the tables it depends on (views expand to their base
+# tables); each write names the tables it touches. A write clears only the
+# reads that can have changed — after a ✓ on a task the fragment refills the
+# task rows, not the Mishmar list, the budget view and the assignments too.
+# A write that is not sure (seeding, the migration backfill) clears everything.
+_READS = {
+    "get_all_mishmarim":        ("mishmarim", "budget"),
+    "get_mishmar":              ("mishmarim",),
+    "get_students":             ("students",),
+    "get_student":              ("students",),
+    "get_student_by_email":     ("students",),
+    "get_mishmarim_for_student": ("assignments", "mishmarim", "budget"),
+    "get_partners":             ("assignments", "students"),
+    "get_tasks_for_mishmar":    ("tasks", "mishmarim"),
+    "get_tasks_for_student":    ("tasks", "mishmarim", "assignments"),
+    "get_all_tasks":            ("tasks", "mishmarim"),
+    "get_task":                 ("tasks",),
+    "get_overdue_tasks":        ("tasks", "mishmarim", "assignments", "students"),
+    "get_student_progress":     ("students", "assignments", "tasks"),
+    "get_lessons":              ("lessons",),
+    "get_lesson_speakers":      ("lesson_speakers", "lessons"),
+    "get_feedback_for_mishmar": ("feedback",),
+    "get_feedback_for_speaker": ("feedback",),
+    "get_budget_speaker_names": ("budget",),
+    "get_speakers_with_status": ("speakers", "speaker_outreach"),
+    "get_all_outreach":         ("speaker_outreach", "speakers", "mishmarim", "students"),
+    "get_speaker_stats":        ("speakers", "speaker_outreach"),
+    "get_outreach_for_speaker": ("speaker_outreach",),
+    "get_outreach_for_mishmar": ("speaker_outreach", "speakers"),
+    "get_speaker_by_name":      ("speakers",),
+    "get_speaker_status":       ("speakers", "speaker_outreach"),
+    "search_speakers_by_topic": ("speakers", "speaker_outreach"),
+    "find_mishmarim_by_topic":  ("mishmarim",),
+    "get_chat_history":         ("chat_messages",),
+}
+_ALL = None   # «not sure» — clear everything
+_WRITES = {
+    "add_task": ("tasks",), "update_task_status": ("tasks",),
+    "edit_task": ("tasks",), "delete_task": ("tasks",),
+    "link_task_to_lesson": ("tasks",),
+    "set_mishmar_topic": ("mishmarim",), "set_student_email": ("students",),
+    "upsert_lesson": ("lessons", "speaker_outreach", "speakers"),
+    "delete_lesson": ("lessons", "tasks"),          # tasks: ON DELETE SET NULL
+    "create_default_timeline": ("lessons",), "recompute_lesson_times": ("lessons",),
+    "set_lesson_duration": ("lessons",), "add_lesson_slot": ("lessons",),
+    "add_break": ("lessons",),
+    "add_lesson_speaker": ("lesson_speakers", "speakers"),
+    "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),
+    "close_lesson_speaker": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),
+    "delete_lesson_candidate": ("lesson_speakers",),
+    "set_lesson_source": ("lessons",), "upload_source_sheet": ("lessons",),
+    "add_budget_entry": ("budget",), "add_feedback": ("feedback",),
+    "record_outreach": ("speaker_outreach", "speakers", "lessons"),
+    "add_new_speaker": ("speakers",),
+    "add_chat_message": ("chat_messages",), "clear_chat_history": ("chat_messages",),
+    "backfill_task_metadata": _ALL, "seed_from_markdown": _ALL,
+}
+
+_cached_fns: list = []          # (wrapped, tables)
+
+
+def _cached(fn, tables):
+    if os.environ.get("MISHMAR_NO_CACHE"):
+        return fn
+    try:
+        import streamlit as st
+        wrapped = st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)(fn)
+    except Exception:            # no Streamlit — scripts, tests
+        return fn
+    _cached_fns.append((wrapped, frozenset(tables)))
+    return wrapped
+
+
+def _invalidate(tables=None) -> None:
+    """Forget the cached reads that depend on `tables` (None = all). Called
+    after every write, and by recompute_lesson_times before it reads."""
+    hit = None if tables is None else frozenset(tables)
+    for f, deps in _cached_fns:
+        if hit is None or deps & hit:
+            try:
+                f.clear()
+            except Exception:
+                pass
+
+
+def _invalidating(fn, tables):
+    @_functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _invalidate(tables)
+    return wrapper
+
+
+for _name, _tables in _READS.items():
+    globals()[_name] = _cached(globals()[_name], _tables)
+for _name, _tables in _WRITES.items():
+    globals()[_name] = _invalidating(globals()[_name], _tables)

@@ -685,10 +685,10 @@ def show_admin_dashboard() -> None:
                             _goto(NAV_WORKFILE, t["mishmar_id"],
                                   _section_for_category(t.get("category")),
                                   task_focus=t["id"])
-                        if b2.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary"):
-                            dm.update_task_status(t["id"], "DONE"); st.rerun()
-                        if b3.button("▶ בתהליך", key=f"ov-ip-{t['id']}"):
-                            dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
+                        b2.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary",
+                                  on_click=_set_status, args=(t["id"], "DONE"))
+                        b3.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
+                                  on_click=_set_status, args=(t["id"], "IN PROGRESS"))
 
     # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
@@ -794,7 +794,27 @@ def _goto(nav: str, mishmar_id: Optional[int] = None,
         "wf_section": section, "wf_focus_lesson": lesson_focus,
         "wf_focus_task": task_focus,
     }
-    st.rerun()
+    # scope="app": a door pressed inside a fragment must restart the whole
+    # page, not just the fragment it was pressed in.
+    st.rerun(scope="app")
+
+
+def _set_status(task_id: int, status: str, toast: Optional[str] = None) -> None:
+    """on_click handler: the write happens BEFORE the run that follows the
+    click, so that single run already shows it — no st.rerun(), no second run.
+    This is the difference between one round-trip and two full page builds."""
+    dm.update_task_status(task_id, status)
+    if toast:
+        st.toast(toast)
+
+
+def _toggle(key: str, value) -> None:
+    """on_click handler for the editors: open if closed, close if open."""
+    st.session_state[key] = None if st.session_state.get(key) == value else value
+
+
+def _set_state(key: str, value) -> None:
+    st.session_state[key] = value
 
 
 def _apply_goto() -> None:
@@ -896,13 +916,12 @@ def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True,
         status = t.get("status")
         b1, b2 = st.columns(2)
         if status == "DONE":
-            if b1.button("↩ החזר לתהליך", key=f"{key_prefix}-{t['id']}-re"):
-                dm.update_task_status(t["id"], "IN PROGRESS"); st.rerun()
+            b1.button("↩ החזר לתהליך", key=f"{key_prefix}-{t['id']}-re",
+                      on_click=_set_status, args=(t["id"], "IN PROGRESS"))
         else:
-            if b1.button("✓ הושלם", key=f"{key_prefix}-{t['id']}-dn", type="primary"):
-                dm.update_task_status(t["id"], "DONE")
-                st.toast(f"«{_clean(t['task_description'])[:40]}» הושלם 🎉")
-                st.rerun()
+            b1.button("✓ הושלם", key=f"{key_prefix}-{t['id']}-dn", type="primary",
+                      on_click=_set_status,
+                      args=(t["id"], "DONE", f"«{_clean(t['task_description'])[:40]}» הושלם 🎉"))
             if link:
                 # «התחל» is a DOOR, not a status flip: it lands on the section
                 # of the workfile where this task is actually done.
@@ -912,8 +931,8 @@ def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True,
                           _section_for_category(t.get("category")))
             else:
                 other = ("↩ לעשות", "TO DO") if status == "IN PROGRESS" else ("▶ התחל", "IN PROGRESS")
-                if b2.button(other[0], key=f"{key_prefix}-{t['id']}-mv"):
-                    dm.update_task_status(t["id"], other[1]); st.rerun()
+                b2.button(other[0], key=f"{key_prefix}-{t['id']}-mv",
+                          on_click=_set_status, args=(t["id"], other[1]))
 
 
 def _card_grid(items: list[dict], key_prefix: str, per_row: int = 2,
@@ -1491,6 +1510,13 @@ def _slot_times(l: dict) -> str:
     return f"{start}–{end // 60:02d}:{end % 60:02d}"
 
 
+def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
+    res = dm.close_lesson_speaker(lesson_id, name, mishmar_id=mid,
+                                  student_id=st.session_state.student_id)
+    st.toast(f"«{res['closed']}» נסגר לשיעור"
+             + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
+
+
 def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
     """The lesson's optional-speakers list: name · phone · status · actions.
     Once one is closed, the list collapses to that single row."""
@@ -1508,26 +1534,19 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
                        if cand.get("phone") else ""),
                     unsafe_allow_html=True)
         cur = cand.get("status") or dm.SPEAKER_STATUSES[0]
-        new_status = c2.selectbox(
+        skey = f"cst-{cand['id']}"
+        c2.selectbox(
             "סטטוס", dm.SPEAKER_STATUSES,
             index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
-            key=f"cst-{cand['id']}", label_visibility="collapsed")
-        if new_status != cur:
-            dm.update_lesson_speaker_status(
-                cand["id"], new_status, mishmar_id=mid,
-                student_id=st.session_state.student_id)
-            st.rerun()
-        if c3.button("✅ סגרנו", key=f"close-{cand['id']}",
-                     help="הופך למרצה של השיעור; שאר המועמדים יוסרו"):
-            res = dm.close_lesson_speaker(
-                l["id"], cand["name"], mishmar_id=mid,
-                student_id=st.session_state.student_id)
-            st.toast(f"«{res['closed']}» נסגר לשיעור"
-                     + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
-            st.rerun()
-        if c4.button("🗑", key=f"rmc-{cand['id']}"):
-            dm._t("lesson_speakers").delete().eq("id", cand["id"]).execute()
-            st.rerun()
+            key=skey, label_visibility="collapsed",
+            on_change=lambda cid=cand["id"], k=skey: dm.update_lesson_speaker_status(
+                cid, st.session_state[k], mishmar_id=mid,
+                student_id=st.session_state.student_id))
+        c3.button("✅ סגרנו", key=f"close-{cand['id']}",
+                  help="הופך למרצה של השיעור; שאר המועמדים יוסרו",
+                  on_click=_close_candidate, args=(l["id"], cand["name"], mid))
+        c4.button("🗑", key=f"rmc-{cand['id']}",
+                  on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
     with st.form(f"addcand-{l['id']}", border=False):
         f1, f2, f3 = st.columns([1.6, 1.3, 0.8])
@@ -1592,8 +1611,7 @@ def _lesson_form(mid: int, l: dict) -> None:
         dm.upsert_lesson(mid, l["slot_order"], title=title,
                          description=desc, lesson_role=role or None, fmt=fmt or None,
                          student_id=st.session_state.student_id)
-        dm._t("lessons").update({"duration_minutes": int(duration)}).eq(
-            "id", l["id"]).execute()
+        dm.set_lesson_duration(mid, l["id"], int(duration))
         source = None
         if up is not None:
             with st.spinner("מעלה את דף המקורות…"):
@@ -1664,7 +1682,7 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
             st.rerun()
         return
 
-    candidates = dm.get_lesson_speakers(mid)
+    candidates = dm.get_lesson_speakers(mid, lessons=lessons)
     linked = dm.get_tasks_for_lesson(tasks=tasks)
     editing = st.session_state.get("editing_lesson")
     focus = st.session_state.pop("wf_focus_lesson", None)
@@ -1701,15 +1719,12 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
                 f"<span dir='ltr'>{_slot_times(l)}</span></div>",
                 unsafe_allow_html=True,
             )
-            new_min = bc2.number_input(
+            bc2.number_input(
                 "דק'", min_value=5, max_value=90, step=5,
                 value=int(l.get("duration_minutes") or 30),
-                key=f"brk-{l['id']}", label_visibility="collapsed")
-            if int(new_min) != int(l.get("duration_minutes") or 30):
-                dm._t("lessons").update({"duration_minutes": int(new_min)}).eq(
-                    "id", l["id"]).execute()
-                dm.recompute_lesson_times(mid)
-                st.rerun()
+                key=f"brk-{l['id']}", label_visibility="collapsed",
+                on_change=lambda mid=mid, lid=l["id"], k=f"brk-{l['id']}":
+                    dm.set_lesson_duration(mid, lid, int(st.session_state[k])))
             continue
 
         lesson_no += 1
@@ -1761,9 +1776,8 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
                     f"{_clean(t['task_description'])}"
                     + (_chip("באיחור", "red") if t.get("overdue") else "")
                     + "</div>", unsafe_allow_html=True)
-                if tc2.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע"):
-                    dm.update_task_status(t["id"], "DONE")
-                    st.toast("בוצע 🎉"); st.rerun()
+                tc2.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
+                           on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
 
             # The slot's open work. Each button either OPENS the task that
             # already covers it or CREATES one tied to this slot — no longer a
@@ -1788,27 +1802,15 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
                         dm.add_task(mid, text, category=category, lesson_id=l["id"])
                         st.toast(f"נפתחה משימה «{text}» וקושרה למקטע")
                     _goto(NAV_WORKFILE, mid, WF_SECTIONS[1])
-            if tc[3].button("✏️ עריכה", key=f"ed-{l['id']}"):
-                st.session_state["editing_lesson"] = (
-                    None if editing == l["id"] else l["id"])
-                st.rerun()
+            tc[3].button("✏️ עריכה", key=f"ed-{l['id']}",
+                         on_click=_toggle, args=("editing_lesson", l["id"]))
 
             if editing == l["id"]:
                 _lesson_form(mid, l)
 
     ac1, ac2 = st.columns(2)
-    if ac1.button("➕ הוסף מקטע"):
-        dm.upsert_lesson(mid, len(lessons) + 1)
-        dm._t("lessons").update({"duration_minutes": 60}).eq(
-            "mishmar_id", mid).eq("slot_order", len(lessons) + 1).execute()
-        dm.recompute_lesson_times(mid)
-        st.rerun()
-    if ac2.button("➕ הוסף הפסקה"):
-        row = dm._t("lessons").insert({
-            "mishmar_id": mid, "slot_order": len(lessons) + 1,
-            "is_break": True, "duration_minutes": 15}).execute()
-        dm.recompute_lesson_times(mid)
-        st.rerun()
+    ac1.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
+    ac2.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
 
 
 def _slot_label(l: dict, index: int) -> str:
@@ -1869,19 +1871,15 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
                 elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):
                     # the evening builder resolves the exact slot from the task
                     _goto(NAV_WORKFILE, mid, WF_SECTIONS[0], task_focus=t["id"])
-            if c2.button("✓", key=f"{k}-dn", help="סמן שבוצע"):
-                dm.update_task_status(t["id"], "DONE")
-                st.toast("בוצע 🎉"); st.rerun()
+            c2.button("✓", key=f"{k}-dn", help="סמן שבוצע",
+                      on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
         else:
-            if c1.button("↩ החזר", key=f"{k}-re"):
-                dm.update_task_status(t["id"], "TO DO"); st.rerun()
-        if c3.button("✏️", key=f"{k}-ed", help="עריכה"):
-            st.session_state["editing_task"] = (
-                None if st.session_state.get("editing_task") == t["id"] else t["id"])
-            st.rerun()
-        if c4.button("🗑", key=f"{k}-rm", help="מחיקה"):
-            dm.delete_task(t["id"])
-            st.toast("המשימה נמחקה"); st.rerun()
+            c1.button("↩ החזר", key=f"{k}-re",
+                      on_click=_set_status, args=(t["id"], "TO DO"))
+        c3.button("✏️", key=f"{k}-ed", help="עריכה",
+                  on_click=_toggle, args=("editing_task", t["id"]))
+        c4.button("🗑", key=f"{k}-rm", help="מחיקה",
+                  on_click=dm.delete_task, args=(t["id"],))
 
         if st.session_state.get("editing_task") == t["id"]:
             with st.form(f"edit-{k}", border=False):
@@ -2105,6 +2103,15 @@ def show_mishmar_page() -> None:
     if not mid:
         return
 
+    _workfile_body(mid)
+
+
+@st.fragment
+def _workfile_body(mid: int) -> None:
+    """Everything under the Mishmar picker, as ONE fragment: a click inside it
+    (✓ on a task, an editor toggle, a candidate status) reruns this body only —
+    the sidebar, the header and the chat panel are not re-executed. Its reads
+    are cached, so the rerun is the write plus a few dict lookups."""
     m = dm.get_mishmar(mid)
     tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_mishmar(mid)]
     progress = dm.mishmar_progress(mishmar=m, tasks=tasks)
@@ -2203,6 +2210,7 @@ def _message_text(content) -> str:
     return "\n\n".join(parts).strip()
 
 
+@st.fragment
 def render_chat_panel() -> None:
     """The global assistant — a persistent panel beside EVERY page.
 
@@ -2220,9 +2228,8 @@ def render_chat_panel() -> None:
         "<small>מחובר ללוח החי</small></div>",
         unsafe_allow_html=True,
     )
-    if close.button("✕", key="chat_close", help="קפל את הצ׳אט"):
-        st.session_state["chat_open"] = False
-        st.rerun()
+    close.button("✕", key="chat_close", help="קפל את הצ׳אט",
+                 on_click=_set_state, args=("chat_open", False))
 
     mine = _my_mishmarim()
     if not mine:
@@ -2318,8 +2325,9 @@ def render_chat_panel() -> None:
                             student_id=st.session_state.student_id)
     # THE point of the global panel: re-render the page the trainee is looking
     # at, so a change the chat wrote (task closed, outreach logged) is visible
-    # on the main column immediately.
-    st.rerun()
+    # on the main column immediately. scope="app" because the panel is a
+    # fragment — a plain rerun would refresh only the chat.
+    st.rerun(scope="app")
 
 
 # --------------------------------------------------------------------------
@@ -2420,9 +2428,9 @@ def main() -> None:
     with chat_col:
         if chat_open:
             render_chat_panel()
-        elif st.button("💬", key="chat_reopen", help="פתח את שותף הבנייה"):
-            st.session_state["chat_open"] = True
-            st.rerun()
+        else:
+            st.button("💬", key="chat_reopen", help="פתח את שותף הבנייה",
+                      on_click=_set_state, args=("chat_open", True))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ Path-scoped rules load automatically when their files enter context:
 - `.claude/rules/ui.md` — RTL mechanics, the rerun trap, the design system + brand theme, deep-link navigation and its widget-state trap, phase-driven UI, query budgets, date formats, Playwright verification.
 - `.claude/rules/pedagogy.md` — what a Mishmar is, ideal vs. real format, the content rules (dead-thinker trap, ⚠️ לאמת, no invented contacts), the archive's traps, speaker-search throttling, the image workflow.
 - `.claude/rules/chat-agent.md` — the Mishmar-scoping rule and the four cost ceilings that keep a chat turn flat.
+- **Performance is a rule, not a phase**: reads are cached by table and every write invalidates through `data_manager` (`_READS`/`_WRITES`); buttons use `on_click`, never `write(); st.rerun()`; the workfile body and the chat are fragments. Details in `database.md` and `ui.md`.
 
 **`system_rules.md` is the operating layer** — read it when acting as the programme's assistant rather than as a repo developer. `.claude/skills/` holds the programme's recurring workflows; `.claude/agents/` holds the specialized subagents (speaker-scout, topic-ideation, lesson-builder, app-reviewer, archive-diver).
 
