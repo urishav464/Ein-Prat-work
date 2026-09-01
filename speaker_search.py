@@ -404,6 +404,8 @@ def search_candidates(
     topic: str,
     lesson: str = "1",
     max_queries: int = 4,
+    lesson_topic: str = "",
+    include_index: bool = True,
 ) -> dict:
     """DISCOVERY: find candidate speakers for a topic, from index AND from the web.
 
@@ -414,7 +416,11 @@ def search_candidates(
     if not topic:
         raise ValueError("topic is required")
 
-    lesson = str(lesson)
+    lesson = str(lesson or "")
+    # The evening's topic and the SLOT's topic are different questions — «אמון»
+    # for the night, «אמון במשפחה» for this lesson — and the queries want both.
+    subject = f"{topic} {lesson_topic}".strip() if lesson_topic.strip() else topic
+
     if lesson == "4":
         # The generator prompt is explicit: lesson 4 is חבורות / ניגון /
         # כתיבה — interactive by design, never a frontal outside guest.
@@ -430,16 +436,29 @@ def search_candidates(
             "index_hits": [], "web_names": [], "raw": [], "queries": [], "errors": [],
         }
 
-    profile = LESSON_PROFILES.get(lesson, LESSON_PROFILES["1"])
+    # No lesson chosen is the DEFAULT now: the profile is a recommendation, not
+    # a requirement, so an empty choice searches all three angles.
+    if lesson in LESSON_PROFILES:
+        profile = LESSON_PROFILES[lesson]
+        templates = profile["queries"][:max_queries]
+    else:
+        profile = {"label": "כל הזוויות"}
+        templates, seen_t = [], set()
+        for k in ("1", "2", "3"):          # round-robin so no angle is starved
+            for i, t in enumerate(LESSON_PROFILES[k]["queries"][:2]):
+                if t not in seen_t:
+                    seen_t.add(t)
+                    templates.append(t)
+        templates = templates[:max_queries + 2]
 
-    index_hits = dm.search_speakers_by_topic(topic, lesson=lesson)
+    index_hits = dm.search_speakers_by_topic(topic, lesson=lesson) if include_index else []
 
     raw: list[dict] = []
     queries: list[str] = []
     errors: list[dict] = []
 
-    for template in profile["queries"][:max_queries]:
-        q = template.format(topic=topic)
+    for template in templates:
+        q = template.format(topic=subject)
         queries.append(q)
         try:
             raw.extend(_fetch(q))
@@ -452,7 +471,8 @@ def search_candidates(
     web_names = extract_names(raw)
 
     # Annotate anything we already know about, so two trainees cannot approach
-    # the same person unaware of each other.
+    # the same person unaware of each other. This runs even when the index is
+    # NOT being searched: it is collision safety, not a search result.
     known = {r["name"] for r in index_hits}
     for entry in web_names:
         entry["index_notes"] = _index_note(entry["name"])
@@ -460,6 +480,8 @@ def search_candidates(
 
     return {
         "topic": topic,
+        "lesson_topic": lesson_topic,
+        "subject": subject,
         "lesson": lesson,
         "lesson_label": profile["label"],
         "skipped": False,

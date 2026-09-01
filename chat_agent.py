@@ -38,6 +38,7 @@ MAX_TOOL_ROUNDS = 3        # API calls per user message; the last cannot use too
 HISTORY_WINDOW = 8         # trailing messages sent to the model
 TOOL_RESULT_LIMIT = 1500   # chars of any one tool result kept in the history
 MAX_SPEAKER_ROWS = 8       # rows a speaker search may hand back
+MAX_SCOUT_CANDIDATES = 5   # researched names the search screen returns
 
 GENERATOR_PROMPT_PATH = os.path.join(
     dm.REPO_ROOT, "Mishmer-section", "generator", "mishmar-generator-prompt.md"
@@ -755,19 +756,26 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 
 SCOUT_SYSTEM = """\
 אתה סוקר מועמדים להרצאה במשמר של מדרשת עין פרת. תקבל תוצאות חיפוש גולמיות:
-התאמות מהמאגר המשותף (עם סטטוס ויומן פניות) ושמות שנכרו מתוצאות חיפוש רשת.
+שמות שנכרו מתוצאות חיפוש ברשת, עם הכותרות והקישורים שמהם הם חולצו.
 
-בחר את 3–4 המועמדים הטובים ביותר לנושא ולשיעור. כללים קשיחים:
+בחר את חמשת המועמדים הטובים ביותר לנושא. כללים קשיחים:
 1. **רק שמות שמופיעים בקלט.** אל תמציא שם, תואר, שיוך מוסדי או פרט קשר.
-2. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד.
-3. שם שמקורו ברשת חייב לשאת דגל "⚠️ לאמת" — הוא לא אומת.
-4. אם במאגר כתוב שכבר פנו לאדם — זה חייב להופיע בכרטיס שלו.
-5. עדיף מועמד מהמאגר עם היסטוריה טובה על שם רשת לא מוכר, אבל אל תסתפק רק
-   במאגר אם הרשת העלתה שם רלוונטי באמת.
+2. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד —
+   שפינוזה, לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין.
+3. כל שם מהרשת נושא דגל "⚠️ לאמת" — הוא לא אומת.
+4. **פרטי קשר לעולם לא.** אין טלפון, אין אימייל, גם אם הם מופיעים בתוצאה.
+   במקום זה — הקישור המוסדי שבו אדם יוכל למצוא אותם.
+5. כל שדה שאי אפשר לבסס על הכותרות והקישורים שקיבלת — החזר "" ריק.
+   ניחוש הוא המצאה. עדיף שדה ריק על פרט שגוי שחניך יסתמך עליו.
+6. `link` חייב להיות אחד הקישורים שקיבלת בקלט, ורצוי כזה שנוגע לנושא.
 
 החזר JSON בלבד, במבנה:
-{"candidates": [{"name": "...", "title": "ד\"ר/הרב/... או null",
-  "source": "index" או "web", "rationale": "משפט אחד למה מתאים",
+{"candidates": [{"name": "...", "title": "ד\"ר/הרב/... או \"\"",
+  "affiliation": "מוסד / מקום עבודה, אם עולה מהתוצאות",
+  "region_hint": "היכן הוא/היא יושב/ת, אם עולה מהתוצאות",
+  "bio": "משפט אחד — מי זה ובמה עוסק/ת",
+  "rationale": "משפט אחד למה מתאים לנושא הזה",
+  "link": "קישור למאמר/ראיון מתוך הקלט שמתקשר לנושא",
   "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}]}
 """
 
@@ -783,46 +791,42 @@ def _history_line(name: str) -> Optional[str]:
     return None
 
 
-def scout_speakers(topic: str, lesson: str = "1") -> dict:
-    """One search → 3-4 vetted candidates, or a fallback the UI can render raw.
+def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "") -> dict:
+    """One web search → 5 researched candidates, or a fallback rendered raw.
 
-    Gathers through the existing throttled paths (index + web discovery) and
-    spends exactly ONE model call to curate. Every failure mode — no API key,
-    refused JSON, empty search — degrades to {"fallback": True, "raw": ...}
-    so the screen keeps working without the synthesis.
+    Gathers through the throttled discovery path and spends exactly ONE model
+    call to curate. The shared index is NOT searched — the screen is for
+    finding people we do not know yet — but index membership is still checked,
+    because two pairs approaching the same person is the hazard this warns about.
+    Every failure — no API key, refused JSON, empty search — degrades to
+    {"fallback": True, "raw": ...} so the screen keeps working.
     """
-    raw = ss.search_candidates(topic, lesson=lesson)
+    raw = ss.search_candidates(topic, lesson=lesson, lesson_topic=lesson_topic,
+                               include_index=False)
     if raw.get("skipped"):
         return {"fallback": True, "raw": raw}
 
     # Compact inputs: the synthesis pays per token, and evidence snippets are
     # long. Project before sending, exactly like tool results are compacted.
-    index_part = []
-    for r in raw.get("index_hits", [])[:8]:
-        status_rows = dm.get_speaker_status(r["name"])
-        cur = status_rows[0] if status_rows else {}
-        index_part.append({
-            "name": dm.display_name(r),
-            "topics": r.get("expertise_topics"),
-            "notes": (r.get("notes") or "")[:120],
-            "status": cur.get("current_status") or r.get("status"),
-            "already_approached": bool(cur.get("has_outreach")),
-            "history": _history_line(r["name"]),
-        })
+    index_part: list[dict] = []
     web_part = [{
         "name": e.get("name"),
         "confidence": e.get("confidence"),
-        "evidence": [{"title": (ev.get("title") or "")[:90],
-                      "href": ev.get("href")} for ev in e.get("evidence", [])[:2]],
+        # three snippets, not two: affiliation and a topical article have to be
+        # GROUNDED in what we send, and one title rarely carries both.
+        "evidence": [{"title": (ev.get("title") or "")[:140],
+                      "body": (ev.get("body") or "")[:220],
+                      "href": ev.get("href")} for ev in e.get("evidence", [])[:3]],
         "flags": e.get("flags", []),
-    } for e in raw.get("web_names", [])[:10]]
+    } for e in raw.get("web_names", [])[:14]]
 
     if not index_part and not web_part:
         return {"fallback": True, "raw": raw}
 
     payload = json.dumps(
-        {"topic": topic, "lesson": lesson,
-         "index_hits": index_part, "web_names": web_part},
+        {"topic": topic, "lesson_topic": lesson_topic,
+         "lesson": lesson or "לא נבחר — שקול כל זווית",
+         "web_names": web_part},
         ensure_ascii=False)
 
     try:
@@ -843,24 +847,35 @@ def scout_speakers(topic: str, lesson: str = "1") -> dict:
 
     # The no-invention rule, enforced and not just requested: a candidate
     # whose name matches nothing we sent is dropped.
-    known = {ip["name"] for ip in index_part} | {r["name"] for r in raw.get("index_hits", [])}
     known_web = {w["name"] for w in web_part if w.get("name")}
+    known_links = {ev["href"] for w in web_part for ev in w["evidence"] if ev.get("href")}
     vetted = []
-    for c in candidates[:4]:
+    for c in candidates[:MAX_SCOUT_CANDIDATES]:
         name = (c.get("name") or "").strip()
-        if not name:
-            continue
-        in_index = any(name in k or k in name for k in known)
-        in_web = any(name == k for k in known_web)
-        if not (in_index or in_web):
-            continue
-        c["source"] = "index" if in_index else "web"
-        if c["source"] == "web" and "⚠️ לאמת" not in (c.get("flags") or []):
+        if not name or name not in known_web:
+            continue                       # a name we never sent is invented
+        c["source"] = "web"
+        if "⚠️ לאמת" not in (c.get("flags") or []):
             c.setdefault("flags", []).append("⚠️ לאמת")
-        row = next((ip for ip in index_part if name in ip["name"] or ip["name"] in name), None)
-        c["index_status"] = (row or {}).get("status")
-        c["already_approached"] = bool((row or {}).get("already_approached"))
-        c["history"] = (row or {}).get("history")
+        # A link we did not supply is invented too — drop it rather than send a
+        # trainee to a URL nobody has seen.
+        if c.get("link") and c["link"] not in known_links:
+            c["link"] = ""
+        # Contact details are never carried, whatever the model returned.
+        for banned in ("contact", "phone", "email", "טלפון"):
+            c.pop(banned, None)
+        # The collision warning survives dropping the index SEARCH: what matters
+        # is whether another pair is already talking to this person.
+        try:
+            status_rows = dm.get_speaker_status(name)
+        except Exception:
+            status_rows = []
+        cur = status_rows[0] if status_rows else {}
+        c["index_status"] = cur.get("current_status")
+        c["already_approached"] = bool(cur.get("has_outreach"))
+        c["history"] = _history_line(name) if cur else None
+        if cur:
+            c.setdefault("flags", []).append("‼️ כבר במאגר")
         vetted.append(c)
 
     if not vetted:

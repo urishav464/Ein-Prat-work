@@ -518,6 +518,12 @@ def bootstrap() -> dict:
     if not ready["ok"]:
         return {"seeded": False, "reason": ready["reason"], "storage_ok": False}
     out = seed_from_markdown()
+    # Idempotent and cheap (one query; writes only rows whose value changed),
+    # so it also upgrades a database seeded before domains existed.
+    try:
+        out["domains"] = backfill_speaker_domains()
+    except Exception:
+        pass
     out["storage_ok"] = True
     return out
 

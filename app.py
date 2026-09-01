@@ -852,7 +852,15 @@ def show_admin_dashboard() -> None:
 from datetime import date as _date_cls, timedelta as _timedelta
 
 
-WF_SECTIONS = ["🎯 בניית הערב", "✅ משימות", "🌙 אחרי המשמר"]
+# The workfile is two columns now — the evening on the right, the tasks on the
+# left — so a «section» is no longer a tab you switch to but a panel that opens.
+WF_STRUCTURE, WF_LOGISTICS, WF_AFTER = "structure", "logistics", "after"
+WF_PANELS = (WF_STRUCTURE, WF_LOGISTICS, WF_AFTER)
+WF_PANEL_LABELS = {
+    WF_STRUCTURE: "🎯 מבנה הערב",
+    WF_LOGISTICS: "📦 לוגיסטיקה",
+    WF_AFTER: "🌙 משוב וסיכום",
+}
 
 
 def _goto(nav: str, mishmar_id: Optional[int] = None,
@@ -907,7 +915,12 @@ def _apply_goto() -> None:
     if req.get("workfile_mishmar") is not None:
         st.session_state["workfile_mishmar"] = req["workfile_mishmar"]
     if req.get("wf_section") is not None:
-        st.session_state["wf_section"] = req["wf_section"]
+        # Panels are expanders, and an expander remembers its open state in the
+        # browser — so `expanded=True` alone is ignored on a second visit.
+        # Bumping the nonce remounts all three, which makes the requested one
+        # genuinely open.
+        st.session_state["wf_panel"] = req["wf_section"]
+        st.session_state["wf_panel_nonce"] = st.session_state.get("wf_panel_nonce", 0) + 1
     st.session_state["wf_focus_lesson"] = req.get("wf_focus_lesson")
     st.session_state["wf_focus_task"] = req.get("wf_focus_task")
 
@@ -946,10 +959,10 @@ _STATUS_CHIP = {"TO DO": ("לעשות", "gray"),
 
 def _section_for_category(category: Optional[str]) -> str:
     if category in ("נושא", "מרצים", "תוכן"):
-        return WF_SECTIONS[0]      # בניית הערב
+        return WF_STRUCTURE
     if category == "אחרי":
-        return WF_SECTIONS[2]      # אחרי המשמר
-    return WF_SECTIONS[1]          # משימות
+        return WF_AFTER
+    return WF_LOGISTICS
 
 
 def _urgency(t: dict) -> str:
@@ -1272,61 +1285,70 @@ def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
 
 
 def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
-    """One curated candidate: identity, provenance, warnings, and the write."""
+    """One researched candidate: who they are, where they are, why they fit,
+    and the evidence. Everything here is grounded in what the search returned —
+    a field the scout could not support comes back empty, and contact details
+    are never carried at all."""
     name = c["name"]
     display = f"{c['title']} {name}" if c.get("title") else name
     with st.container(border=True):
-        chips = []
-        chips.append(_chip("📗 מהמאגר", "green") if c.get("source") == "index"
-                     else _chip("🌐 מהרשת", "blue"))
-        if c.get("index_status"):
-            chips.append(_speaker_status_chip(c["index_status"]))
+        chips = [_chip("🌐 מהרשת", "blue")]
         for f in c.get("flags", []):
             chips.append(_chip(f, "yellow"))
         st.markdown(
             f"<div class='task-desc'>{_clean(display)}</div><div>{''.join(chips)}</div>",
             unsafe_allow_html=True,
         )
+        facts = []
+        if c.get("affiliation"):
+            facts.append(f"🏛️ {_clean(c['affiliation'])}")
+        if c.get("region_hint"):
+            facts.append(f"📍 {_clean(c['region_hint'])}")
+        if facts:
+            st.caption(" · ".join(facts))
+        if c.get("bio"):
+            st.markdown(_clean(c["bio"]))
+        if c.get("rationale"):
+            st.caption("למה מתאים: " + _clean(c["rationale"]))
         if c.get("already_approached"):
             st.warning("‼️ כבר פנו לאדם הזה השנה — בדקו את היומן במאגר לפני פנייה נוספת.")
-        if c.get("rationale"):
-            st.caption(_clean(c["rationale"]))
         if c.get("history"):
             st.caption(f"🕓 אצלנו: {c['history']}")
+        if c.get("link"):
+            st.markdown(f"📄 [מאמר / ראיון בנושא]({c['link']})")
         for ev in (c.get("evidence") or [])[:2]:
             if ev.get("href"):
                 st.caption(f"[{_clean(ev.get('title') or ev['href'])[:80]}]({ev['href']})")
+        st.caption("☎️ פרטי קשר לא נשלפים מהרשת — מצאו אותם דרך העמוד המוסדי.")
 
         ac1, ac2, ac3 = st.columns([1.6, 1.1, 0.7])
         if mid:
             lessons = dm.get_lessons(mid)
             if lessons:
                 labels = {l["slot_order"]: f"{l['slot_order']}. {l.get('title') or ''}"
-                          for l in lessons}
+                          for l in lessons if not l.get("is_break")}
             else:
                 labels = {i: f"שיעור {i}" for i in (1, 2, 3, 4)}
-            default = int(lesson) if lesson.isdigit() and int(lesson) in labels else list(labels)[0]
             slot = ac1.selectbox(
                 "מקטע", list(labels), format_func=lambda i: labels[i],
-                index=list(labels).index(default), key=f"slot-{idx}-{name}",
-                label_visibility="collapsed")
+                key=f"slot-{idx}-{name}", label_visibility="collapsed")
             if ac2.button("➕ שבץ", key=f"attach-{idx}-{name}", type="primary",
                           help="מוסיף למאגר אם חדש, ומשבץ למקטע הנבחר"):
-                wrote = []
-                if c.get("source") == "web":
-                    href = next((e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
-                    dm.add_new_speaker(
-                        name=display, expertise_topics=None,
-                        verification_url=href, source_type="web_search",
-                        lesson_fit=lesson,
-                        notes="נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה")
-                    wrote.append("נוסף למאגר")
+                href = c.get("link") or next(
+                    (e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
+                dm.add_new_speaker(
+                    name=display,
+                    expertise_topics=c.get("bio") or None,
+                    verification_url=href, source_type="web_search",
+                    lesson_fit=lesson or None,
+                    notes=" · ".join(
+                        x for x in [c.get("affiliation"), c.get("region_hint"),
+                                    "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
                 # Attaching is not approaching: the name goes on the slot, the
                 # journal stays quiet until the pair actually reaches out.
                 dm.upsert_lesson(mid, int(slot), speaker_name=name,
                                  student_id=st.session_state.student_id)
-                wrote.append(f"שובץ למקטע {slot}")
-                st.toast(f"«{name}» — " + " · ".join(wrote))
+                st.toast(f"«{name}» נוסף למאגר ושובץ למקטע {slot}")
                 st.rerun()
         else:
             ac1.caption("בחרו משמר למעלה כדי לשבץ")
@@ -1334,11 +1356,22 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
             st.session_state["verify_name"] = name
 
 
+# The angle is a RECOMMENDATION, empty by default. Keyed by label rather than
+# by profile id because a selectbox whose first option is "" renders blank —
+# the reader would see a label with no value and not know it was a choice.
+LESSON_ANGLES = {
+    "— בלי המלצה, לחפש בכל הזוויות —": "",
+    "יסודות — היסטוריון, חוקר, איש אקדמיה": "1",
+    "ערעור / טוויסט — פילוסוף, הוגה, מחשבת ישראל": "2",
+    "זווית מפתיעה — אמנות, קולנוע, פסיכולוגיה, סוציולוגיה": "3",
+}
+
+
 def show_speaker_search() -> None:
     st.title("חיפוש מרצים")
     st.caption(
-        "סריקה אחת — המאגר המשותף וגם הרשת — וקבלת 3–4 מועמדים מסוננים. "
-        "כל שם מהרשת הוא ⚠️ לאמת עד שבדקתם."
+        "סריקה של הרשת — לא של המאגר — וחמישה שמות שנבדקו. "
+        "כל שם הוא ⚠️ לאמת עד שבדקתם, ופרטי קשר לעולם לא נשלפים אוטומטית."
     )
 
     status = ss.search_status()
@@ -1361,42 +1394,40 @@ def show_speaker_search() -> None:
         today = _date_cls.today()
         upcoming = [m for m in mine
                     if (_parse_date(m.get("gregorian_date")) or today) >= today]
-        hero = min(upcoming, key=lambda m: m["gregorian_date"]) if upcoming else mine[-1]
+        hero = (min(upcoming, key=lambda m: _parse_date(m["gregorian_date"]) or today)
+                if upcoming else mine[-1])
         default_mid = hero["id"]
         default_topic = hero.get("topic") or ""
 
     with st.form("speaker_search"):
-        f1, f2 = st.columns([2.5, 1.5])
-        topic = f1.text_input("נושא", value=default_topic, placeholder="למשל: תשובה")
-        lesson = f2.selectbox(
-            "לאיזה שיעור?",
-            options=["1", "2", "3", "4"],
-            format_func=lambda k: (
-                f"{k} · {ss.LESSON_PROFILES[k]['label']}" if k in ss.LESSON_PROFILES
-                else "4 · נחיתה אל הלב (ללא מרצה חיצוני)"
-            ),
-        )
+        f1, f2 = st.columns(2)
+        topic = f1.text_input("נושא המשמר", value=default_topic,
+                              placeholder="למשל: תשובה")
+        lesson_topic = f2.text_input("נושא השיעור", placeholder="למשל: חרטה ואחריות")
+        g1, g2 = st.columns([1.4, 1.2])
+        lesson = LESSON_ANGLES[g1.selectbox(
+            "המלצה: איזו זווית? (רשות)", options=list(LESSON_ANGLES))]
         labels = {m["id"]: f"#{m['id']:02d} · {m['gregorian_date']}" for m in mine}
-        mid = st.selectbox(
+        mid = g2.selectbox(
             "לאיזה משמר משבצים?", [None, *labels],
             format_func=lambda i: "— בלי שיבוץ —" if i is None else labels[i],
             index=(list(labels).index(default_mid) + 1) if default_mid in labels else 0,
         ) if mine else None
-        go = st.form_submit_button("🔎 סרוק מאגר + רשת", type="primary")
+        go = st.form_submit_button("🔎 סרוק את הרשת", type="primary")
 
-    # The scout fires ONLY here (rerun trap), and is cached per (topic, lesson)
-    # so switching pages and returning does not re-spend the model call.
-    if go and topic.strip():
-        key = (topic.strip(), lesson)
-        with st.spinner("סורק את המאגר ואת הרשת, ומסנן… (עד חצי דקה)"):
-            st.session_state["scout_result"] = ca.scout_speakers(topic.strip(), lesson)
-            st.session_state["scout_key"] = key
+    # The scout fires ONLY here (rerun trap), and is cached per query so
+    # switching pages and returning does not re-spend the model call.
+    if go and (topic.strip() or lesson_topic.strip()):
+        with st.spinner("סורק את הרשת ומסנן… (עד חצי דקה)"):
+            st.session_state["scout_result"] = ca.scout_speakers(
+                topic.strip(), lesson, lesson_topic.strip())
+            st.session_state["scout_key"] = (topic.strip(), lesson_topic.strip(), lesson)
         st.session_state.pop("verify_name", None)
         st.session_state.pop("verify_cache", None)
 
     result = st.session_state.get("scout_result")
     if not result:
-        st.info("הזינו נושא, בחרו שיעור ומשמר — ולחצו סרוק.")
+        st.info("הזינו נושא — של המשמר, של השיעור, או שניהם — ולחצו סרוק.")
         return
 
     raw = result.get("raw") or {}
@@ -1406,7 +1437,7 @@ def show_speaker_search() -> None:
 
     if not result.get("fallback"):
         st.divider()
-        st.markdown(f"#### המועמדים המומלצים ({len(result['candidates'])})")
+        st.markdown(f"#### המועמדים שנבדקו ({len(result['candidates'])})")
         cands = result["candidates"]
         for i in range(0, len(cands), 2):
             cols = st.columns(2)
@@ -1431,7 +1462,7 @@ def show_speaker_search() -> None:
         vcache = st.session_state.setdefault("verify_cache", {})
         if name not in vcache:
             with st.spinner("מאמת…"):
-                vcache[name] = ss.verify_speaker(name, topic=raw.get("topic") or "")
+                vcache[name] = ss.verify_speaker(name, topic=raw.get("subject") or "")
         v = vcache[name]
         for k, val in v["checklist"].items():
             st.markdown(f"- **{k}:** {val}")
@@ -1445,25 +1476,9 @@ def show_speaker_search() -> None:
         for err in v.get("errors", []):
             st.markdown(f"`{err['query']}` — [חיפוש ידני]({err['manual']['duckduckgo']})")
 
-    st.divider()
-    with st.expander("📋 בלוק להעתקה לצ'אט (לסינתזה)"):
-        st.code(ss.format_for_chat(raw), language="markdown")
-
 
 def _raw_search_results(result: dict) -> None:
     """The pre-synthesis listing — also the whole page when there is no API key."""
-    st.markdown(f"##### 📗 מהמאגר ({len(result.get('index_hits') or [])})")
-    if result.get("index_hits"):
-        for r in result["index_hits"]:
-            st.markdown(
-                f"**{_clean(r['name'])}** — {_clean(r.get('expertise_topics') or 'תחום לא רשום')} · "
-                f"סטטוס: {r.get('status') or '—'}"
-            )
-            if "סירב" in (r.get("status") or "") or "לא יכול" in (r.get("status") or ""):
-                st.caption("↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב בתקופה אחרת")
-    else:
-        st.caption("אין התאמות במאגר לנושא הזה.")
-
     st.markdown(f"##### 🌐 שמות חדשים מהרשת ({len(result.get('web_names') or [])})")
     st.caption(
         "כל שם כאן הוא ⚠️ **לאמת** — הוא חולץ מתוצאות חיפוש, לא מהמאגר. "
@@ -1481,76 +1496,79 @@ def _raw_search_results(result: dict) -> None:
             )
 
 
-def _topic_chips_from(rows: list[dict]) -> list[str]:
-    """Distinct topic tags across the index, most common first — the filter row."""
-    counts: dict[str, int] = {}
-    for r in rows:
-        for part in (r.get("expertise_topics") or "").split(","):
-            tag = part.strip()
-            if tag and tag != "TBD":
-                counts[tag] = counts.get(tag, 0) + 1
-    return [t for t, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
-
-
-def _speaker_index_card(r: dict, history: list[dict], dup_count: int) -> None:
-    """A person in the shared memory: name and what they bring. The journal,
-    contact and status all fold away — the face of the card is who they are,
-    not where some outreach stands."""
+def _speaker_index_card(r: dict, history: list[dict], dup_count: int,
+                        teaching: Optional[dict] = None) -> None:
+    """A person in the shared memory. The face of the card is who they are and
+    what they bring; opening it gives what you actually need before calling —
+    where they are, how to reach them, whether they have taught here, and how
+    it landed. Outreach status is NOT on this screen: the index is memory, and
+    a booking state told nobody anything while browsing."""
+    teaching = teaching or {}
     with st.container(border=True):
         warn = " ⚠️" if dup_count > 1 else ""
-        topics = [t.strip() for t in (r.get("expertise_topics") or "").split(",")
-                  if t.strip() and t.strip() != "TBD"]
-        chips = "".join(_chip(t, "blue") for t in topics[:3])
+        domains = [d.strip() for d in (r.get("domains") or "").split(",") if d.strip()]
+        chips = "".join(_chip(d, "blue") for d in domains[:3])
+        taught = teaching.get("taught") or []
+        if taught:
+            chips += _chip(f"לימד/ה {len(taught)}×", "green")
         st.markdown(
             f"<div class='task-desc'>{_clean(dm.display_name(r))}{warn}</div>"
             f"<div>{chips}</div>",
             unsafe_allow_html=True,
         )
-        if r.get("notes"):
-            st.caption("📝 " + _clean(r["notes"])[:90])
+        topics = (r.get("expertise_topics") or "").strip()
+        if topics and topics != "TBD":
+            st.caption(_clean(topics)[:80])
+        elif r.get("notes"):
+            st.caption("📝 " + _clean(r["notes"])[:80])
 
-        with st.expander("פרטים ויומן"):
+        with st.expander("פרטים"):
             if dup_count > 1:
                 st.warning(
                     f"יש {dup_count} רשומות בשם הזה — ככל הנראה אנשים שונים. "
                     "לא מאחדים אותם על דעתנו; ודאו שזה האדם הנכון."
                 )
-            st.caption(
-                f"סטטוס: {r.get('current_status') or '⬜ לא פנינו'} · "
-                f"אזור: {r.get('region') or '⚪ לא ידוע'} · "
-                f"קשר: {r.get('contact') or 'TBD'} · "
-                f"שיעור: {r.get('lesson_fit') or 'TBD'}"
+            st.markdown(
+                f"**תואר:** {_clean(r.get('title') or '—')}  \n"
+                f"**תחומים:** {_clean(', '.join(domains) or 'לא סווג')}  \n"
+                f"**נושאים כפי שנרשמו:** {_clean(topics or 'TBD')}  \n"
+                f"**אזור:** {_clean(r.get('region') or '⚪ לא ידוע')}  \n"
+                f"**מתאים לשיעור:** {_clean(r.get('lesson_fit') or 'TBD')}"
             )
-            if history:
-                for o in history[:6]:
-                    who = o.get("student_name") or "צוות"
-                    where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "—"
-                    st.markdown(
-                        f"- {o['status']} · {where} · {who} · {(o.get('created_at') or '')[:10]}"
-                        + (f" — {_clean(o['note'])}" if o.get("note") else "")
-                    )
-                if any("לא יכול" in (o["status"] or "") for o in history):
-                    st.caption("↩️ סירוב הוא כמעט תמיד לתאריך מסוים — שווה לנסות שוב.")
-            else:
-                st.caption("עוד לא פנינו אליו/ה השנה.")
+            st.markdown(f"**פרטי קשר:** {_clean(r.get('contact') or 'TBD')}")
+            if r.get("verification_url"):
+                st.markdown(f"🔗 [עמוד מוסדי / אימות]({r['verification_url']})")
+            if r.get("notes"):
+                st.caption("📝 " + _clean(r["notes"]))
 
-            # A status note only. Attaching to a Mishmar happens where the
-            # evening is built — the index is memory, not a booking screen.
-            with st.form(f"outreach-{r['speaker_id']}", border=False):
-                cc1, cc2 = st.columns([1.2, 1])
-                new_status = cc1.selectbox("עדכון", dm.SPEAKER_STATUSES,
-                                           key=f"st-{r['speaker_id']}",
-                                           label_visibility="collapsed")
-                note = cc2.text_input("הערה", key=f"nt-{r['speaker_id']}",
-                                      label_visibility="collapsed",
-                                      placeholder="הערה")
-                if st.form_submit_button("רשום ביומן"):
-                    dm.record_outreach(
-                        new_status, speaker_id=r["speaker_id"],
-                        student_id=st.session_state.student_id,
-                        note=note or None)
-                    st.toast(f"«{r['name']}» → {new_status}")
-                    st.rerun()
+            if taught:
+                st.markdown("**לימד/ה אצלנו:**")
+                for l in taught[:6]:
+                    st.markdown(
+                        f"- משמר #{l['mishmar_id']:02d}"
+                        + (f" · {_clean(l['title'])}" if l.get("title") else ""))
+            else:
+                st.caption("עוד לא לימד/ה אצלנו — לפי מה שרשום במערכת.")
+
+            fbs = teaching.get("feedback") or []
+            if fbs:
+                st.markdown("**משוב שנרשם:**")
+                for f in fbs[:5]:
+                    stars = "⭐" * (f.get("rating") or 0)
+                    st.markdown(f"- {stars} {_clean(f.get('lesson_title') or '')}")
+                    if f.get("what_worked"):
+                        st.caption(_clean(f["what_worked"])[:160])
+                    if f.get("what_didnt"):
+                        st.caption("פחות: " + _clean(f["what_didnt"])[:160])
+
+            if history:
+                with st.expander(f"יומן פניות ({len(history)})"):
+                    for o in history[:8]:
+                        who = o.get("student_name") or "צוות"
+                        where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "—"
+                        st.markdown(
+                            f"- {o['status']} · {where} · {who} · {(o.get('created_at') or '')[:10]}"
+                            + (f" — {_clean(o['note'])}" if o.get("note") else ""))
 
 
 def show_speaker_index() -> None:
@@ -1559,25 +1577,37 @@ def show_speaker_index() -> None:
     st.title("מאגר המרצים")
     st.caption(
         "הזיכרון המשותף של כל הצוותים: מי קיים, מה הם מביאים, ומה קרה איתם. "
-        "שיבוץ למשמר נעשה בבניית הערב ובחיפוש — כאן נזכרים."
+        "שיבוץ ופניות נעשים בבניית הערב — כאן נזכרים."
     )
 
-    # TWO queries for the whole page — nothing per-card.
+    # THREE queries for the whole page — nothing per-card.
     rows = dm.get_speakers_with_status()
     outreach_by_speaker: dict[int, list[dict]] = {}
     for o in dm.get_all_outreach():
         outreach_by_speaker.setdefault(o["speaker_id"], []).append(o)
+    teaching = dm.get_teaching_history()
 
     query = st.text_input("חיפוש", placeholder="שם · תחום · הערה — למשל: תשובה",
                           label_visibility="collapsed")
 
-    # topic filter chips — pills toggle a single active tag
-    tags = _topic_chips_from(rows)[:12]
-    picked = st.session_state.get("speaker_topic_filter")
-    if tags:
-        chosen = st.pills("תחומים", tags, key="speaker_topic_filter",
-                          label_visibility="collapsed")
-        picked = chosen
+    # Broad domains, with counts. The old chips were the raw free-text tags:
+    # 33 of them across 46 people, almost all used once, so every filter
+    # matched exactly one person.
+    counts: dict[str, int] = {}
+    for r in rows:
+        for d in (r.get("domains") or "").split(","):
+            d = d.strip()
+            if d:
+                counts[d] = counts.get(d, 0) + 1
+    unclassified = sum(1 for r in rows if not (r.get("domains") or "").strip())
+    NO_DOMAIN = "ללא תחום"
+    options = [f"{d} ({n})" for d, n in
+               sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    if unclassified:
+        options.append(f"{NO_DOMAIN} ({unclassified})")
+    picked_label = st.pills("תחומים", options, key="speaker_domain_filter",
+                            label_visibility="collapsed") if options else None
+    picked = picked_label.rsplit(" (", 1)[0] if picked_label else None
 
     if query.strip():
         q = dm.normalize_name(query).lower()
@@ -1585,12 +1615,19 @@ def show_speaker_index() -> None:
             r for r in rows
             if q in dm.normalize_name(r["name"]).lower()
             or q in (r.get("expertise_topics") or "").lower()
+            or q in (r.get("domains") or "").lower()
             or q in (r.get("notes") or "").lower()
         ]
-    if picked:
-        rows = [r for r in rows if picked in (r.get("expertise_topics") or "")]
+    if picked == NO_DOMAIN:
+        rows = [r for r in rows if not (r.get("domains") or "").strip()]
+    elif picked:
+        rows = [r for r in rows if picked in (r.get("domains") or "")]
 
-    st.caption(f"{len(rows)} במאגר")
+    st.caption(
+        f"{len(rows)} במאגר"
+        + (f" · {unclassified} עדיין בלי תחום רשום — נסווגו רק כשיש מה לסווג לפיו"
+           if unclassified and not picked else "")
+    )
     if not rows:
         st.info("אין התאמות.")
         return
@@ -1605,11 +1642,11 @@ def show_speaker_index() -> None:
         for col, r in zip(cols, rows[i:i + 3]):
             with col:
                 _speaker_index_card(
-                    r, outreach_by_speaker.get(r["speaker_id"], []), seen[r["name"]])
+                    r, outreach_by_speaker.get(r["speaker_id"], []), seen[r["name"]],
+                    teaching.get(r["name"]))
     if len(rows) > shown:
-        if st.button(f"הצג עוד ({len(rows) - shown} נוספים)", width="stretch"):
-            st.session_state["speaker_page_size"] = shown + 24
-            st.rerun()
+        st.button(f"הצג עוד ({len(rows) - shown} נוספים)", width="stretch",
+                  on_click=_set_state, args=("speaker_page_size", shown + 24))
 
 
 LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"]
@@ -1653,8 +1690,14 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
     Once one is closed, the list collapses to that single row."""
     closed = l.get("speaker_name")
     if closed:
-        st.markdown(f"🎤 **{_clean(closed)}** {_chip('✅ סגור', 'green')}",
-                    unsafe_allow_html=True)
+        sc1, sc2 = st.columns([3.4, 1])
+        sc1.markdown(f"🎤 **{_clean(closed)}** {_chip('✅ סגור', 'green')}",
+                     unsafe_allow_html=True)
+        # Closing used to be one-way. People change their minds, and the
+        # journal keeps the history either way.
+        sc2.button("🔄 החלף", key=f"reopen-{l['id']}",
+                   help="משחרר את המקטע וממשיך לרשימת המועמדים",
+                   on_click=dm.reopen_lesson_speaker, args=(l["id"],))
         return
     if cands:
         st.markdown("**מרצים אופציונליים:**")
@@ -1766,7 +1809,8 @@ def _speaker_status_chip(status: Optional[str]) -> str:
     return _chip(status, kind)
 
 
-def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
+def _topic_and_structure(mid: int, tasks: list[dict],
+                         lessons: Optional[list[dict]] = None) -> None:
     m = dm.get_mishmar(mid)
 
     # --- the topic: a hero form until it exists, a quiet line after ---
@@ -1805,7 +1849,8 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
         "השעות נגזרות מהמשכים — שינוי משך של משבצת מזרים את כל הערב. "
         "שלושה שיעורים ושעת חבורות הם ברירת המחדל; אפשר לשנות הכל."
     )
-    lessons = dm.get_lessons(mid)
+    if lessons is None:
+        lessons = dm.get_lessons(mid)
     if not lessons:
         if st.button("✨ צור את שלד הערב (20:00, שלושה שיעורים + חבורות)",
                      type="primary", width="stretch"):
@@ -1932,7 +1977,7 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
                     if existing is None:
                         dm.add_task(mid, text, category=category, lesson_id=l["id"])
                         st.toast(f"נפתחה משימה «{text}» וקושרה למקטע")
-                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[1])
+                    _goto(NAV_WORKFILE, mid, WF_STRUCTURE)
             tc[3].button("✏️ עריכה", key=f"ed-{l['id']}",
                          on_click=_toggle, args=("editing_lesson", l["id"]))
 
@@ -1950,6 +1995,135 @@ def _slot_label(l: dict, index: int) -> str:
     if not title and (l.get("lesson_role") or "") == "חבורות":
         title = "חבורות"
     return f"{l.get('start_time') or '--:--'} · {title or f'מקטע {index}'}"
+
+
+def _wf_panel(key: str, count: str = "") -> "st.delta_generator.DeltaGenerator":
+    """One collapsible panel of the evening column.
+
+    `key` on the expander plus a nonce is what makes a deep link work: an
+    expander remembers its open state client-side, so remounting is the only
+    reliable way to force one open.
+    """
+    nonce = st.session_state.get("wf_panel_nonce", 0)
+    label = WF_PANEL_LABELS[key] + (f" · {count}" if count else "")
+    return st.expander(label, expanded=(st.session_state.get("wf_panel", WF_STRUCTURE) == key),
+                       key=f"wfp-{key}-{nonce}")
+
+
+def _logistics_list(mid: int, kind: str, items: list[dict],
+                    title: str, hint: str, placeholder: str,
+                    detail_placeholder: Optional[str] = None) -> None:
+    """The refreshments list and the חבורות room allocation are one widget:
+    rows with a label, an optional detail, and a done box."""
+    st.markdown(f"**{title}**")
+    st.caption(hint)
+    for it in items:
+        c1, c2, c3 = st.columns([0.5, 4.5, 0.6])
+        c1.checkbox("בוצע", value=bool(it.get("done")), key=f"lg-{it['id']}",
+                    label_visibility="collapsed",
+                    on_change=lambda i=it["id"], k=f"lg-{it['id']}":
+                        dm.toggle_logistics_item(i, st.session_state[k]))
+        style = "opacity:.5;text-decoration:line-through" if it.get("done") else ""
+        c2.markdown(
+            f"<div style='{style}'>{_clean(it['label'])}"
+            + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
+               if it.get("detail") else "")
+            + "</div>", unsafe_allow_html=True)
+        c3.button("🗑", key=f"lgx-{it['id']}",
+                  on_click=dm.delete_logistics_item, args=(it["id"],))
+    if not items:
+        st.caption("עוד לא נוספו שורות.")
+    with st.form(f"lgadd-{mid}-{kind}", border=False):
+        f1, f2, f3 = st.columns([2.2, 2, 0.9])
+        label = f1.text_input("פריט", key=f"lgl-{mid}-{kind}",
+                              label_visibility="collapsed", placeholder=placeholder)
+        detail = f2.text_input("פירוט", key=f"lgd-{mid}-{kind}",
+                               label_visibility="collapsed",
+                               placeholder=detail_placeholder or "פירוט (רשות)")
+        if f3.form_submit_button("➕ הוסף") and label.strip():
+            dm.add_logistics_item(mid, kind, label.strip(), detail)
+            st.rerun()
+
+
+def _logistics_panel(mid: int, m: dict) -> None:
+    """Everything the evening needs that is not a lesson: what to buy, which
+    room each חבורה sits in, and the invitation that goes out."""
+    items = dm.get_logistics(mid)
+    _logistics_list(
+        mid, "כיבוד", items.get("כיבוד", []), "🍎 רשימת הכיבוד",
+        "מה קונים לערב. סימון ✓ = נקנה.",
+        "למשל: עוגות · פיצוחים · שתייה חמה", "כמות · מי קונה")
+    st.divider()
+    _logistics_list(
+        mid, "חלל", items.get("חלל", []), "🚪 חלוקת החללים לחבורות",
+        "איזו חבורה יושבת איפה, ומי מוביל אותה.",
+        "למשל: בית המדרש · כיתה 2 · המרפסת", "מי מוביל · כמה משתתפים")
+    st.divider()
+    st.markdown("**✉️ ההזמנה למשמר**")
+    st.caption("הטקסט שנשלח בוואטסאפ, וקישור לפוסטר אם יש.")
+    with st.form(f"inv-{mid}", border=False):
+        text = st.text_area("נוסח ההזמנה", value=m.get("invitation_text") or "",
+                            height=120,
+                            placeholder="מי · מה · מתי · איפה — ולמה כדאי לבוא")
+        url = st.text_input("קישור לפוסטר", value=m.get("invitation_url") or "",
+                            placeholder="https://…")
+        if st.form_submit_button("💾 שמור הזמנה", type="primary"):
+            dm.set_invitation(mid, text=text, url=url)
+            st.toast("ההזמנה נשמרה"); st.rerun()
+    if m.get("invitation_url"):
+        st.caption(f"📎 [הפוסטר]({m['invitation_url']})")
+
+
+def _reset_panel(mid: int, m: dict) -> None:
+    """Start the evening over. Deliberately two steps and deliberately loud —
+    it deletes a season's worth of a pair's work."""
+    with st.expander("⚠️ איפוס המשמר"):
+        st.caption(
+            "מוחק את **כל** מה שנבנה כאן — מבנה הערב והמרצים, המשימות, הלוגיסטיקה, "
+            "התקציב והמשוב — ומחזיר את המשמר לנקודת ההתחלה: בחירת נושא, "
+            "עם רשימת המשימות המקורית. "
+            "**יומן הפניות למרצים לא נמחק** — הוא הזיכרון המשותף של כל הזוגות, "
+            "ומחיקה שלו הייתה מוחקת מידע של אחרים."
+        )
+        ok = st.checkbox(f"אני מבין/ה — לאפס את משמר #{mid:02d}", key=f"rst-ok-{mid}")
+        if st.button("🗑 אפס את המשמר", key=f"rst-{mid}", disabled=not ok):
+            res = dm.reset_mishmar(mid)
+            st.session_state["editing_lesson"] = None
+            st.session_state["editing_task"] = None
+            st.toast(
+                f"המשמר אופס · נמחקו {res['lessons']} מקטעים, {res['tasks']} משימות · "
+                f"הוחזרו {res['tasks_restored']} משימות מקוריות")
+            st.rerun()
+
+
+def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
+    """The workfile: the EVENING on the right, the TASKS on the left.
+
+    Under RTL st.columns mirrors, so declaring [evening, tasks] puts the
+    evening on the right — where a Hebrew reader starts. On a phone Streamlit
+    stacks them, evening first.
+    """
+    m = dm.get_mishmar(mid)
+    # No topic yet: there is exactly one thing to do, and two columns of empty
+    # panels would only hide it.
+    if not m.get("topic"):
+        _topic_and_structure(mid, tasks)
+        _reset_panel(mid, m)
+        return
+
+    lessons = dm.get_lessons(mid)
+    right, left = st.columns([1.15, 1], gap="medium")
+    with right:
+        with _wf_panel(WF_STRUCTURE, f"{len([l for l in lessons if not l.get('is_break')])} מקטעים"):
+            _topic_and_structure(mid, tasks, lessons=lessons)
+        with _wf_panel(WF_LOGISTICS):
+            _logistics_panel(mid, m)
+        with _wf_panel(WF_AFTER):
+            _after_tab(mid)
+        _reset_panel(mid, m)
+    with left:
+        st.markdown("#### ✅ המשימות")
+        _tasks_tab(mid, progress, lessons)
 
 
 def _wf_task_card(t: dict, mid: int, key_prefix: str,
@@ -1994,14 +2168,16 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
                         unsafe_allow_html=True)
 
         k = f"{key_prefix}-{t['id']}"
-        c1, c2, c3, c4 = st.columns([1.2, 0.7, 0.55, 0.55])
+        c1, c2, c3, c4 = st.columns([1.5, 0.7, 0.6, 0.6])
         if t["status"] != "DONE":
             if c1.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
                 if t.get("category") == "אחרי":
-                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[2])
+                    _goto(NAV_WORKFILE, mid, WF_AFTER)
                 elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):
                     # the evening builder resolves the exact slot from the task
-                    _goto(NAV_WORKFILE, mid, WF_SECTIONS[0], task_focus=t["id"])
+                    _goto(NAV_WORKFILE, mid, WF_STRUCTURE, task_focus=t["id"])
+                else:
+                    _goto(NAV_WORKFILE, mid, WF_LOGISTICS)
             c2.button("✓", key=f"{k}-dn", help="סמן שבוצע",
                       on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
         else:
@@ -2045,10 +2221,16 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
 
 
 def _wf_task_grid(items: list[dict], mid: int, prefix: str,
-                  lessons: Optional[list[dict]] = None) -> None:
-    for i in range(0, len(items), 2):
-        cols = st.columns(2)
-        for col, t in zip(cols, items[i:i + 2]):
+                  lessons: Optional[list[dict]] = None, per_row: int = 1) -> None:
+    """One card per row by default — the task board is a column beside the
+    evening now, not a full-width page, and two cards across would wrap."""
+    if per_row <= 1:
+        for t in items:
+            _wf_task_card(t, mid, prefix, lessons=lessons)
+        return
+    for i in range(0, len(items), per_row):
+        cols = st.columns(per_row)
+        for col, t in zip(cols, items[i:i + per_row]):
             with col:
                 _wf_task_card(t, mid, prefix, lessons=lessons)
 
@@ -2074,8 +2256,8 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
         st.divider()
 
     for i, ph in enumerate(progress["phases"]):
-        if ph["key"] == "after":
-            continue   # lives in the אחרי-המשמר section
+        # every phase, «אחרי» included: the tasks column is the ONLY task board
+        # now, so a phase routed elsewhere would simply disappear.
         open_ts = [t for t in ph["tasks"]
                    if t["status"] != "DONE" and t.get("category") != "יום המשמר"]
         if not open_ts:
@@ -2106,12 +2288,6 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
                         category=None if cat == "(אוטומטי)" else cat)
             st.toast("נוספה משימה — שובצה לשלב לפי הקטגוריה"); st.rerun()
 
-    after_open = [t for t in all_tasks
-                  if t.get("category") == "אחרי" and t["status"] != "DONE"]
-    if after_open:
-        st.caption(f"🌙 עוד {len(after_open)} משימות של **אחרי** הערב — "
-                   f"הן נסגרות במקטע «{WF_SECTIONS[2]}».")
-
     if done:
         with st.expander(f"✅ בוצעו ({len(done)})"):
             _wf_task_grid(done, mid, f"wf{mid}-done", lessons)
@@ -2121,7 +2297,6 @@ def _after_tab(mid: int) -> None:
     m = dm.get_mishmar(mid)
     lessons = [l for l in dm.get_lessons(mid) if not l.get("is_break")]
     tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_mishmar(mid)]
-    after_tasks = [t for t in tasks if t.get("category") == "אחרי"]
 
     # --- feedback, per evening slot ---
     st.markdown("#### משוב על הערב — לפי מקטעים")
@@ -2179,13 +2354,6 @@ def _after_tab(mid: int) -> None:
                     st.caption(_clean(f["what_worked"]))
                 if f.get("what_didnt"):
                     st.caption(f"פחות: {_clean(f['what_didnt'])}")
-
-    # --- the after-work tasks live here, in context ---
-    open_after = [t for t in after_tasks if t["status"] != "DONE"]
-    if open_after:
-        st.markdown("#### המשימות של אחרי הערב")
-        _wf_task_grid(sorted(open_after, key=lambda t: t.get("due_date") or "9999"),
-                      mid, f"aft{mid}", lessons)
 
     # --- budget, unchanged in substance ---
     st.divider()
@@ -2279,21 +2447,8 @@ def _workfile_body(mid: int) -> None:
                 unsafe_allow_html=True,
             )
 
-    # A keyed control instead of st.tabs — tabs cannot be selected
-    # programmatically, and deep links from the home page must land on a
-    # specific section.
-    if st.session_state.get("wf_section") not in WF_SECTIONS:
-        st.session_state["wf_section"] = WF_SECTIONS[0]
-    section = st.radio("אזור", WF_SECTIONS, key="wf_section",
-                       horizontal=True, label_visibility="collapsed")
     st.divider()
-    if section == WF_SECTIONS[0]:
-        _topic_and_structure(mid, tasks)
-    elif section == WF_SECTIONS[1]:
-        # one query for the timeline, so every task card can name its slot
-        _tasks_tab(mid, progress, dm.get_lessons(mid))
-    else:
-        _after_tab(mid)
+    _workfile_columns(mid, tasks, progress)
 
 
 TOOL_LABELS = {
