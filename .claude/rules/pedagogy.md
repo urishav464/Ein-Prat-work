@@ -8,7 +8,7 @@ paths:
 
 # The Mishmar — pedagogy, content rules, and their traps
 
-A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:30–02:00. This repo is scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim, 10 trainees building them in pairs. `system_rules.md` is the operating layer — read it when acting as the programme's assistant rather than as a repo developer.
+A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:00–02:00 (`EVENING_START`; the generator prompt's 20:30 arc is the pedagogical ideal, not the clock). This repo is scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim, 10 trainees building them in pairs. `system_rules.md` is the operating layer — read it when acting as the programme's assistant rather than as a repo developer.
 
 ## Ideal vs. reality
 

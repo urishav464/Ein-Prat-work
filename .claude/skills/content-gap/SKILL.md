@@ -2,21 +2,19 @@
 name: content-gap
 description: Check a proposed Mishmar topic against the previous year's archive and this season's other topics — was something similar already done, and what worked then. Use before a pair closes a topic.
 argument-hint: "[topic]"
-allowed-tools: Bash, Read, Grep
+allowed-tools: Bash, Read, Grep, Agent
 ---
 
-# Content gap analysis
+# Content gap
 
-Two questions, answered from real data:
+Two questions. Delegate the first; answer the second yourself.
 
-1. **Was there a similar Mishmar before?** `archive.summarise_for_topic(topic)` over the 2025-26 work-files and feedback. Two traps the module already handles — do not bypass it with raw grep:
-   - This season's (2026-27) folders are **unfilled templates** and must not be searched as history.
-   - Every work-file inherits a status legend containing `ממתין לתשובה`, so an unfiltered search for a תשובה topic matches all 21 templates. Boilerplate must be stripped before matching.
-2. **Is it colliding with this season?** `dm.find_mishmarim_by_topic(topic)` across the 21 current Mishmarim.
+1. **Was there a similar evening last year?** → run the `archive-diver` agent with
+   `question: <topic>`, `kind: topic`. It returns one JSON object (`answer` / `found` / `reception` /
+   `caveat`) and already handles the two traps (this season's folders are templates; the
+   `ממתין לתשובה` boilerplate). Relay its `answer` and `caveat` verbatim — the caveat that a
+   five-file archive proves nothing by absence is the point.
+2. **Is it colliding with this season?** → `dm.find_mishmarim_by_topic(topic)`, read-only.
 
-## Reading the results
-
-- The archive is small (5 real work-files) — **absence of a match is not proof it wasn't done**; say so explicitly.
-- A past similar evening is not a veto — it is material: what structure was used, which speakers came (`archive.speaker_history`), what the feedback said. Repetition with a new angle is legitimate pedagogy; flag the overlap and let the pair decide.
-- Diversity view, if asked: list this season's closed topics and note clusters (e.g. three philosophy evenings in a row) neutrally.
-- Never invent past events; quote only what the files actually contain.
+Overlap is material, never a veto: say what was done, how this differs, and let the pair decide.
+Never invent a past evening.

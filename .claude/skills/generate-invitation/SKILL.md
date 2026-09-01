@@ -25,5 +25,5 @@ Exception: the user prefers an existing background from `Invitations/examples/` 
 
 ## Formats
 
-- **WhatsApp copy**: short Hebrew text — hook line from the topic, date (both calendars), time 20:30, location, speaker names with titles rejoined (`dm.display_name`). No contact details of speakers.
+- **WhatsApp copy**: short Hebrew text — hook line from the topic, date (both calendars), time 20:00 (`data_manager.EVENING_START`), location, speaker names with titles rejoined (`dm.display_name`). No contact details of speakers.
 - **HTML poster**: follow the house style in `Invitations/`; embed all fonts as base64 woff2 so it renders identically anywhere. Render to PNG for QA with the pre-installed Chromium (`/opt/pw-browsers/...`, `--no-sandbox`); do NOT run `playwright install`.
