@@ -378,6 +378,15 @@ RTL_CSS = """
   .step-bar { flex: 1 1 auto; height: 3px; background: #e4ddcb;
               margin: 16px 2px 0; border-radius: 2px; min-width: 10px; }
   .step-bar.done { background: #137333; }
+  /* when each phase is recommended to close — the axis answers «by when», not
+     just «where are we» */
+  .step-due { font-size: .66rem; opacity: .6; direction: ltr; }
+  .step-due.late { color: #b3261e; opacity: 1; font-weight: 700; }
+  .stepper-mini .step { min-width: 46px; font-size: .62rem; }
+  .stepper-mini .step .dot { width: 24px; height: 24px; font-size: .72rem;
+                             border-width: 2px; }
+  .stepper-mini .step-bar { margin-top: 11px; height: 2px; }
+  .stepper-mini .step-due { font-size: .6rem; }
 
   /* ---- Mobile: Streamlit stacks columns by itself below ~640px; these
      rules keep OUR custom pieces usable on a phone. The chat column stacks
@@ -575,27 +584,101 @@ def _clean(text: str) -> str:
     )
 
 
-def _pipeline_row(m: dict, progress: dict, overdue_count: int) -> None:
-    """One Mishmar in the instructor's pipeline: identity · phase · progress."""
-    cur = progress["phases"][progress["current"]]
-    phase_chip = _chip(f"{cur['icon']} {cur['label']}", "gold")
-    owners_chip = _chip("צוות" if m.get("is_staff_built") else "זוג חניכים", "gray")
+def _pipeline_row(m: dict, progress: dict, overdue_count: int,
+                  owners: Optional[list[str]] = None) -> None:
+    """One Mishmar in the instructor's pipeline: who owns it, which phase it is
+    in, and by when each phase should close."""
     over_chip = _chip(f"{overdue_count} באיחור", "red") if overdue_count else ""
     topic = _clean(m.get("topic") or "") or "<span style='opacity:.5'>ללא נושא</span>"
     with st.container(border=True):
-        c1, c2 = st.columns([2.6, 1.4])
+        c1, c2 = st.columns([2.2, 1.8])
         c1.markdown(
             f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
             f"{topic}</div>"
-            f"<div>{_countdown_chip(m)}{phase_chip}{owners_chip}{over_chip}</div>",
+            f"<div>{_countdown_chip(m)}"
+            f"{_owners_chip([] if m.get('is_staff_built') else (owners or []))}"
+            f"{over_chip}</div>",
             unsafe_allow_html=True,
         )
-        with c2:
-            if progress["total"]:
-                st.progress(progress["pct"],
-                            text=f"{progress['done']}/{progress['total']}")
-            else:
-                st.caption("ללא משימות")
+        c2.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
+
+
+def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
+                     owners: dict[int, list[str]]) -> None:
+    """The four things that actually stall an evening, none of them visible on
+    a task board: an evening with no topic and a date approaching, slots with
+    no speaker days before the night, the SAME person being courted by two
+    pairs at once, and an approach that was sent and never answered."""
+    today = _date_cls.today()
+    soon = {m["id"]: (_parse_date(m["gregorian_date"]) - today).days
+            for m in upcoming if _parse_date(m["gregorian_date"])}
+
+    no_topic = [m for m in upcoming
+                if not m.get("topic") and 0 <= soon.get(m["id"], 999) <= 21]
+
+    # one query for every slot in the season, grouped here
+    all_lessons = dm.get_all_lessons()
+    by_mid: dict[int, list[dict]] = {}
+    for l in all_lessons:
+        by_mid.setdefault(l["mishmar_id"], []).append(l)
+    open_slots = []
+    for m in upcoming:
+        if not (0 <= soon.get(m["id"], 999) <= 14):
+            continue
+        missing = [l for l in by_mid.get(m["id"], [])
+                   if not l.get("is_break") and not l.get("speaker_name")
+                   and (l.get("lesson_role") or "") != "חבורות"]
+        if missing:
+            open_slots.append((m, len(missing)))
+
+    # the same name courted by two different pairs — the documented hazard of
+    # ten trainees searching in parallel
+    seen: dict[str, set[int]] = {}
+    for l in all_lessons:
+        name = (l.get("speaker_name") or "").strip()
+        if name:
+            seen.setdefault(name, set()).add(l["mishmar_id"])
+    outreach = dm.get_all_outreach()
+    for o in outreach:
+        if o.get("mishmar_id") and o.get("name"):
+            seen.setdefault(o["name"].strip(), set()).add(o["mishmar_id"])
+    collisions = {n: sorted(ids) for n, ids in seen.items() if len(ids) > 1}
+
+    # 📩 sent and quiet for more than ten days
+    latest: dict[int, dict] = {}
+    for o in outreach:          # newest first
+        latest.setdefault(o["speaker_id"], o)
+    waiting = []
+    for o in latest.values():
+        if "📩" not in (o.get("status") or ""):
+            continue
+        when = _parse_date((o.get("created_at") or "")[:10])
+        if when and (today - when).days >= 10:
+            waiting.append((o, (today - when).days))
+
+    total = len(no_topic) + len(open_slots) + len(collisions) + len(waiting)
+    if not total:
+        return
+    st.markdown(f"#### מה דורש התערבות ({total})")
+    st.caption("ארבעה דברים שמעכבים ערב ואף לוח משימות לא מראה.")
+    with st.container(border=True):
+        for m in no_topic:
+            st.markdown(
+                f"🎯 **#{m['id']:02d}** בעוד {soon[m['id']]} ימים ועדיין ללא נושא — "
+                f"{' · '.join(owners.get(m['id'], [])) or 'צוות'}")
+        for m, n in open_slots:
+            st.markdown(
+                f"🎤 **#{m['id']:02d}** בעוד {soon[m['id']]} ימים · {n} מקטעים בלי מרצה — "
+                f"{' · '.join(owners.get(m['id'], [])) or 'צוות'}")
+        for name, ids in list(collisions.items())[:6]:
+            st.markdown(
+                f"⚠️ **{_clean(name)}** מופיע/ה בשני משמרים: "
+                + ", ".join(f"#{i:02d}" for i in ids)
+                + " — ודאו שזה מכוון, ושלא שני זוגות פונים לאותו אדם.")
+        for o, days in waiting[:6]:
+            st.markdown(
+                f"📩 **{_clean(o.get('name') or '')}** — נשלחה פנייה לפני {days} ימים "
+                f"ואין תשובה.")
 
 
 def show_admin_dashboard() -> None:
@@ -698,51 +781,49 @@ def show_admin_dashboard() -> None:
     upcoming = [m for m in mishmarim
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
+    owners = dm.get_owners_by_mishmar()
     for m in upcoming:
-        _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0))
+        _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0),
+                      owners.get(m["id"], []))
     if past:
         with st.expander(f"🌙 משמרים שהתקיימו ({len(past)})"):
             for m in reversed(past):
-                _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0))
+                _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0),
+                              owners.get(m["id"], []))
 
-    with st.expander("📊 התקדמות לפי חניך"):
-        st.caption("משימה של זוג נספרת לשני החניכים — במכוון. זה מבט אחריות, לא חשבונאות.")
-        prow = []
-        for r in dm.get_student_progress():
-            total = r["tasks_total"] or 0
-            done = r["tasks_done"] or 0
-            prow.append({
-                "באיחור": r["overdue"] or 0,
-                "התקדמות": round(100 * done / total) if total else 0,
-                "משימות": f"{done}/{total}",
-                "משמרים": r["mishmarim"] or 0,
-                "חניך": r["name"],
-            })
-        st.dataframe(
-            prow, width="stretch", hide_index=True,
-            column_config={
-                "התקדמות": st.column_config.ProgressColumn(
-                    "התקדמות", min_value=0, max_value=100, format="%d%%"),
-            },
-        )
+    _needs_attention(mishmarim, upcoming, owners)
 
-    with st.expander("💰 תקציב"):
+    with st.expander("💰 תקציב — מה עלו המשמרים שכבר התקיימו"):
         st.caption(
             "אין תקרה עונתית — זהו מעקב הוצאות מצטבר. חריגה במשמר בודד **אינה שגיאה**: "
             "היא נמשכת מהסעיף התקציבי הכולל, ומשמרים זולים מאזנים אותה."
         )
-        over = budget["over_nominal"]
-        if over:
-            st.info(
-                "מעל האינדיקציה של "
-                + _fmt_nis(budget["nominal_per_mishmar"])
-                + ": משמרים "
-                + ", ".join(f"#{i:02d}" for i in over)
-                + " — לידיעה, לא לדאגה."
+        rows_by_mid = dm.get_budget_rows()
+        spent_rows = []
+        for r in budget["per_mishmar"]:
+            if not r["past"]:
+                continue
+            lines = rows_by_mid.get(r["id"], [])
+            who = " · ".join(
+                f"{(b.get('description') or b['expense_type'])}: {_fmt_nis(float(b.get('actual_cost') or 0))}"
+                for b in lines) or "לא נרשמו שורות"
+            spent_rows.append({
+                "פירוט": who,
+                "הוצאה": _fmt_nis(r["spent"]),
+                "נושא": r["topic"] or "—",
+                "תאריך": _fmt_date(r["gregorian_date"]),
+                "משמר": f"#{r['id']:02d}",
+            })
+        if spent_rows:
+            st.dataframe(spent_rows, width="stretch", hide_index=True)
+            st.caption(
+                f"סה״כ {_fmt_nis(budget['past_spent'])} על פני "
+                f"{budget['past_count']} משמרים · ממוצע "
+                f"{_fmt_nis(budget['avg_per_past'] or 0)} מול אינדיקציה של "
+                f"{_fmt_nis(budget['nominal_per_mishmar'])}."
             )
         else:
-            st.success("אף משמר לא חרג מהאינדיקציה של "
-                       + _fmt_nis(budget["nominal_per_mishmar"]) + ".")
+            st.info("עוד לא התקיים משמר — הטבלה תתמלא אחרי הערב הראשון.")
 
     if auth_configured():
         with st.expander("🔗 שיוך חשבונות"):
@@ -768,7 +849,7 @@ def show_admin_dashboard() -> None:
 # Card primitives — the visual grammar of the redesigned dashboards
 # --------------------------------------------------------------------------
 
-from datetime import date as _date_cls
+from datetime import date as _date_cls, timedelta as _timedelta
 
 
 WF_SECTIONS = ["🎯 בניית הערב", "✅ משימות", "🌙 אחרי המשמר"]
@@ -964,6 +1045,56 @@ def _stepper_html(progress: dict) -> str:
     return "".join(parts)
 
 
+def _phase_due(ph: dict, m: dict) -> Optional[_date_cls]:
+    """When this phase is recommended to be closed.
+
+    The tasks already carry derived due dates, so the earliest open one IS the
+    phase's deadline. Only when a phase has no dated task do we fall back to
+    the offset table — that keeps the axis honest for a Mishmar whose tasks
+    were edited by hand.
+    """
+    dates = [_parse_date(t.get("due_date")) for t in ph["tasks"] if t.get("due_date")]
+    dates = [d for d in dates if d]
+    if dates:
+        return min(dates)
+    base = _parse_date(m.get("gregorian_date"))
+    offsets = [dm.DEADLINE_OFFSETS_DAYS[c] for c in ph["categories"]
+               if c in dm.DEADLINE_OFFSETS_DAYS]
+    if base and offsets:
+        return base - _timedelta(days=max(offsets))
+    return None
+
+
+def _phase_axis_html(progress: dict, m: dict, mini: bool = False) -> str:
+    """The four phases as an axis, with WHEN each one is due underneath.
+
+    This replaces «7 משימות» on the pipeline row: a count says how much is
+    left, the axis says where the evening stands and whether it is late.
+    """
+    today = _date_cls.today()
+    parts = [f"<div class='stepper{' stepper-mini' if mini else ''}'>"]
+    for i, ph in enumerate(progress["phases"]):
+        cls = "done" if ph["complete"] else ("current" if i == progress["current"] else "")
+        due = _phase_due(ph, m)
+        late = bool(due and not ph["complete"] and due < today)
+        label = f"{due.day}.{due.month}" if due else "—"
+        parts.append(
+            f"<div class='step {cls}'><div class='dot'>"
+            f"{'✓' if ph['complete'] else ph['icon']}</div>"
+            f"<div>{ph['label']}</div>"
+            f"<div class='step-due{' late' if late else ''}'>{label}</div></div>"
+        )
+        if i < len(progress["phases"]) - 1:
+            parts.append(f"<div class='step-bar {'done' if ph['complete'] else ''}'></div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _owners_chip(owners: list[str]) -> str:
+    """The pair, by name. «זוג חניכים» told the instructor nothing."""
+    return _chip("👥 " + " · ".join(owners), "blue") if owners else _chip("צוות", "gray")
+
+
 def _countdown_chip(m: dict) -> str:
     d = _parse_date(m.get("gregorian_date"))
     if not d:
@@ -1034,18 +1165,17 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
             st.success("כל המשימות של השלב הנוכחי סגורות. 🎉")
 
 
-def _mini_mishmar_card(m: dict, progress: dict) -> None:
-    cur = progress["phases"][progress["current"]]
-    phase_chip = _chip(f"{cur['icon']} {cur['label']}", "gold")
+def _mini_mishmar_card(m: dict, progress: dict,
+                       owners: Optional[list[str]] = None) -> None:
+    """Same grammar as the instructor's pipeline row — partner names and the
+    dated phase axis — so a trainee reads their own queue the same way."""
     with st.container(border=True):
         st.markdown(
             f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}</div>"
-            f"<div>{_countdown_chip(m)}{phase_chip}</div>",
+            f"<div>{_countdown_chip(m)}{_owners_chip(owners or [])}</div>",
             unsafe_allow_html=True,
         )
-        if progress["total"]:
-            st.progress(progress["pct"],
-                        text=f"{progress['done']}/{progress['total']}")
+        st.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
 
 
 def show_student_view(student_name: str) -> None:
@@ -1088,11 +1218,12 @@ def show_student_view(student_name: str) -> None:
     others = [m for m in mine if m["id"] != hero["id"]]
     if others:
         st.markdown("#### שאר המשמרים שלי")
-        st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. הצ׳אט וקובץ העבודה פתוחים לכולם תמיד.")
+        st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. קובץ העבודה פתוח לכולם תמיד.")
+        owners = dm.get_owners_by_mishmar()
         cols = st.columns(min(3, max(1, len(others))))
         for i, m in enumerate(others):
             with cols[i % len(cols)]:
-                _mini_mishmar_card(m, progress[m["id"]])
+                _mini_mishmar_card(m, progress[m["id"]], owners.get(m["id"], []))
 
     done = [t for t in all_tasks if t["status"] == "DONE"]
     if done:
@@ -1644,7 +1775,7 @@ def _topic_and_structure(mid: int, tasks: list[dict]) -> None:
             st.markdown("#### הצעד הראשון: לסגור נושא")
             st.caption(
                 "הנושא הוא מנוע הערב כולו — מומלץ לסגור אותו כשלושה שבועות לפני. "
-                "אין רעיון? שאלו את שותף הבנייה משמאל, או בדקו בארכיון אם היה משמר דומה."
+                "אין רעיון? בדקו בארכיון אם היה משמר דומה, ודברו עם המדריך."
             )
             with st.form(f"topic-{mid}"):
                 new_topic = st.text_input(
@@ -2335,6 +2466,13 @@ def render_chat_panel() -> None:
 # --------------------------------------------------------------------------
 
 
+# The conversational assistant is OFF. Everything it needs is still here —
+# render_chat_panel, chat_agent's tool loop, the chat_messages rows — so this
+# single flag brings it back. The scout that powers «חיפוש מרצים» lives in the
+# same module and is unaffected: it is one model call on an explicit button,
+# not a conversation.
+CHAT_ENABLED = False
+
 NAV_WORKFILE = "📋 ניהול המשמר"
 NAV_INDEX = "👥 מאגר המרצים"
 NAV_SEARCH = "🔍 חיפוש מרצים"
@@ -2417,6 +2555,10 @@ def main() -> None:
     # order — and the chat as the fixed LEFT panel. Collapsed, the panel
     # shrinks to a slim column holding only the reopen bubble, so the
     # assistant is never more than one click away on any screen.
+    if not CHAT_ENABLED:
+        _route_main()
+        return
+
     chat_open = st.session_state.setdefault("chat_open", True)
     if chat_open:
         main_col, chat_col = st.columns([2.4, 1.1], gap="medium")

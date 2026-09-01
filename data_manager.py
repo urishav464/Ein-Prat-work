@@ -1265,6 +1265,12 @@ def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
         "id", lesson_id).execute()
 
 
+def get_all_lessons() -> list[dict]:
+    """Every slot in the season, one query — for the instructor's season-wide
+    checks (open speaker slots, the same person on two evenings)."""
+    return _rows(_t("lessons").select("*").order("mishmar_id").order("slot_order").execute())
+
+
 def get_lessons(mishmar_id: int) -> list[dict]:
     return _rows(_t("lessons").select("*").eq("mishmar_id", mishmar_id)
                  .order("slot_order").execute())
@@ -1337,6 +1343,235 @@ def add_break(mishmar_id: int, minutes: int = 15) -> None:
 
 def delete_lesson_candidate(candidate_id: int) -> bool:
     return bool(_rows(_t("lesson_speakers").delete().eq("id", candidate_id).execute()))
+
+
+def reopen_lesson_speaker(lesson_id: int) -> bool:
+    """Un-close a slot's speaker so the candidates list comes back.
+
+    Closing used to be one-way — `_candidate_rows` returns early whenever
+    `speaker_name` is set — and people change their minds. The outreach journal
+    is NOT touched: that a person was approached and said yes is history, and
+    the next pair needs to see it even if this evening went another way.
+    """
+    return bool(_rows(_t("lessons").update(
+        {"speaker_name": None, "speaker_status": SPEAKER_STATUSES[0]}
+    ).eq("id", lesson_id).execute()))
+
+
+# --------------------------------------------------------------------------
+# Owners, budget detail, logistics
+# --------------------------------------------------------------------------
+
+
+def get_owners_by_mishmar() -> dict[int, list[str]]:
+    """Which pair owns each Mishmar — TWO queries for all 21, grouped here.
+
+    «זוג חניכים» told the instructor nothing; the names do. Per-Mishmar
+    get_partners() would have been 21 round-trips on the dashboard.
+    """
+    links = _rows(_t("assignments").select("mishmar_id,student_id").execute())
+    if not links:
+        return {}
+    names = {s["id"]: s["name"] for s in
+             _rows(_t("students").select("id,name").execute())}
+    out: dict[int, list[str]] = {}
+    for l in links:
+        who = names.get(l["student_id"])
+        if who:
+            out.setdefault(l["mishmar_id"], []).append(who)
+    for v in out.values():
+        v.sort()
+    return out
+
+
+def get_budget_rows() -> dict[int, list[dict]]:
+    """Every budget line, grouped by Mishmar — one query. The dashboard shows
+    WHO was paid, not just how much, for the evenings that already happened."""
+    out: dict[int, list[dict]] = {}
+    for r in _rows(_t("budget").select("*").order("id").execute()):
+        out.setdefault(r["mishmar_id"], []).append(r)
+    return out
+
+
+LOGISTICS_KINDS = ("כיבוד", "חלל", "אחר")
+
+
+def get_logistics(mishmar_id: int) -> dict[str, list[dict]]:
+    """The evening's logistics rows grouped by kind — one query.
+    The refreshments list and the חבורות room allocation are the same shape:
+    a label, an optional detail, and whether it is handled."""
+    out: dict[str, list[dict]] = {k: [] for k in LOGISTICS_KINDS}
+    for r in _rows(_t("logistics_items").select("*")
+                   .eq("mishmar_id", mishmar_id).order("id").execute()):
+        out.setdefault(r["kind"], []).append(r)
+    return out
+
+
+def add_logistics_item(mishmar_id: int, kind: str, label: str,
+                       detail: Optional[str] = None) -> Optional[int]:
+    if kind not in LOGISTICS_KINDS:
+        raise ValueError(f"kind must be one of {LOGISTICS_KINDS}, got {kind!r}")
+    row = _one(_t("logistics_items").insert({
+        "mishmar_id": mishmar_id, "kind": kind,
+        "label": label.strip(), "detail": (detail or "").strip() or None,
+    }).execute())
+    return row.get("id") if row else None
+
+
+def toggle_logistics_item(item_id: int, done: bool) -> bool:
+    return bool(_rows(_t("logistics_items").update({"done": bool(done)})
+                      .eq("id", item_id).execute()))
+
+
+def delete_logistics_item(item_id: int) -> bool:
+    return bool(_rows(_t("logistics_items").delete().eq("id", item_id).execute()))
+
+
+def set_invitation(mishmar_id: int, text: Optional[str] = None,
+                   url: Optional[str] = None) -> bool:
+    fields: dict[str, Any] = {}
+    if text is not None:
+        fields["invitation_text"] = text.strip() or None
+    if url is not None:
+        fields["invitation_url"] = url.strip() or None
+    if not fields:
+        return False
+    return bool(_rows(_t("mishmarim").update(fields).eq("id", mishmar_id).execute()))
+
+
+# --------------------------------------------------------------------------
+# Reset
+# --------------------------------------------------------------------------
+
+
+def reseed_mishmar_tasks(mishmar_id: int) -> int:
+    """Re-create ONE Mishmar's task list from students_tasks.md, exactly as the
+    first seed made it — categories and derived due dates included."""
+    parsed = parse_tasks_md(TASKS_MD)
+    mine = [t for t in parsed["tasks"] if t["mishmar_id"] == mishmar_id]
+    if not mine:
+        return 0
+    m = get_mishmar(mishmar_id)
+    rows = []
+    for t in mine:
+        category = classify_task(t["task_description"])
+        rows.append({
+            "mishmar_id": mishmar_id,
+            "task_description": t["task_description"],
+            "status": t["status"],
+            "category": category,
+            "due_date": compute_due_date(m["gregorian_date"], category) if m else None,
+        })
+    _t("tasks").insert(rows).execute()
+    return len(rows)
+
+
+def reset_mishmar(mishmar_id: int) -> dict:
+    """Wipe one evening back to «choose a topic», and restore its original tasks.
+
+    Deletes the evening's own rows — lessons (cascading lesson_speakers),
+    tasks, budget, feedback, logistics — and clears the topic and invitation.
+
+    What it deliberately does NOT delete is `speaker_outreach`: that journal is
+    the SHARED memory of who has been approached this season. Erasing it here
+    would silently delete another pair's knowledge, and «X said no for the 12th»
+    is worth keeping even when this evening starts over.
+    """
+    counts = {
+        "lessons": len(_rows(_t("lessons").delete().eq("mishmar_id", mishmar_id).execute())),
+        "tasks": len(_rows(_t("tasks").delete().eq("mishmar_id", mishmar_id).execute())),
+        "budget": len(_rows(_t("budget").delete().eq("mishmar_id", mishmar_id).execute())),
+        "feedback": len(_rows(_t("feedback").delete().eq("mishmar_id", mishmar_id).execute())),
+        "logistics": len(_rows(_t("logistics_items").delete()
+                               .eq("mishmar_id", mishmar_id).execute())),
+    }
+    _t("mishmarim").update({"topic": None, "invitation_text": None,
+                            "invitation_url": None}).eq("id", mishmar_id).execute()
+    counts["tasks_restored"] = reseed_mishmar_tasks(mishmar_id)
+    return counts
+
+
+# --------------------------------------------------------------------------
+# Speaker domains — the index's filter
+#
+# 46 people carry 33 distinct free-text tags, nearly all of them used once, so
+# a tag filter matched exactly one person and the index felt broken. These are
+# broad domains modelled on how the institutions we actually invite from
+# organise themselves (הרטמן · ון ליר · בית אבי חי). The mapping is keyword-
+# based and PURE; a speaker we cannot place stays unclassified rather than
+# being guessed into a domain.
+# --------------------------------------------------------------------------
+
+SPEAKER_DOMAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("תלמוד והלכה", ("תלמוד", "הלכה", "הלכתי", "גמרא", "משנה", "פסיקה", "רמב\"ם")),
+    ("מקרא", ("תנ\"ך", "מקרא", "תורה", "נביאים", "פרשנות המקרא")),
+    ("מחשבת ישראל והגות", ("מחשבת ישראל", "הגות", "הוגה", "פילוסופיה יהודית",
+                           "מחשבה יהודית", "תיאולוגיה", "אמונה")),
+    ("פילוסופיה ואתיקה", ("פילוסופיה", "אתיקה", "מוסר", "אקזיסטנציאליזם", "ערכים")),
+    ("היסטוריה", ("היסטוריה", "היסטוריון", "שואה", "עם ישראל לדורותיו")),
+    ("ציונות, מדינה וחברה", ("ציונות", "מדינה", "חברה", "פוליטי", "מדיניות",
+                             "צבא", "מלחמה", "משפט", "כלכלה", "מגדר", "פמיניז")),
+    ("קבלה, חסידות ורוחניות", ("קבלה", "חסידות", "חסידי", "מיסטיקה", "רוחניות",
+                               "ברסלב", "תפילה", "אושר פנימי")),
+    ("דת, חילון וזהות", ("חילון", "חילוני", "זהות", "דת ומדינה", "יהדות חילונית",
+                         "דתיות", "תשובה", "ימים נוראים")),
+    ("פסיכולוגיה וחינוך", ("פסיכולוגיה", "טיפול", "נפש", "חינוך", "הוראה", "למידה")),
+    ("ספרות ושירה", ("ספרות", "שירה", "פיוט", "משורר", "סופר", "כתיבה")),
+    ("אמנות, קולנוע ומוזיקה", ("אמנות", "קולנוע", "סרט", "מוזיקה", "ניגון",
+                               "תיאטרון", "צילום", "שפה קולנועית")),
+    ("דתות והשוואתי", ("בודהיז", "מזרח", "יוגה", "השוואתי", "נצרות", "אסלאם", "דתות")),
+)
+
+
+def classify_domains(*texts: Optional[str]) -> list[str]:
+    """Every broad domain the given free text touches — possibly none.
+
+    Pure, no queries, no writes: the index page classifies 46 rows per render
+    for free, and the backfill uses the same function so screen and database
+    can never disagree.
+    """
+    blob = normalize_name(" ".join(t or "" for t in texts))
+    if not blob.strip():
+        return []
+    # normalize_name folds ״→" and ׳→' — the same fold the speaker names get,
+    # so a tag typed «רמב״ם» matches a needle written «רמב"ם».
+    return [name for name, needles in SPEAKER_DOMAINS
+            if any(normalize_name(n) in blob for n in needles)]
+
+
+def backfill_speaker_domains() -> dict:
+    """Fill speakers.domains from the free-text tags. Idempotent: only rows
+    whose stored value differs are written."""
+    rows = _rows(_t("speakers")
+                 .select("id,expertise_topics,lesson_fit,notes,domains").execute())
+    written = 0
+    for r in rows:
+        want = ", ".join(classify_domains(
+            r.get("expertise_topics"), r.get("lesson_fit"), r.get("notes")))
+        if (r.get("domains") or "") != want:
+            _t("speakers").update({"domains": want or None}).eq("id", r["id"]).execute()
+            written += 1
+    return {"examined": len(rows), "written": written}
+
+
+def get_teaching_history() -> dict[str, dict]:
+    """Per speaker NAME: the evenings they taught and the feedback they got —
+    two queries for the whole index, grouped here.
+
+    Keyed by name because that is what survives: `lessons.speaker_name` is text
+    and `feedback.speaker_name` is stored by name on purpose, so the record
+    outlives a deleted slot.
+    """
+    out: dict[str, dict] = {}
+    for l in _rows(_t("lessons").select("mishmar_id,title,speaker_name").execute()):
+        name = (l.get("speaker_name") or "").strip()
+        if name:
+            out.setdefault(name, {"taught": [], "feedback": []})["taught"].append(l)
+    for f in _rows(_t("feedback").select("*").order("id", desc=True).execute()):
+        name = (f.get("speaker_name") or "").strip()
+        if name:
+            out.setdefault(name, {"taught": [], "feedback": []})["feedback"].append(f)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1620,6 +1855,7 @@ _READS = {
     "get_overdue_tasks":        ("tasks", "mishmarim", "assignments", "students"),
     "get_student_progress":     ("students", "assignments", "tasks"),
     "get_lessons":              ("lessons",),
+    "get_all_lessons":          ("lessons",),
     "get_lesson_speakers":      ("lesson_speakers", "lessons"),
     "get_feedback_for_mishmar": ("feedback",),
     "get_feedback_for_speaker": ("feedback",),
@@ -1634,6 +1870,10 @@ _READS = {
     "search_speakers_by_topic": ("speakers", "speaker_outreach"),
     "find_mishmarim_by_topic":  ("mishmarim",),
     "get_chat_history":         ("chat_messages",),
+    "get_owners_by_mishmar":    ("assignments", "students"),
+    "get_budget_rows":          ("budget",),
+    "get_logistics":            ("logistics_items",),
+    "get_teaching_history":     ("lessons", "feedback"),
 }
 _ALL = None   # «not sure» — clear everything
 _WRITES = {
@@ -1655,6 +1895,15 @@ _WRITES = {
     "record_outreach": ("speaker_outreach", "speakers", "lessons"),
     "add_new_speaker": ("speakers",),
     "add_chat_message": ("chat_messages",), "clear_chat_history": ("chat_messages",),
+    "reopen_lesson_speaker": ("lessons",),
+    "add_logistics_item": ("logistics_items",),
+    "toggle_logistics_item": ("logistics_items",),
+    "delete_logistics_item": ("logistics_items",),
+    "set_invitation": ("mishmarim",),
+    "backfill_speaker_domains": ("speakers",),
+    "reseed_mishmar_tasks": ("tasks",),
+    # a reset touches nearly every table — «not sure» is the honest answer
+    "reset_mishmar": _ALL,
     "backfill_task_metadata": _ALL, "seed_from_markdown": _ALL,
 }
 

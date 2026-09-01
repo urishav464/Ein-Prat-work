@@ -222,6 +222,31 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lesson_id bigint
     REFERENCES lessons(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_lesson ON tasks(lesson_id);
 
+-- ההזמנה למשמר: הטקסט שנשלח בוואטסאפ, וקישור לפוסטר. חיים על המשמר עצמו,
+-- כי יש בדיוק אחת לכל ערב.
+ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS invitation_text text;
+ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS invitation_url  text;
+
+-- תחומים רחבים לסינון המאגר. 46 מרצים עם 33 תגיות חופשיות פירושו שכל תגית
+-- מתאימה לאדם אחד — סינון חסר תועלת. העמודה נגזרת מהתגיות הקיימות ב-
+-- classify_domains, ונשארת ריקה כשאין התאמה. לעולם לא ניחוש.
+ALTER TABLE speakers ADD COLUMN IF NOT EXISTS domains text;
+
+-- לוגיסטיקת הערב: רשימת הכיבוד וחלוקת החללים לחבורות הן אותו דבר בדיוק —
+-- שורות עם תווית, פירוט וסימון בוצע. טבלה אחת, `kind` מפריד ביניהן.
+CREATE TABLE IF NOT EXISTS logistics_items (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    mishmar_id integer NOT NULL REFERENCES mishmarim(id) ON DELETE CASCADE,
+    kind       text NOT NULL,                 -- 'כיבוד' / 'חלל' / 'אחר'
+    label      text NOT NULL,
+    detail     text,
+    done       boolean NOT NULL DEFAULT false,
+    sort_order integer,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_logistics_mishmar ON logistics_items(mishmar_id, kind);
+ALTER TABLE logistics_items ENABLE ROW LEVEL SECURITY;
+
 -- ---------------------------------------------------------------------------
 -- 5. תצוגות
 --
@@ -390,7 +415,7 @@ GRANT ALL ON ALL TABLES     IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES  IN SCHEMA public TO service_role;
 
 -- ---------------------------------------------------------------------------
--- גרסאות 2–3 — הגירות נתונים בלבד. ההגירות המבניות עלו לסעיף 4ב, כדי
+-- גרסאות 2–4 — הגירות נתונים בלבד. ההגירות המבניות עלו לסעיף 4ב, כדי
 -- שהתצוגות ייבנו מעל הטבלאות המלאות כבר בהרצה הראשונה.
 -- ---------------------------------------------------------------------------
 
@@ -411,11 +436,13 @@ UPDATE tasks SET category = 'יום המשמר'
 -- משימות שאין סיבה שיתקיימו: «תודות».
 DELETE FROM tasks WHERE task_description LIKE '%תודות%';
 
--- ההרשאות המפורשות חייבות לכסות גם את הטבלה החדשה.
+-- ההרשאות המפורשות חייבות לכסות גם את הטבלאות החדשות.
 GRANT ALL ON lesson_speakers TO service_role;
 REVOKE ALL ON lesson_speakers FROM anon, authenticated;
+GRANT ALL ON logistics_items TO service_role;
+REVOKE ALL ON logistics_items FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '3')
+VALUES ('schema_version', '4')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
