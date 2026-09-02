@@ -347,8 +347,19 @@ RTL_CSS = """
   /* ---- Mobile: Streamlit stacks columns by itself below ~640px; these
      rules keep OUR custom pieces usable on a phone: the stepper compresses,
      chips wrap. ---- */
+  /* Two workfile columns become one below 1100px — the width where a
+     button row in a half-column starts wrapping. Pure CSS: no rerun. */
+  @media (max-width: 1100px) {
+      /* direct children only — the flex rows INSIDE the columns must stay rows */
+      .st-key-wf-cols > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-direction: column; }
+      .st-key-wf-cols > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width: 100% !important; flex: 1 1 100% !important; }
+  }
   @media (max-width: 740px) {
       .stepper { flex-wrap: nowrap; overflow-x: auto; }
+      .chip { white-space: nowrap; }
+      [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button { padding: .25rem .55rem; min-height: 2.1rem; }
+      /* fixed-width cards fill the phone instead of leaving a stripe */
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > * { flex: 0 0 100% !important; width: 100% !important; max-width: 100%; }
       .step { min-width: 48px; font-size: .62rem; }
       .step .dot { width: 26px; height: 26px; font-size: .78rem; }
       .chip { font-size: .66rem; padding: 1px 7px; }
@@ -531,27 +542,59 @@ def _clean(text: str) -> str:
     )
 
 
-def _pipeline_row(m: dict, progress: dict, overdue_count: int,
-                  owners: Optional[list[str]] = None) -> None:
-    """One Mishmar in the instructor's pipeline: who owns it, which phase it is
-    in, and by when each phase should close."""
-    over_chip = _chip(f"{overdue_count} באיחור", "red") if overdue_count else ""
-    topic = _clean(m.get("topic") or "") or "<span style='opacity:.5'>ללא נושא</span>"
-    with st.container(border=True):
-        c1, c2 = st.columns([2.2, 1.8])
-        c1.markdown(
-            f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
-            f"{topic}</div>"
+def _waiting_by_mishmar(outreach: list[dict]) -> dict[int, int]:
+    """How many approaches per Mishmar are sitting at 📩 with no answer —
+    the latest entry per speaker decides, the log is newest first."""
+    latest: dict[int, dict] = {}
+    for o in outreach:
+        latest.setdefault(o["speaker_id"], o)
+    out: dict[int, int] = {}
+    for o in latest.values():
+        if "📩" in (o.get("status") or "") and o.get("mishmar_id"):
+            out[o["mishmar_id"]] = out.get(o["mishmar_id"], 0) + 1
+    return out
+
+
+def _mishmar_card(m: dict, progress: dict, overdue_count: int, owners: list[str],
+                  lessons: list[dict], waiting: int, spent: float) -> None:
+    """One Mishmar as a small box on the instructor's board. The title is the
+    door — it opens the workfile. Everything else on it is either a reason to
+    step in or a reason not to: the pair, the phase, the speakers, lateness,
+    money. Fixed width on purpose (four fit a 1040px content column): the grid
+    around it wraps 4 / 2 / 1 across."""
+    topic = (m.get("topic") or "").strip()
+    with st.container(border=True, width=240):
+        if st.button(f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
+                     f"{topic or 'ללא נושא'}",
+                     key=f"pc-{m['id']}", type="tertiary", width="stretch", wrap=True):
+            _goto(NAV_WORKFILE, m["id"])
+        over_chip = _chip(f"{overdue_count} באיחור", "red") if overdue_count else ""
+        st.markdown(
             f"<div>{_countdown_chip(m)}"
-            f"{_owners_chip([] if m.get('is_staff_built') else (owners or []))}"
-            f"{over_chip}</div>",
-            unsafe_allow_html=True,
-        )
-        c2.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
+            f"{_owners_chip([] if m.get('is_staff_built') else owners)}{over_chip}</div>",
+            unsafe_allow_html=True)
+        st.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
+        slots = [l for l in lessons if not l.get("is_break")
+                 and (l.get("lesson_role") or "") != "חבורות"]
+        closed = sum(1 for l in slots if l.get("speaker_name"))
+        bits = []
+        if slots:
+            bits.append(f"🎤 {closed}/{len(slots)} מרצים סגורים")
+        elif topic:
+            bits.append("🎤 אין עדיין מבנה ערב")
+        if waiting:
+            bits.append(f"📩 {waiting} ממתין לתשובה")
+        if spent:
+            bits.append(f"💰 {_fmt_nis(spent)} עד כה")
+        if bits:
+            st.markdown(f"<div class='card-meta'>{' · '.join(bits)}</div>",
+                        unsafe_allow_html=True)
 
 
 def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
-                     owners: dict[int, list[str]]) -> None:
+                     owners: dict[int, list[str]],
+                     all_lessons: Optional[list[dict]] = None,
+                     outreach: Optional[list[dict]] = None) -> None:
     """The four things that actually stall an evening, none of them visible on
     a task board: an evening with no topic and a date approaching, slots with
     no speaker days before the night, the SAME person being courted by two
@@ -563,8 +606,10 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
     no_topic = [m for m in upcoming
                 if not m.get("topic") and 0 <= soon.get(m["id"], 999) <= 21]
 
-    # one query for every slot in the season, grouped here
-    all_lessons = dm.get_all_lessons()
+    # one query for every slot in the season, grouped here (the dashboard
+    # passes its own copy so the pipeline cards and this block share one read)
+    if all_lessons is None:
+        all_lessons = dm.get_all_lessons()
     by_mid: dict[int, list[dict]] = {}
     for l in all_lessons:
         by_mid.setdefault(l["mishmar_id"], []).append(l)
@@ -585,7 +630,8 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
         name = (l.get("speaker_name") or "").strip()
         if name:
             seen.setdefault(name, set()).add(l["mishmar_id"])
-    outreach = dm.get_all_outreach()
+    if outreach is None:
+        outreach = dm.get_all_outreach()
     for o in outreach:
         if o.get("mishmar_id") and o.get("name"):
             seen.setdefault(o["name"].strip(), set()).add(o["mishmar_id"])
@@ -650,25 +696,28 @@ def show_admin_dashboard() -> None:
     done_all = sum(p["done"] for p in progress.values())
     total_all = sum(p["total"] for p in progress.values())
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("משמרים", len(mishmarim))
-    c2.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}")
-    c3.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]))
-    # What a Mishmar that ALREADY HAPPENED cost, on average. The old tile here
-    # showed the ₪500 indication — a constant, which tells nobody anything.
-    # Dividing by all 21 would read as a collapsing average all season, so the
-    # denominator is the evenings behind us, and it says which those are.
-    avg = budget["avg_per_past"]
-    with c4:
-        if avg is None:
-            st.metric("ממוצע הוצאות למשמר", "—")
-            st.caption("עוד לא התקיים משמר")
-        else:
-            st.metric("ממוצע הוצאות למשמר", _fmt_nis(avg),
-                      delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
-                      delta_color="off")
-            st.caption(f"על פני {budget['past_count']} משמרים שהתקיימו · "
-                       f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])}")
+    # A wrapping row, not st.columns: four tiles across on a desktop, two on
+    # a phone — laid out by the browser, no rerun.
+    with st.container(horizontal=True, wrap=True, gap="medium"):
+        st.metric("משמרים", len(mishmarim), width=150)
+        st.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}", width=150)
+        st.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]), width=150)
+        # What a Mishmar that ALREADY HAPPENED cost, on average. The old tile
+        # showed the ₪500 indication — a constant, which tells nobody anything.
+        # Dividing by all 21 would read as a collapsing average all season, so
+        # the denominator is the evenings behind us, and it says which those are.
+        avg = budget["avg_per_past"]
+        c4 = st.container(width=170)
+        with c4:
+            if avg is None:
+                st.metric("ממוצע הוצאות למשמר", "—")
+                st.caption("עוד לא התקיים משמר")
+            else:
+                st.metric("ממוצע הוצאות למשמר", _fmt_nis(avg),
+                          delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
+                          delta_color="off")
+                st.caption(f"על פני {budget['past_count']} משמרים שהתקיימו · "
+                           f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])}")
     if total_all:
         st.progress(done_all / total_all,
                     text=f"התקדמות העונה: {done_all}/{total_all} משימות הושלמו")
@@ -687,58 +736,67 @@ def show_admin_dashboard() -> None:
             "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
         )
         cards = [dm.annotate_deadline(t) for t in overdue]
-        for i in range(0, len(cards), 2):
-            cols = st.columns(2)
-            for col, t in zip(cols, cards[i:i + 2]):
-                with col:
-                    with st.container(border=True):
-                        chips = [_chip("באיחור", "red"),
-                                 _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
-                        if t.get("category"):
-                            chips.append(_chip(t["category"], "gold"))
-                        st.markdown(
-                            f"<div class='task-desc'>{_clean(t['task_description'])[:80]}</div>"
-                            f"<div>{''.join(chips)}</div>"
-                            f"<div class='card-meta'>{_clean(t.get('owners') or 'צוות')} · "
-                            f"{_fmt_date(t['gregorian_date'])} · {_clean(t.get('nudge') or '')}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        # A door first. Until now this card could only flip a
-                        # status — the instructor could see that a task was
-                        # late and had no way to reach the Mishmar it belongs
-                        # to, which is exactly how «the overdue tasks don't
-                        # appear in the Mishmar» happens: they do, one screen
-                        # and three clicks away, in a folded phase.
-                        b1, b2, b3 = st.columns([1.1, 1, 1])
-                        if b1.button("פתח ↗", key=f"ov-go-{t['id']}",
-                                     help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
-                            _goto(NAV_WORKFILE, t["mishmar_id"],
-                                  _section_for_category(t.get("category")),
-                                  task_focus=t["id"])
-                        b2.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary",
-                                  on_click=_set_status, args=(t["id"], "DONE"))
-                        b3.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
-                                  on_click=_set_status, args=(t["id"], "IN PROGRESS"))
+        # A wrapping flex row of fixed-width cards: 4 / 2 / 1 across as the
+        # viewport shrinks, laid out by the browser — no rerun, no breakpoint.
+        with st.container(horizontal=True, wrap=True, gap="small"):
+            for t in cards:
+                with st.container(border=True, width=320):
+                    chips = [_chip("באיחור", "red"),
+                             _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
+                    if t.get("category"):
+                        chips.append(_chip(t["category"], "gold"))
+                    st.markdown(
+                        f"<div class='task-desc'>{_clean(t['task_description'])[:80]}</div>"
+                        f"<div>{''.join(chips)}</div>"
+                        f"<div class='card-meta'>{_clean(t.get('owners') or 'צוות')} · "
+                        f"{_fmt_date(t['gregorian_date'])} · {_clean(t.get('nudge') or '')}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    # A door first: the instructor could see a task was late
+                    # and had no way to reach the Mishmar it belongs to.
+                    row = st.container(horizontal=True, wrap=False, gap="small")
+                    if row.button("פתח ↗", key=f"ov-go-{t['id']}",
+                                  help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
+                        _goto(NAV_WORKFILE, t["mishmar_id"],
+                              _section_for_category(t.get("category")),
+                              task_focus=t["id"])
+                    row.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary",
+                               on_click=_set_status, args=(t["id"], "DONE"))
+                    row.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
+                               on_click=_set_status, args=(t["id"], "IN PROGRESS"))
 
     # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
     st.markdown("#### צינור המשמרים")
-    st.caption("כל משמר, איפה הוא עומד בבנייה, ומי מחזיק אותו. לפי סדר הערבים.")
+    st.caption("כל משמר, איפה הוא עומד בבנייה, ומי מחזיק אותו. לפי סדר הערבים — "
+               "לחיצה על הכותרת פותחת את ניהול המשמר.")
     today = _date_cls.today()
     upcoming = [m for m in mishmarim
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
     owners = dm.get_owners_by_mishmar()
-    for m in upcoming:
-        _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0),
-                      owners.get(m["id"], []))
+    # Two season-wide reads, shared with «מה דורש התערבות» below.
+    all_lessons = dm.get_all_lessons()
+    outreach = dm.get_all_outreach()
+    lessons_by_mid: dict[int, list[dict]] = {}
+    for l in all_lessons:
+        lessons_by_mid.setdefault(l["mishmar_id"], []).append(l)
+    waiting_by_mid = _waiting_by_mishmar(outreach)
+    spent_by_mid = {r["id"]: r["spent"] for r in budget["per_mishmar"]}
+
+    def _grid(items: list[dict], key: str) -> None:
+        with st.container(horizontal=True, wrap=True, gap="small", key=key):
+            for m in items:
+                _mishmar_card(m, progress[m["id"]], over_by_mid.get(m["id"], 0),
+                              owners.get(m["id"], []), lessons_by_mid.get(m["id"], []),
+                              waiting_by_mid.get(m["id"], 0), spent_by_mid.get(m["id"], 0))
+
+    _grid(upcoming, "pipeline-grid")
     if past:
         with st.expander(f"🌙 משמרים שהתקיימו ({len(past)})"):
-            for m in reversed(past):
-                _pipeline_row(m, progress[m["id"]], over_by_mid.get(m["id"], 0),
-                              owners.get(m["id"], []))
+            _grid(list(reversed(past)), "pipeline-past")
 
-    _needs_attention(mishmarim, upcoming, owners)
+    _needs_attention(mishmarim, upcoming, owners, all_lessons, outreach)
 
     with st.expander("💰 תקציב — מה עלו המשמרים שכבר התקיימו"):
         st.caption(
@@ -1737,36 +1795,38 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
     Once one is closed, the list collapses to that single row."""
     closed = l.get("speaker_name")
     if closed:
-        sc1, sc2 = st.columns([3.4, 1])
-        sc1.markdown(f"🎤 **{_clean(closed)}** {_chip('✅ סגור', 'green')}",
-                     unsafe_allow_html=True)
+        sc = st.container(horizontal=True, wrap=False, gap="small",
+                          vertical_alignment="center")
+        sc.markdown(f"🎤 **{_clean(closed)}** {_chip('✅ סגור', 'green')}",
+                    unsafe_allow_html=True, width="stretch")
         # Closing used to be one-way. People change their minds, and the
         # journal keeps the history either way.
-        sc2.button("🔄 החלף", key=f"reopen-{l['id']}",
+        sc.button("🔄 החלף", key=f"reopen-{l['id']}",
                    help="משחרר את המקטע וממשיך לרשימת המועמדים",
                    on_click=dm.reopen_lesson_speaker, args=(l["id"],))
         return
     if cands:
         st.markdown("**מרצים אופציונליים:**")
     for cand in cands:
-        c1, c2, c3, c4 = st.columns([1.7, 1.4, 0.6, 0.6])
-        c1.markdown(f"{_clean(cand['name'])}"
+        cr = st.container(horizontal=True, wrap=True, gap="small",
+                          vertical_alignment="center")
+        cr.markdown(f"{_clean(cand['name'])}"
                     + (f" <span class='card-meta'>{_clean(cand['phone'])}</span>"
                        if cand.get("phone") else ""),
-                    unsafe_allow_html=True)
+                    unsafe_allow_html=True, width="stretch")
         cur = cand.get("status") or dm.SPEAKER_STATUSES[0]
         skey = f"cst-{cand['id']}"
-        c2.selectbox(
-            "סטטוס", dm.SPEAKER_STATUSES,
+        cr.selectbox(
+            "סטטוס", dm.SPEAKER_STATUSES, width=150,
             index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
             key=skey, label_visibility="collapsed",
             on_change=lambda cid=cand["id"], k=skey: dm.update_lesson_speaker_status(
                 cid, st.session_state[k], mishmar_id=mid,
                 student_id=st.session_state.student_id))
-        c3.button("✅ סגרנו", key=f"close-{cand['id']}",
+        cr.button("✅ סגרנו", key=f"close-{cand['id']}",
                   help="הופך למרצה של השיעור; שאר המועמדים יוסרו",
                   on_click=_close_candidate, args=(l["id"], cand["name"], mid))
-        c4.button("🗑", key=f"rmc-{cand['id']}",
+        cr.button("🗑", key=f"rmc-{cand['id']}",
                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
     with st.form(f"addcand-{l['id']}", border=False):
@@ -1924,19 +1984,23 @@ def _topic_and_structure(mid: int, tasks: list[dict],
     for l in lessons:
         if l.get("is_break"):
             # a slim break row: the only knob is minutes
-            bc1, bc2 = st.columns([4, 1])
-            bc1.markdown(
+            br = st.container(horizontal=True, wrap=False, gap="small",
+                              vertical_alignment="center")
+            br.markdown(
                 f"<div style='opacity:.6;padding:.25rem .6rem'>☕ הפסקה · "
                 f"{l.get('duration_minutes') or 30} דק' · "
                 f"<span dir='ltr'>{_slot_times(l)}</span></div>",
-                unsafe_allow_html=True,
+                unsafe_allow_html=True, width="stretch",
             )
-            bc2.number_input(
+            br.number_input(
                 "דק'", min_value=5, max_value=90, step=5,
                 value=int(l.get("duration_minutes") or 30),
-                key=f"brk-{l['id']}", label_visibility="collapsed",
+                key=f"brk-{l['id']}", label_visibility="collapsed", width=110,
                 on_change=lambda mid=mid, lid=l["id"], k=f"brk-{l['id']}":
                     dm.set_lesson_duration(mid, lid, int(st.session_state[k])))
+            br.button("✕", key=f"brx-{l['id']}", type="tertiary",
+                      help="מחיקת ההפסקה — הזמנים שאחריה מתעדכנים",
+                      on_click=dm.delete_break, args=(mid, l["id"]))
             continue
 
         lesson_no += 1
@@ -1982,13 +2046,14 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             # This is the half that was missing: the board could point at the
             # evening, and the evening could not point back.
             for t in open_here:
-                tc1, tc2 = st.columns([5, 1])
-                tc1.markdown(
+                tr = st.container(horizontal=True, wrap=False, gap="small",
+                                  vertical_alignment="center")
+                tr.markdown(
                     f"<div class='card-meta' style='opacity:.9'>📌 "
                     f"{_clean(t['task_description'])}"
                     + (_chip("באיחור", "red") if t.get("overdue") else "")
-                    + "</div>", unsafe_allow_html=True)
-                tc2.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
+                    + "</div>", unsafe_allow_html=True, width="stretch")
+                tr.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
                            on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
 
             # The slot's open work. Each button either OPENS the task that
@@ -2004,9 +2069,9 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                                  f"סגירת מרצה — {head}"))
             if not l.get("source_url"):
                 todo.append(("📎 דף מקורות", "תוכן", f"דף מקורות — {head}"))
-            tc = st.columns([1.1, 1.1, 0.9, 0.9])
+            tc = st.container(horizontal=True, wrap=True, gap="small")
             for i, (label, category, text) in enumerate(todo[:2]):
-                if tc[i].button(label, key=f"td-{l['id']}-{i}",
+                if tc.button(label, key=f"td-{l['id']}-{i}",
                                 help="פותח את המשימה — או פותח אותה אם עוד אין"):
                     existing = next((t for t in open_here
                                      if t.get("category") == category), None)
@@ -2014,15 +2079,15 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                         dm.add_task(mid, text, category=category, lesson_id=l["id"])
                         st.toast(f"נפתחה משימה «{text}» וקושרה למקטע")
                     _goto(NAV_WORKFILE, mid, WF_STRUCTURE)
-            tc[3].button("✏️ עריכה", key=f"ed-{l['id']}",
+            tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע",
                          on_click=_toggle, args=("editing_lesson", l["id"]))
 
             if editing == l["id"]:
                 _lesson_form(mid, l)
 
-    ac1, ac2 = st.columns(2)
-    ac1.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
-    ac2.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
+    ac = st.container(horizontal=True, wrap=True, gap="small")
+    ac.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
+    ac.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
 
 
 def _slot_label(l: dict, index: int) -> str:
@@ -2054,18 +2119,19 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
     st.markdown(f"**{title}**")
     st.caption(hint)
     for it in items:
-        c1, c2, c3 = st.columns([0.5, 4.5, 0.6])
-        c1.checkbox("בוצע", value=bool(it.get("done")), key=f"lg-{it['id']}",
+        lr = st.container(horizontal=True, wrap=False, gap="small",
+                          vertical_alignment="center")
+        lr.checkbox("בוצע", value=bool(it.get("done")), key=f"lg-{it['id']}",
                     label_visibility="collapsed",
                     on_change=lambda i=it["id"], k=f"lg-{it['id']}":
                         dm.toggle_logistics_item(i, st.session_state[k]))
         style = "opacity:.5;text-decoration:line-through" if it.get("done") else ""
-        c2.markdown(
+        lr.markdown(
             f"<div style='{style}'>{_clean(it['label'])}"
             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
                if it.get("detail") else "")
-            + "</div>", unsafe_allow_html=True)
-        c3.button("🗑", key=f"lgx-{it['id']}",
+            + "</div>", unsafe_allow_html=True, width="stretch")
+        lr.button("🗑", key=f"lgx-{it['id']}",
                   on_click=dm.delete_logistics_item, args=(it["id"],))
     if not items:
         st.caption("עוד לא נוספו שורות.")
@@ -2123,7 +2189,7 @@ def _reset_dialog(mid: int) -> None:
     st.markdown(
         "מוחק את **כל** מה שנבנה כאן — מבנה הערב והמרצים, המשימות, הלוגיסטיקה, "
         "התקציב והמשוב — ומחזיר את המשמר לנקודת ההתחלה: בחירת נושא, "
-        "עם רשימת המשימות המקורית. "
+        "עם תבנית המשימות האחידה. "
         "**יומן הפניות למרצים לא נמחק** — הוא הזיכרון המשותף של כל הזוגות, "
         "ומחיקה שלו הייתה מוחקת מידע של אחרים."
     )
@@ -2181,7 +2247,9 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
         return
 
     lessons = dm.get_lessons(mid)
-    right, left = st.columns([1.15, 1], gap="medium")
+    # keyed container → `.st-key-wf-cols` in CSS: below 1100px the two columns
+    # stack (evening first) instead of squeezing every button into a sliver.
+    right, left = st.container(key="wf-cols").columns([1.15, 1], gap="medium")
     with right:
         with _wf_panel(WF_STRUCTURE, f"{len([l for l in lessons if not l.get('is_break')])} מקטעים"):
             _safe(_topic_and_structure, mid, tasks, lessons=lessons)
@@ -2237,9 +2305,11 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
                         unsafe_allow_html=True)
 
         k = f"{key_prefix}-{t['id']}"
-        c1, c2, c3, c4 = st.columns([1.5, 0.7, 0.6, 0.6])
+        # one flex row that never stacks — on a phone the four controls
+        # used to become four lines
+        row = st.container(horizontal=True, wrap=False, gap="small")
         if t["status"] != "DONE":
-            if c1.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
+            if row.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
                 if t.get("category") == "אחרי":
                     _goto(NAV_WORKFILE, mid, WF_AFTER)
                 elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):
@@ -2247,14 +2317,14 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
                     _goto(NAV_WORKFILE, mid, WF_STRUCTURE, task_focus=t["id"])
                 else:
                     _goto(NAV_WORKFILE, mid, WF_LOGISTICS)
-            c2.button("✓", key=f"{k}-dn", help="סמן שבוצע",
+            row.button("✓", key=f"{k}-dn", help="סמן שבוצע",
                       on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
         else:
-            c1.button("↩ החזר", key=f"{k}-re",
+            row.button("↩ החזר", key=f"{k}-re",
                       on_click=_set_status, args=(t["id"], "TO DO"))
-        c3.button("✏️", key=f"{k}-ed", help="עריכה",
+        row.button("✏️", key=f"{k}-ed", help="עריכה",
                   on_click=_toggle, args=("editing_task", t["id"]))
-        c4.button("🗑", key=f"{k}-rm", help="מחיקה",
+        row.button("🗑", key=f"{k}-rm", help="מחיקה",
                   on_click=dm.delete_task, args=(t["id"],))
 
         if st.session_state.get("editing_task") == t["id"]:
@@ -2312,18 +2382,8 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
     all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
     done = [t for t in all_tasks if t["status"] == "DONE"]
 
-    # Overdue first, pinned open, spanning EVERY phase — including אחרי and
-    # יום המשמר, which the phase accordion below deliberately routes elsewhere.
-    # Without this a task the instructor's dashboard is shouting about sits
-    # folded inside a shut phase, and the board looks like it lost it.
-    late = sorted([t for t in all_tasks
-                   if t["status"] != "DONE" and t.get("overdue")], key=by_due)
-    if late:
-        st.markdown(f"#### ⏰ עברו את התאריך המומלץ ({len(late)})")
-        st.caption("התאריכים הם המלצה, לא חוק — אבל אלה המשימות שמחזיקות את הערב.")
-        _wf_task_grid(late, mid, f"wf{mid}-late", lessons)
-        st.divider()
-
+    # No pinned «overdue» block: the five groups below ARE the board, and each
+    # folded phase declares its own lateness in its header.
     for i, ph in enumerate(progress["phases"]):
         # every phase, «אחרי» included: the tasks column is the ONLY task board
         # now, so a phase routed elsewhere would simply disappear.

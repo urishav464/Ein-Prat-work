@@ -64,3 +64,10 @@ su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/pgd -o '-p 5433 -k /tm
 ```
 
 Create roles mirroring Supabase (`anon`, `authenticated`, `service_role`) before applying the schema, or the REVOKE/GRANT statements fail. A shim turning `.select().eq().execute()` into SQL is ~150 lines; **have it `SET ROLE service_role`** — connecting as the owner bypasses RLS and makes the test meaningless. Also have it serialize like PostgREST does (datetime→string, Decimal→float), or the shim is more forgiving than production and hides real bugs. Inject with `dm.set_client(FakeSupabase())`.
+
+**Reset restores a uniform template, not the Markdown.** `reset_mishmar` deletes the evening's own
+rows (never `speaker_outreach`) and `reseed_mishmar_tasks` inserts `DEFAULT_TASK_TEMPLATE` — one
+list by phase, the same for every Mishmar, categories given and due dates via `compute_due_date`.
+It used to re-read `students_tasks.md`, which for some evenings carries leftovers of an earlier plan;
+the first-run seed still comes from the Markdown. `delete_break(mishmar_id, lesson_id)` is the
+row-delete that reflows the clock; bare `delete_lesson` leaves the later start times stale.

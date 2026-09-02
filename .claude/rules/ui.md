@@ -88,3 +88,22 @@ More probe traps that produced false test results here: **input placeholders nev
   paren before it), so writing docs that mention the file in backticks passes; a quote-preceded
   prose mention is blocked on purpose. The push check needs an actual invocation (`git push` followed by whitespace) and inspects only that line's arguments, so a commit message describing the rule still commits. Tests live outside the repo (`/tmp/pwtest/hooktest.py`),
   because the command strings they feed would trip the hook if typed into a live Bash call.
+
+## Layout that adapts without a rerun (the flex rule)
+
+- **`st.columns` is for forms only.** It stacks below ~640px and squeezes above it — on a phone a
+  task card's four controls became four lines. A row of controls is
+  `st.container(horizontal=True, wrap=False, gap="small", vertical_alignment="center")` and the
+  widgets are called on that container (`row.button(...)`); text takes `width="stretch"`, inputs a
+  px width. The browser lays it out; nothing reruns on resize.
+- **Grids are wrapping flex rows of fixed-width cards**: `st.container(horizontal=True, wrap=True)`
+  around `st.container(border=True, width=300)` — the dashboard's `_mishmar_card`s and its overdue
+  cards wrap 4 / 2 / 1 across. Below 740px the CSS forces those cards to 100% (keyed containers
+  `pipeline-grid` / `pipeline-past` → `.st-key-…`).
+- **The two workfile columns are the one media query**: `st.container(key="wf-cols").columns(...)`
+  and `@media (max-width: 1100px) .st-key-wf-cols …` stacks them, evening first.
+- **The dashboard card's title is a tertiary button** inside a plain `if` — a deep link is a rerun
+  anyway (`_goto`), so `on_click` buys nothing there.
+- The pinned «עברו את התאריך המומלץ» block is gone from the workfile board by request: the five
+  groups (four phases + יום המשמר) are the board, and a folded phase declares its own lateness in
+  its header badge.

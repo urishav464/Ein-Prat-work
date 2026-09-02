@@ -1366,6 +1366,13 @@ def add_break(mishmar_id: int, minutes: int = 15) -> None:
     recompute_lesson_times(mishmar_id)
 
 
+def delete_break(mishmar_id: int, lesson_id: int) -> None:
+    """Remove one row of the evening and reflow the clock. `delete_lesson` alone
+    leaves a hole in the timeline — every start time after it would be stale."""
+    _t("lessons").delete().eq("id", lesson_id).execute()
+    recompute_lesson_times(mishmar_id)
+
+
 def delete_lesson_candidate(candidate_id: int) -> bool:
     return bool(_rows(_t("lesson_speakers").delete().eq("id", candidate_id).execute()))
 
@@ -1479,30 +1486,48 @@ def set_invitation(mishmar_id: int, text: Optional[str] = None,
 # --------------------------------------------------------------------------
 
 
+# The task list a reset restores — ONE template for every Mishmar, by phase.
+# It used to re-read students_tasks.md, which for some evenings carries
+# leftovers of an earlier plan («מי הבוגרים שמובילים את החבורות», «תוכן
+# ומקורות — סבב א׳»); a reset that brings those back does not feel like a
+# reset. Text only: no names, dates or sums. Edit the tuple, not the code.
+DEFAULT_TASK_TEMPLATE: tuple[tuple[str, str], ...] = (
+    ("נושא",      "סגירת נושא"),
+    ("מרצים",     "סגירת מרצה — שיעור 1"),
+    ("מרצים",     "סגירת מרצה — שיעור 2"),
+    ("מרצים",     "סגירת מרצה — שיעור 3"),
+    ("תוכן",      "תוכן ומקורות לחבורות"),
+    ("תוכן",      "דף מקורות לערב"),
+    ("הזמנה",     "הזמנה — עיצוב"),
+    ("הזמנה",     "הזמנה — הפצה"),
+    ("כיבוד",     "כיבוד להפסקות"),
+    ("לוגיסטיקה", "חלוקת חללים לחבורות"),
+    ("יום המשמר", "סידור החדרים"),
+    ("יום המשמר", "קבלת פנים ופתיחה"),
+    ("אחרי",      "תודות למרצים"),
+    ("אחרי",      "משוב וסיכום"),
+)
+
+
 def reseed_mishmar_tasks(mishmar_id: int) -> int:
-    """Re-create ONE Mishmar's task list from students_tasks.md, exactly as the
-    first seed made it — categories and derived due dates included."""
-    parsed = parse_tasks_md(TASKS_MD)
-    mine = [t for t in parsed["tasks"] if t["mishmar_id"] == mishmar_id]
-    if not mine:
-        return 0
+    """Give ONE Mishmar the uniform task template — categories given, due
+    dates derived from the evening's date exactly as the first seed did."""
     m = get_mishmar(mishmar_id)
-    rows = []
-    for t in mine:
-        category = classify_task(t["task_description"])
-        rows.append({
-            "mishmar_id": mishmar_id,
-            "task_description": t["task_description"],
-            "status": t["status"],
-            "category": category,
-            "due_date": compute_due_date(m["gregorian_date"], category) if m else None,
-        })
+    if not m:
+        return 0
+    rows = [{
+        "mishmar_id": mishmar_id,
+        "task_description": text,
+        "status": "TO DO",
+        "category": category,
+        "due_date": compute_due_date(m["gregorian_date"], category),
+    } for category, text in DEFAULT_TASK_TEMPLATE]
     _t("tasks").insert(rows).execute()
     return len(rows)
 
 
 def reset_mishmar(mishmar_id: int) -> dict:
-    """Wipe one evening back to «choose a topic», and restore its original tasks.
+    """Wipe one evening back to «choose a topic», and give it the uniform task template.
 
     Deletes the evening's own rows — lessons (cascading lesson_speakers),
     tasks, budget, feedback, logistics — and clears the topic and invitation.
@@ -2000,6 +2025,7 @@ _WRITES = {
     "create_default_timeline": ("lessons",), "recompute_lesson_times": ("lessons",),
     "set_lesson_duration": ("lessons",), "add_lesson_slot": ("lessons",),
     "add_break": ("lessons",),
+    "delete_break": ("lessons", "tasks"),           # tasks.lesson_id: ON DELETE SET NULL
     "add_lesson_speaker": ("lesson_speakers", "speakers"),
     "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),
     "close_lesson_speaker": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),
