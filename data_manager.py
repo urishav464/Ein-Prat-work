@@ -223,7 +223,7 @@ def _now_iso() -> str:
 # check a database one version behind looks perfectly healthy and then throws a
 # redacted APIError deep inside a screen — which is exactly how a missing
 # `logistics_items` blanked the whole workfile instead of saying «run the SQL».
-REQUIRED_SCHEMA_VERSION = 5
+REQUIRED_SCHEMA_VERSION = 6
 
 
 def _missing_relation(exc: Exception) -> bool:
@@ -1153,6 +1153,8 @@ def create_default_timeline(mishmar_id: int) -> int:
     for i, slot in enumerate(slots, 1):
         _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": i, **slot}).execute()
     recompute_lesson_times(mishmar_id)
+    # The slots and their tasks are born together — that is the whole point.
+    sync_lesson_tasks(mishmar_id)
     return len(slots)
 
 
@@ -1262,12 +1264,14 @@ def close_lesson_speaker(lesson_id: int, name: str,
 
 
 def upload_source_sheet(mishmar_id: int, lesson_id: int,
-                        filename: str, data: bytes) -> Optional[str]:
-    """Upload a source sheet to Supabase Storage and return its public URL.
+                        filename: str, data: bytes) -> tuple[Optional[str], Optional[str]]:
+    """Upload a source sheet to Supabase Storage → `(public_url, error)`.
 
-    Creates the `sources` bucket on first use (service_role may). Returns None
-    on ANY failure — the UI then falls back to a paste-a-link field, so a
-    storage hiccup never blocks the pair."""
+    Creates the `sources` bucket on first use (service_role may). A failure
+    never blocks the pair — the UI falls back to a paste-a-link field — but it
+    now says WHAT failed: the old silent `None` turned a Storage
+    misconfiguration into a button that looked broken.
+    """
     try:
         storage = get_client().storage
         try:
@@ -1280,9 +1284,9 @@ def upload_source_sheet(mishmar_id: int, lesson_id: int,
             path, data,
             {"content-type": "application/octet-stream", "upsert": "true"})
         url = storage.from_("sources").get_public_url(path)
-        return str(url) if url else None
-    except Exception:
-        return None
+        return (str(url), None) if url else (None, "לא התקבל קישור ציבורי לקובץ")
+    except Exception as exc:                      # noqa: BLE001 — reported, not swallowed
+        return None, f"{type(exc).__name__}: {exc}"[:200]
 
 
 def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
@@ -1486,25 +1490,21 @@ def set_invitation(mishmar_id: int, text: Optional[str] = None,
 # --------------------------------------------------------------------------
 
 
-# The task list a reset restores — ONE template for every Mishmar, by phase.
+# The task list a reset restores — what the EVENING owns, once per Mishmar.
+# Everything that belongs to one slot (a speaker, a source sheet, the חבורות
+# rooms) is created by `sync_lesson_tasks` when the slot exists, and dies with
+# it; putting those here too was how a deleted slot kept its orphan task.
 # It used to re-read students_tasks.md, which for some evenings carries
 # leftovers of an earlier plan («מי הבוגרים שמובילים את החבורות», «תוכן
 # ומקורות — סבב א׳»); a reset that brings those back does not feel like a
 # reset. Text only: no names, dates or sums. Edit the tuple, not the code.
 DEFAULT_TASK_TEMPLATE: tuple[tuple[str, str], ...] = (
     ("נושא",      "סגירת נושא"),
-    ("מרצים",     "סגירת מרצה — שיעור 1"),
-    ("מרצים",     "סגירת מרצה — שיעור 2"),
-    ("מרצים",     "סגירת מרצה — שיעור 3"),
-    ("תוכן",      "תוכן ומקורות לחבורות"),
-    ("תוכן",      "דף מקורות לערב"),
-    ("הזמנה",     "הזמנה — עיצוב"),
-    ("הזמנה",     "הזמנה — הפצה"),
+    ("הזמנה",     "הזמנה — עיצוב והפצה"),
     ("כיבוד",     "כיבוד להפסקות"),
-    ("לוגיסטיקה", "חלוקת חללים לחבורות"),
     ("יום המשמר", "סידור החדרים"),
     ("יום המשמר", "קבלת פנים ופתיחה"),
-    ("אחרי",      "תודות למרצים"),
+    ("אחרי",      "מתנות למרצים אשר הגיעו בחינם"),
     ("אחרי",      "משוב וסיכום"),
 )
 
@@ -1524,6 +1524,129 @@ def reseed_mishmar_tasks(mishmar_id: int) -> int:
     } for category, text in DEFAULT_TASK_TEMPLATE]
     _t("tasks").insert(rows).execute()
     return len(rows)
+
+
+# The four rooms a חבורה can sit in. A closed list on purpose: «איפה אתם?» on
+# the night is answered from here, and free text made every evening's answer
+# different.
+CHAVUROT_ROOMS: tuple[str, ...] = (
+    "בית מיכאל", "כיתת בית מדרש", "כיתת שבייד", "ספריית שבייד",
+)
+
+
+_CHAVUROT_SLOT_TASKS: tuple[tuple[str, str], ...] = (
+    ("תוכן",      "מי מעביר את התוכן — חבורות"),
+    ("תוכן",      "דפי מקורות למעבירי החבורות"),
+    ("לוגיסטיקה", "חלוקת חללים למעבירי החבורות"),
+)
+
+
+def _slot_tasks(lesson: dict, index: int) -> tuple[tuple[str, str], ...]:
+    """The tasks a slot OWNS — (category, description). A חבורות slot is a
+    different animal: several presenters, a source sheet each, and rooms to
+    split between them."""
+    if _is_chavurot(lesson):
+        return _CHAVUROT_SLOT_TASKS
+    return (
+        ("מרצים", f"סגירת מרצה — שיעור {index}"),
+        ("תוכן",  f"דף מקורות — שיעור {index}"),
+    )
+
+
+def _slot_owned_texts(index: int) -> set[str]:
+    """Every description THIS module generates for a slot at `index`, in both
+    shapes. A task outside this set was written by a human and is never
+    touched — inside it, it is ours to retire when the slot changes shape."""
+    return {t for _, t in _CHAVUROT_SLOT_TASKS} | {
+        f"סגירת מרצה — שיעור {index}", f"דף מקורות — שיעור {index}"}
+
+
+def sync_lesson_tasks(mishmar_id: int) -> dict:
+    """Make the task board match the evening's structure.
+
+    The two lists used to be built separately and only guessed at each other:
+    the timeline came from `create_default_timeline`, the tasks from a flat
+    template, and nothing tied a task to the slot it is about. So deleting the
+    חבורות slot left «תוכן ומקורות לחבורות» behind, and «פתח» on a task landed
+    on a panel instead of on its slot.
+
+    Idempotent: creates only what is missing (matched on lesson_id + text),
+    removes only OPEN slot-owned tasks whose slot is gone, and never touches a
+    DONE row — history is not tidied away.
+    """
+    _invalidate(("lessons", "tasks"))     # the caller may have just inserted rows
+    lessons = [l for l in get_lessons(mishmar_id) if not l.get("is_break")]
+    tasks = get_tasks_for_mishmar(mishmar_id)
+    live_ids = {l["id"] for l in lessons}
+    by_lesson: dict[int, set[str]] = {}
+    for t in tasks:
+        if t.get("lesson_id"):
+            by_lesson.setdefault(t["lesson_id"], set()).add(
+                (t.get("task_description") or "").strip())
+
+    open_by_lesson: dict[int, list[dict]] = {}
+    for t in tasks:
+        if t.get("lesson_id") and t.get("status") != "DONE":
+            open_by_lesson.setdefault(t["lesson_id"], []).append(t)
+
+    created = removed = 0
+    for i, l in enumerate(lessons, 1):
+        have = by_lesson.get(l["id"], set())
+        expected = {text for _, text in _slot_tasks(l, i)}
+        for category, text in _slot_tasks(l, i):
+            if text in have:
+                continue
+            add_task(mishmar_id, text, category=category, lesson_id=l["id"])
+            created += 1
+        # The slot changed shape — a lesson became חבורות, or stopped being
+        # one. Its old generated tasks now ask for work nobody will do; only
+        # OUR wording is retired, and only while still open.
+        stale = _slot_owned_texts(i) - expected
+        for t in open_by_lesson.get(l["id"], []):
+            if (t.get("task_description") or "").strip() in stale:
+                _t("tasks").delete().eq("id", t["id"]).execute()
+                removed += 1
+
+    # A task that names a slot which no longer exists, still open: the work it
+    # asks for cannot be done. (`ON DELETE SET NULL` means only rows deleted
+    # through `delete_lesson_with_tasks` keep their id, so this is a safety net
+    # for slots removed some other way.)
+    for t in tasks:
+        lid = t.get("lesson_id")
+        if lid and lid not in live_ids and t.get("status") != "DONE":
+            _t("tasks").delete().eq("id", t["id"]).execute()
+            removed += 1
+    return {"created": created, "removed": removed}
+
+
+def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:
+    """Remove one row of the evening AND the open tasks that belonged to it.
+
+    Tasks marked DONE stay: they record work that happened. The clock reflows,
+    so the slots after this one do not keep stale start times.
+    """
+    _invalidate(("tasks",))
+    tasks = [t for t in get_tasks_for_mishmar(mishmar_id)
+             if t.get("lesson_id") == lesson_id and t.get("status") != "DONE"]
+    for t in tasks:
+        _t("tasks").delete().eq("id", t["id"]).execute()
+    _t("lessons").delete().eq("id", lesson_id).execute()
+    recompute_lesson_times(mishmar_id)
+    return {"tasks": len(tasks)}
+
+
+def set_candidate_room(candidate_id: int, room: Optional[str]) -> None:
+    """Which of the four spaces this חבורה sits in. Empty clears it."""
+    room = (room or "").strip() or None
+    if room and room not in CHAVUROT_ROOMS:
+        raise ValueError(f"room must be one of {CHAVUROT_ROOMS}, got {room!r}")
+    _t("lesson_speakers").update({"room": room}).eq("id", candidate_id).execute()
+
+
+def set_candidate_source(candidate_id: int, url: Optional[str]) -> None:
+    """A presenter's own source sheet — one per חבורה, not one per evening."""
+    _t("lesson_speakers").update(
+        {"source_url": (url or "").strip() or None}).eq("id", candidate_id).execute()
 
 
 def reset_mishmar(mishmar_id: int) -> dict:
@@ -1745,6 +1868,12 @@ def _is_chavurot(lesson: dict) -> bool:
             or "חבורות" in (lesson.get("format") or "")
             or "חבורות" in (lesson.get("title") or "")
             or "חברותות" in (lesson.get("title") or ""))
+
+
+# The UI asked the same question with a narrower test (`lesson_role == "חבורות"`),
+# so a slot the pair marked as חבורות in the FORMAT field never grew its
+# presenters list. One predicate, used by both.
+is_chavurot = _is_chavurot
 
 
 def suggest_lesson_for_task(task: dict, lessons: list[dict]) -> Optional[int]:
@@ -2022,10 +2151,14 @@ _WRITES = {
     "set_mishmar_topic": ("mishmarim",), "set_student_email": ("students",),
     "upsert_lesson": ("lessons", "speaker_outreach", "speakers"),
     "delete_lesson": ("lessons", "tasks"),          # tasks: ON DELETE SET NULL
-    "create_default_timeline": ("lessons",), "recompute_lesson_times": ("lessons",),
+    "create_default_timeline": ("lessons", "tasks"), "recompute_lesson_times": ("lessons",),
     "set_lesson_duration": ("lessons",), "add_lesson_slot": ("lessons",),
     "add_break": ("lessons",),
     "delete_break": ("lessons", "tasks"),           # tasks.lesson_id: ON DELETE SET NULL
+    "delete_lesson_with_tasks": ("lessons", "tasks"),
+    "sync_lesson_tasks": ("tasks",),
+    "set_candidate_room": ("lesson_speakers",),
+    "set_candidate_source": ("lesson_speakers",),
     "add_lesson_speaker": ("lesson_speakers", "speakers"),
     "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),
     "close_lesson_speaker": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),

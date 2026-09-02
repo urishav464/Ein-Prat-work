@@ -210,6 +210,11 @@ CREATE TABLE IF NOT EXISTS lesson_speakers (
 CREATE INDEX IF NOT EXISTS idx_lesson_speakers_lesson ON lesson_speakers(lesson_id);
 ALTER TABLE lesson_speakers ENABLE ROW LEVEL SECURITY;
 
+-- מקטע חבורות אינו תחרות בין מועמדים: כל שורה היא מעביר בפועל, ולכל מעביר
+-- חלל משלו (ארבעה קבועים) ודף מקורות משלו. שתי העמודות ריקות לכל מקטע רגיל.
+ALTER TABLE lesson_speakers ADD COLUMN IF NOT EXISTS room       text;
+ALTER TABLE lesson_speakers ADD COLUMN IF NOT EXISTS source_url text;
+
 -- תיאור חופשי למשימה; משוב נשמר פר-מקטע (בשם, כדי לשרוד מחיקת שורת לוז).
 ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS details text;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lesson_title text;
@@ -463,5 +468,5 @@ REVOKE ALL ON speaker_searches FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '5')
+VALUES ('schema_version', '6')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;

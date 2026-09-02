@@ -347,6 +347,18 @@ RTL_CSS = """
   /* ---- Mobile: Streamlit stacks columns by itself below ~640px; these
      rules keep OUR custom pieces usable on a phone: the stepper compresses,
      chips wrap. ---- */
+  /* Cards FILL their row instead of leaving a ragged stripe on the left: a
+     fixed width is the flex-basis, and the leftover space is shared out. */
+  .st-key-pipeline-grid > *, .st-key-pipeline-past > * { flex: 1 1 240px !important; }
+  .st-key-overdue-grid > * { flex: 1 1 300px !important; }
+  [data-testid="stMetric"] { flex: 1 1 150px; }
+  /* Only where several cards actually fit does a cap make sense: below this a
+     lone card should use the whole column, not sit in a 340px stripe. */
+  @media (min-width: 1101px) {
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > * { max-width: 340px; }
+      .st-key-overdue-grid > * { max-width: 420px; }
+  }
+
   /* Two workfile columns become one below 1100px — the width where a
      button row in a half-column starts wrapping. Pure CSS: no rerun. */
   @media (max-width: 1100px) {
@@ -359,7 +371,8 @@ RTL_CSS = """
       .chip { white-space: nowrap; }
       [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button { padding: .25rem .55rem; min-height: 2.1rem; }
       /* fixed-width cards fill the phone instead of leaving a stripe */
-      .st-key-pipeline-grid > *, .st-key-pipeline-past > * { flex: 0 0 100% !important; width: 100% !important; max-width: 100%; }
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-overdue-grid > * {
+          flex: 0 0 100% !important; width: 100% !important; max-width: 100% !important; }
       .step { min-width: 48px; font-size: .62rem; }
       .step .dot { width: 26px; height: 26px; font-size: .78rem; }
       .chip { font-size: .66rem; padding: 1px 7px; }
@@ -738,9 +751,9 @@ def show_admin_dashboard() -> None:
         cards = [dm.annotate_deadline(t) for t in overdue]
         # A wrapping flex row of fixed-width cards: 4 / 2 / 1 across as the
         # viewport shrinks, laid out by the browser — no rerun, no breakpoint.
-        with st.container(horizontal=True, wrap=True, gap="small"):
+        with st.container(horizontal=True, wrap=True, gap="small", key="overdue-grid"):
             for t in cards:
-                with st.container(border=True, width=320):
+                with st.container(border=True, width=300):
                     chips = [_chip("באיחור", "red"),
                              _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
                     if t.get("category"):
@@ -755,15 +768,17 @@ def show_admin_dashboard() -> None:
                     # A door first: the instructor could see a task was late
                     # and had no way to reach the Mishmar it belongs to.
                     row = st.container(horizontal=True, wrap=False, gap="small")
-                    if row.button("פתח ↗", key=f"ov-go-{t['id']}",
-                                  help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
+                    if t.get("category") != "הזמנה" and row.button(
+                            "פתח ↗", key=f"ov-go-{t['id']}",
+                            help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
                         _goto(NAV_WORKFILE, t["mishmar_id"],
                               _section_for_category(t.get("category")),
                               task_focus=t["id"])
                     row.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary",
                                on_click=_set_status, args=(t["id"], "DONE"))
-                    row.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
-                               on_click=_set_status, args=(t["id"], "IN PROGRESS"))
+                    if t.get("category") != "הזמנה":
+                        row.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
+                                   on_click=_set_status, args=(t["id"], "IN PROGRESS"))
 
     # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
@@ -1790,6 +1805,56 @@ def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
 
 
+def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
+    """A חבורות slot is not a competition between candidates — it is a LIST of
+    presenters, and each one needs two things of their own: a room out of the
+    four, and their own source sheet. There is no «סגרנו» here."""
+    used = [c.get("room") for c in cands if c.get("room")]
+    if cands:
+        st.markdown("**מעבירי החבורות:**")
+    for cand in cands:
+        clash = cand.get("room") and used.count(cand["room"]) > 1
+        top = st.container(horizontal=True, wrap=True, gap="small",
+                           vertical_alignment="center")
+        top.markdown(
+            f"👥 **{_clean(cand['name'])}**"
+            + (" <span class='chip chip-red'>⚠️ אותו חלל לשניים</span>" if clash else "")
+            + (f" <span class='card-meta'>{_clean(cand['phone'])}</span>"
+               if cand.get("phone") else ""),
+            unsafe_allow_html=True, width="stretch")
+        rkey = f"room-{cand['id']}"
+        top.selectbox(
+            "חלל", ["", *dm.CHAVUROT_ROOMS], key=rkey, width=170,
+            index=(dm.CHAVUROT_ROOMS.index(cand["room"]) + 1)
+            if cand.get("room") in dm.CHAVUROT_ROOMS else 0,
+            format_func=lambda r: r or "— חלל —", label_visibility="collapsed",
+            on_change=lambda cid=cand["id"], k=rkey: dm.set_candidate_room(
+                cid, st.session_state[k] or None))
+        top.button("🗑", key=f"rmch-{cand['id']}", help="הסרת המעביר",
+                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
+        skey = f"csrc-{cand['id']}"
+        st.text_input(
+            "דף מקורות", key=skey, value=cand.get("source_url") or "",
+            placeholder="📎 קישור לדף המקורות של החבורה הזו (Drive וכו׳)",
+            label_visibility="collapsed",
+            on_change=lambda cid=cand["id"], k=skey: dm.set_candidate_source(
+                cid, st.session_state[k]))
+    if not cands:
+        st.caption("עוד לא נוספו מעבירים. כל מעביר מקבל חלל ודף מקורות משלו.")
+
+    with st.form(f"addch-{l['id']}", border=False):
+        fr = st.container(horizontal=True, wrap=True, gap="small")
+        nm = fr.text_input("שם המעביר", key=f"chn-{l['id']}", width=200,
+                           label_visibility="collapsed", placeholder="שם המעביר")
+        ph = fr.text_input("טלפון", key=f"chp-{l['id']}", width=150,
+                           label_visibility="collapsed", placeholder="טלפון (רשות)")
+        if fr.form_submit_button("➕ מעביר") and nm.strip():
+            dm.add_lesson_speaker(l["id"], nm.strip(), phone=ph,
+                                  student_id=st.session_state.student_id)
+            st.toast(f"«{nm.strip()}» נוסף כמעביר חבורה")
+            st.rerun()
+
+
 def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
     """The lesson's optional-speakers list: name · phone · status · actions.
     Once one is closed, the list collapses to that single row."""
@@ -1881,10 +1946,10 @@ def _lesson_form(mid: int, l: dict) -> None:
         delete = cc3.form_submit_button("🗑 מחק מקטע")
 
     if delete:
-        dm.delete_lesson(l["id"])
-        dm.recompute_lesson_times(mid)
+        res = dm.delete_lesson_with_tasks(mid, l["id"])
         st.session_state["editing_lesson"] = None
-        st.toast("המקטע נמחק"); st.rerun()
+        st.toast(f"המקטע נמחק · נמחקו איתו {res['tasks']} משימות פתוחות שלו")
+        st.rerun()
     if cancel:
         st.session_state["editing_lesson"] = None
         st.rerun()
@@ -1896,9 +1961,9 @@ def _lesson_form(mid: int, l: dict) -> None:
         source = None
         if up is not None:
             with st.spinner("מעלה את דף המקורות…"):
-                source = dm.upload_source_sheet(mid, l["id"], up.name, up.getvalue())
+                source, err = dm.upload_source_sheet(mid, l["id"], up.name, up.getvalue())
             if not source:
-                st.warning("ההעלאה נכשלה — הדביקו קישור במקום.")
+                st.warning(f"ההעלאה נכשלה — הדביקו קישור במקום. ({err})")
         if source or link.strip() != (l.get("source_url") or ""):
             dm.set_lesson_source(l["id"], source or link)
         dm.recompute_lesson_times(mid)
@@ -1907,7 +1972,8 @@ def _lesson_form(mid: int, l: dict) -> None:
 
 
 def _topic_and_structure(mid: int, tasks: list[dict],
-                         lessons: Optional[list[dict]] = None) -> None:
+                         lessons: Optional[list[dict]] = None,
+                         candidates: Optional[dict[int, list[dict]]] = None) -> None:
     m = dm.get_mishmar(mid)
 
     # --- the topic: a hero form until it exists, a quiet line after ---
@@ -1954,7 +2020,8 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                   on_click=dm.create_default_timeline, args=(mid,))
         return
 
-    candidates = dm.get_lesson_speakers(mid, lessons=lessons)
+    if candidates is None:
+        candidates = dm.get_lesson_speakers(mid, lessons=lessons)
     linked = dm.get_tasks_for_lesson(tasks=tasks)
     editing = st.session_state.get("editing_lesson")
     focus = st.session_state.pop("wf_focus_lesson", None)
@@ -1987,8 +2054,8 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             br = st.container(horizontal=True, wrap=False, gap="small",
                               vertical_alignment="center")
             br.markdown(
-                f"<div style='opacity:.6;padding:.25rem .6rem'>☕ הפסקה · "
-                f"{l.get('duration_minutes') or 30} דק' · "
+                f"<div class='card-meta' style='white-space:nowrap;padding:.35rem .6rem'>"
+                f"☕ {l.get('duration_minutes') or 30} דק׳ · "
                 f"<span dir='ltr'>{_slot_times(l)}</span></div>",
                 unsafe_allow_html=True, width="stretch",
             )
@@ -2000,12 +2067,14 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                     dm.set_lesson_duration(mid, lid, int(st.session_state[k])))
             br.button("✕", key=f"brx-{l['id']}", type="tertiary",
                       help="מחיקת ההפסקה — הזמנים שאחריה מתעדכנים",
-                      on_click=dm.delete_break, args=(mid, l["id"]))
+                      on_click=dm.delete_lesson_with_tasks, args=(mid, l["id"]))
             continue
 
         lesson_no += 1
         cands = candidates.get(l["id"], [])
-        is_chavurot = (l.get("lesson_role") or "") == "חבורות"
+        # role OR format OR title — a pair that set only the FORMAT to חבורות
+        # used to get an ordinary speaker slot, with no «מי מעביר» anywhere.
+        is_chavurot = dm.is_chavurot(l)
         my_tasks = linked.get(l["id"], [])
         with st.container(border=True):
             head = _clean(l.get("title") or "") or f"שיעור {lesson_no} — ללא כותרת"
@@ -2016,7 +2085,9 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 chips.append(_chip(l["lesson_role"], "gold"))
             if l.get("format"):
                 chips.append(_chip(l["format"], "gray"))
-            if not l.get("speaker_name") and cands:
+            if is_chavurot and cands:
+                chips.append(_chip(f"{len(cands)} מעבירים", "blue"))
+            elif not l.get("speaker_name") and cands:
                 chips.append(_chip(f"{len(cands)} מועמדים", "blue"))
             open_here = [t for t in my_tasks if t["status"] != "DONE"]
             if open_here:
@@ -2040,7 +2111,10 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             if l.get("source_url"):
                 st.caption(f"📎 [דף מקורות]({l['source_url']})")
 
-            _candidate_rows(mid, l, cands)
+            if is_chavurot:
+                _chavurot_rows(mid, l, cands)
+            else:
+                _candidate_rows(mid, l, cands)
 
             # The tasks that belong to THIS slot, closable where the work is.
             # This is the half that was missing: the board could point at the
@@ -2056,31 +2130,24 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 tr.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
                            on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
 
-            # The slot's open work. Each button either OPENS the task that
-            # already covers it or CREATES one tied to this slot — no longer a
-            # dead-end that merely opens the board and leaves you to search.
-            todo = []
-            if not l.get("speaker_name"):
-                if is_chavurot:
-                    todo.append(("👥 מי מעביר", "תוכן",
-                                 f"לסגור מי מעביר {head}"))
-                else:
-                    todo.append(("🎤 סגירת מרצה", "מרצים",
-                                 f"סגירת מרצה — {head}"))
-            if not l.get("source_url"):
-                todo.append(("📎 דף מקורות", "תוכן", f"דף מקורות — {head}"))
+            # The slot's own controls. «דף מקורות» opens the EDITOR, where the
+            # upload and the link field live — it used to create a task and
+            # navigate back to this same panel, which read as a dead button.
             tc = st.container(horizontal=True, wrap=True, gap="small")
-            for i, (label, category, text) in enumerate(todo[:2]):
-                if tc.button(label, key=f"td-{l['id']}-{i}",
-                                help="פותח את המשימה — או פותח אותה אם עוד אין"):
-                    existing = next((t for t in open_here
-                                     if t.get("category") == category), None)
-                    if existing is None:
-                        dm.add_task(mid, text, category=category, lesson_id=l["id"])
-                        st.toast(f"נפתחה משימה «{text}» וקושרה למקטע")
+            if not is_chavurot and not l.get("speaker_name"):
+                if tc.button("🎤 סגירת מרצה", key=f"td-{l['id']}-0",
+                             help="פותח את המשימה — או פותח אותה אם עוד אין"):
+                    if not any(t.get("category") == "מרצים" for t in open_here):
+                        dm.add_task(mid, f"סגירת מרצה — {head}", category="מרצים",
+                                    lesson_id=l["id"])
+                        st.toast("נפתחה משימת סגירת מרצה וקושרה למקטע")
                     _goto(NAV_WORKFILE, mid, WF_STRUCTURE)
+            if not is_chavurot:
+                tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
+                          help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור",
+                          on_click=_set_state, args=("editing_lesson", l["id"]))
             tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע",
-                         on_click=_toggle, args=("editing_lesson", l["id"]))
+                      on_click=_toggle, args=("editing_lesson", l["id"]))
 
             if editing == l["id"]:
                 _lesson_form(mid, l)
@@ -2088,6 +2155,14 @@ def _topic_and_structure(mid: int, tasks: list[dict],
     ac = st.container(horizontal=True, wrap=True, gap="small")
     ac.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
     ac.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
+    # For an evening built before the slots owned their tasks: fills in what is
+    # missing and clears tasks whose slot is gone. Never touches a DONE row.
+    if ac.button("🔄 סנכרן משימות למקטעים",
+                 help="משלים לכל מקטע את המשימות שלו — סגירת מרצה, דף מקורות, "
+                      "ובחבורות גם מי מעביר וחלוקת החללים"):
+        res = dm.sync_lesson_tasks(mid)
+        st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}")
+        st.rerun()
 
 
 def _slot_label(l: dict, index: int) -> str:
@@ -2113,9 +2188,12 @@ def _wf_panel(key: str, count: str = "") -> "st.delta_generator.DeltaGenerator":
 
 def _logistics_list(mid: int, kind: str, items: list[dict],
                     title: str, hint: str, placeholder: str,
-                    detail_placeholder: Optional[str] = None) -> None:
-    """The refreshments list and the חבורות room allocation are one widget:
-    rows with a label, an optional detail, and a done box."""
+                    detail_placeholder: Optional[str] = None,
+                    with_detail: bool = True) -> None:
+    """A checkable list: a label, an optional detail, and a done box.
+
+    `with_detail=False` is the כיבוד list — «מי קונה» turned out not to matter,
+    so one free-text line per row is the whole row."""
     st.markdown(f"**{title}**")
     st.caption(hint)
     for it in items:
@@ -2136,18 +2214,63 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
     if not items:
         st.caption("עוד לא נוספו שורות.")
     with st.form(f"lgadd-{mid}-{kind}", border=False):
-        f1, f2, f3 = st.columns([2.2, 2, 0.9])
-        label = f1.text_input("פריט", key=f"lgl-{mid}-{kind}",
+        fr = st.container(horizontal=True, wrap=True, gap="small")
+        label = fr.text_input("פריט", key=f"lgl-{mid}-{kind}", width="stretch",
                               label_visibility="collapsed", placeholder=placeholder)
-        detail = f2.text_input("פירוט", key=f"lgd-{mid}-{kind}",
+        detail = fr.text_input("פירוט", key=f"lgd-{mid}-{kind}", width=180,
                                label_visibility="collapsed",
-                               placeholder=detail_placeholder or "פירוט (רשות)")
-        if f3.form_submit_button("➕ הוסף") and label.strip():
+                               placeholder=detail_placeholder or "פירוט (רשות)") \
+            if with_detail else ""
+        if fr.form_submit_button("➕ הוסף") and label.strip():
             dm.add_logistics_item(mid, kind, label.strip(), detail)
             st.rerun()
 
 
-def _logistics_panel(mid: int, m: dict) -> None:
+def _rooms_summary(mid: int, legacy: list[dict],
+                   candidates: Optional[dict[int, list[dict]]] = None) -> None:
+    """Who sits where — DERIVED from the חבורות presenters, not typed twice.
+
+    The rooms used to be a free-text logistics list, so the same fact lived in
+    two places and neither knew about the other. The presenters own it now;
+    this panel only shows it, and offers the door to where it is edited."""
+    st.markdown("**🚪 חלוקת החללים לחבורות**")
+    st.caption("נגזר ממעבירי החבורות במבנה הערב — כל מעביר וחלל אחד.")
+    all_lessons = dm.get_lessons(mid)
+    lessons = [l for l in all_lessons if not l.get("is_break") and dm.is_chavurot(l)]
+    # The candidates come from the caller, which already loaded them for the
+    # structure panel: fetching again with a different argument list would miss
+    # that memo and cost a second query for rows we are already holding.
+    if candidates is None:
+        candidates = dm.get_lesson_speakers(mid, lessons=all_lessons) if all_lessons else {}
+    rows = [r for l in lessons for r in candidates.get(l["id"], [])]
+    if rows:
+        used = [r.get("room") for r in rows if r.get("room")]
+        for r in rows:
+            room = r.get("room")
+            mark = " ⚠️ אותו חלל לשניים" if room and used.count(room) > 1 else ""
+            st.markdown(
+                f"- **{_clean(room or 'טרם נקבע חלל')}** — {_clean(r['name'])}{mark}"
+                + (f" · [📎 דף מקורות]({r['source_url']})" if r.get("source_url") else ""))
+    else:
+        st.caption("אין עדיין מעבירי חבורות. הוסיפו אותם במבנה הערב.")
+    st.button("↗ למבנה הערב", key=f"rooms-go-{mid}",
+              on_click=_goto, args=(NAV_WORKFILE, mid, WF_STRUCTURE))
+    if legacy:
+        with st.expander(f"שורות חללים ישנות ({len(legacy)})"):
+            st.caption("נרשמו כשהחללים היו רשימה חופשית. אפשר למחוק אותן.")
+            for it in legacy:
+                lr = st.container(horizontal=True, wrap=False, gap="small",
+                                  vertical_alignment="center")
+                lr.markdown(f"{_clean(it['label'])}"
+                            + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
+                               if it.get("detail") else ""),
+                            unsafe_allow_html=True, width="stretch")
+                lr.button("🗑", key=f"lgold-{it['id']}",
+                          on_click=dm.delete_logistics_item, args=(it["id"],))
+
+
+def _logistics_panel(mid: int, m: dict,
+                     candidates: Optional[dict[int, list[dict]]] = None) -> None:
     """Everything the evening needs that is not a lesson: what to buy, which
     room each חבורה sits in, and the invitation that goes out."""
     items = dm.get_logistics(mid)
@@ -2160,12 +2283,9 @@ def _logistics_panel(mid: int, m: dict) -> None:
     _logistics_list(
         mid, "כיבוד", items.get("כיבוד", []), "🍎 רשימת הכיבוד",
         "מה קונים לערב. סימון ✓ = נקנה.",
-        "למשל: עוגות · פיצוחים · שתייה חמה", "כמות · מי קונה")
+        "למשל: עוגות · פיצוחים · שתייה חמה", with_detail=False)
     st.divider()
-    _logistics_list(
-        mid, "חלל", items.get("חלל", []), "🚪 חלוקת החללים לחבורות",
-        "איזו חבורה יושבת איפה, ומי מוביל אותה.",
-        "למשל: בית המדרש · כיתה 2 · המרפסת", "מי מוביל · כמה משתתפים")
+    _rooms_summary(mid, items.get("חלל", []), candidates)
     st.divider()
     st.markdown("**✉️ ההזמנה למשמר**")
     st.caption("הטקסט שנשלח בוואטסאפ, וקישור לפוסטר אם יש.")
@@ -2247,14 +2367,18 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
         return
 
     lessons = dm.get_lessons(mid)
+    # One fetch of the evening's speakers, shared by the structure panel and the
+    # rooms summary — two calls with different argument lists are two queries.
+    candidates = dm.get_lesson_speakers(mid, lessons=lessons) if lessons else {}
     # keyed container → `.st-key-wf-cols` in CSS: below 1100px the two columns
     # stack (evening first) instead of squeezing every button into a sliver.
     right, left = st.container(key="wf-cols").columns([1.15, 1], gap="medium")
     with right:
         with _wf_panel(WF_STRUCTURE, f"{len([l for l in lessons if not l.get('is_break')])} מקטעים"):
-            _safe(_topic_and_structure, mid, tasks, lessons=lessons)
+            _safe(_topic_and_structure, mid, tasks, lessons=lessons,
+                  candidates=candidates)
         with _wf_panel(WF_LOGISTICS):
-            _safe(_logistics_panel, mid, m)
+            _safe(_logistics_panel, mid, m, candidates)
         with _wf_panel(WF_AFTER):
             _safe(_after_tab, mid)
         _reset_panel(mid, m)
@@ -2308,8 +2432,12 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         # one flex row that never stacks — on a phone the four controls
         # used to become four lines
         row = st.container(horizontal=True, wrap=False, gap="small")
+        # The invitation is designed and sent outside the app: there is nowhere
+        # for «פתח» to lead and «בתהליך» says nothing. Done, or not done.
+        no_door = t.get("category") == "הזמנה"
         if t["status"] != "DONE":
-            if row.button("פתח ↗", key=f"{k}-go", help="למקום שבו סוגרים את זה"):
+            if not no_door and row.button("פתח ↗", key=f"{k}-go",
+                                          help="למקום שבו סוגרים את זה"):
                 if t.get("category") == "אחרי":
                     _goto(NAV_WORKFILE, mid, WF_AFTER)
                 elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):

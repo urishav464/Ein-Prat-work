@@ -107,3 +107,21 @@ More probe traps that produced false test results here: **input placeholders nev
 - The pinned «עברו את התאריך המומלץ» block is gone from the workfile board by request: the five
   groups (four phases + יום המשמר) are the board, and a folded phase declares its own lateness in
   its header badge.
+
+## The evening panel after the slot↔task round
+
+- **A חבורות slot renders `_chavurot_rows`, not `_candidate_rows`.** It is a LIST of presenters,
+  not a competition: no «סגרנו», each row carries a room picker (`dm.CHAVUROT_ROOMS`) and its own
+  source-sheet field, and a room used twice shows ⚠️ on both rows.
+- **«📎 דף מקורות» opens the slot editor** (`_set_state("editing_lesson", …)`), where the uploader
+  and the link field live. It used to create a task and `_goto` back to the same panel — which is
+  why it read as a dead button.
+- **The invitation task is done-or-not**: a task whose category is `הזמנה` shows no «פתח» in the
+  workfile card and no «▶ בתהליך» on the dashboard card. It is designed and sent outside the app.
+- **The rooms panel in לוגיסטיקה is derived**, not typed: it reads the חבורות presenters. The
+  candidates are fetched ONCE in `_workfile_columns` and passed to both the structure panel and the
+  rooms panel — calling `get_lesson_speakers` twice with different argument lists misses the memo
+  and costs a second query (measured: 10 → 9 on a cold workfile).
+- **Cards fill their row**: `flex: 1 1 240px` on `.st-key-pipeline-grid` / `.st-key-overdue-grid`
+  children, capped (`max-width`) only above 1101px so a lone card does not sit in a stripe, and
+  forced to 100% below 740px. Measured 4 / 1 / 1 across at 1500 / 900 / 390 with no h-overflow.

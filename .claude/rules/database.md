@@ -71,3 +71,33 @@ list by phase, the same for every Mishmar, categories given and due dates via `c
 It used to re-read `students_tasks.md`, which for some evenings carries leftovers of an earlier plan;
 the first-run seed still comes from the Markdown. `delete_break(mishmar_id, lesson_id)` is the
 row-delete that reflows the clock; bare `delete_lesson` leaves the later start times stale.
+
+## Slots own their tasks (schema v6)
+
+The evening's structure and the task board used to be two lists that only guessed at each other:
+the timeline came from `create_default_timeline`, the tasks from a flat template, and nothing tied
+a task to the slot it was about. Deleting the חבורות slot left its task behind; «פתח» landed on a
+panel instead of on a slot.
+
+- **`sync_lesson_tasks(mishmar_id)`** is the single place that reconciles them, and it is
+  idempotent. Per ordinary slot: «סגירת מרצה — שיעור N» + «דף מקורות — שיעור N». Per חבורות slot:
+  «מי מעביר את התוכן — חבורות», «דפי מקורות למעבירי החבורות», «חלוקת חללים למעבירי החבורות». Every
+  row carries `lesson_id`. It creates what is missing, retires OUR OWN wording when a slot changes
+  shape (`_slot_owned_texts` — a hand-written task linked to the slot is never touched), and clears
+  open tasks whose slot is gone. **DONE rows are never touched.** `create_default_timeline` calls
+  it, so a new Mishmar is born synced; an existing one catches up from «🔄 סנכרן משימות למקטעים».
+- **`delete_lesson_with_tasks(mishmar_id, lesson_id)`** is how a slot (or a break) is removed:
+  its OPEN tasks go with it, DONE ones stay as history, and the clock reflows. Bare `delete_lesson`
+  leaves both the later start times and the tasks stale.
+- **`is_chavurot(lesson)`** (public alias of `_is_chavurot`) reads role **or** format **or** title.
+  The UI used to test `lesson_role == "חבורות"` alone, so a slot marked חבורות in the FORMAT field
+  never grew a presenters list.
+- **`CHAVUROT_ROOMS`** — בית מיכאל · כיתת בית מדרש · כיתת שבייד · ספריית שבייד. Exactly four;
+  `set_candidate_room` raises `ValueError` on anything else. A room used twice is flagged in the UI,
+  never blocked. `set_candidate_source` holds one source sheet per presenter.
+  Both live on `lesson_speakers` (`room`, `source_url` — schema v6).
+- **`DEFAULT_TASK_TEMPLATE`** now holds only what the EVENING owns: נושא · «הזמנה — עיצוב והפצה»
+  (one row) · כיבוד · יום המשמר ×2 · «מתנות למרצים אשר הגיעו בחינם» · משוב. Anything belonging to a
+  slot is created by `sync_lesson_tasks` and dies with the slot.
+- **`upload_source_sheet` returns `(url, error)`** — the old silent `None` turned a Storage
+  misconfiguration into a button that looked broken.
