@@ -27,12 +27,13 @@ SH_SHOP, SH_PANTRY = "קניות", "לבדוק במטבח"
 SH_ASSIGN, SH_MENU = "שיבוץ", "תפריט השבת"
 SH_STUDENTS, SH_GROUPS = "חניכים", "קבוצות"
 SH_TASKS, SH_RECIPES, SH_ITEMS, SH_ZMAN = "מאגר משימות", "מתכונים", "מצרכים", "זמנים"
+SH_SHADOW = 'לו"ז צל'
 
 # --- גדלים ------------------------------------------------------------------
 MAX_GROUPS = 6            # קבוצות נתמכות (כרטיסייה לכל אחת)
 CARD_TASK_ROWS = 18       # שורות משימה בכל כרטיסייה
 ASSIGN_ROWS = 150         # שורות בגיליון השיבוץ
-STUDENT_ROWS = 90         # שורות בגיליון החניכים
+STUDENT_ROWS = 130        # שורות בגיליון החניכים (מקום לגידול)
 TASK_ROWS = 250           # שורות במאגר המשימות (כולל רזרבה)
 RECIPE_ROWS = 250         # שורות בגיליון המתכונים
 MENU_ROWS = 40            # שורות בתפריט השבת
@@ -58,6 +59,30 @@ THEME_ORDER = list(THEMES)
 FONT = "Arial"
 
 WINDOWS = "שישי,שבת,מוצאי שבת,חמישי"
+
+# עוגני לו"ז הצל: (שם, שורה בגיליון «לוז» או None לאירועים שלפני השבת)
+ANCHORS = [
+    ("חמישי — הכנות", None),
+    ("שישי — ארוחת בוקר", None),
+    ("שישי — הכנות ועבודה", None),
+    ("שישי — ארוחת צהריים", None),
+    ("קבלת שבת ישראלית", 4),
+    ("כניסת שבת", 5),
+    ("קבלת שבת וערבית", 6),
+    ("סעודת שבת", 7),
+    ("טיש עם איש צוות", 8),
+    ("קידוש", 9),
+    ("חבורות חניכים", 10),
+    ("ארוחת צהריים", 11),
+    ("חבורה עם איש צוות", 12),
+    ("סעודה שלישית", 13),
+    ("הבדלה", 14),
+    ("ניקיונות וארגון הקמפוס", 15),
+    ("כריכה לכריכה", 16),
+]
+NO_ANCHOR = "(ללא עוגן)"
+SHADOW_ROWS = 5           # שורות צל לכל עוגן
+SHADOW_LOOSE_ROWS = 14    # שורות בבלוק «ללא עוגן»
 MEALS = "קידוש,ארוחת ערב שבת,ארוחת צהריים שבת,סעודה שלישית,טיש,ארוחת צהריים שישי"
 
 
@@ -577,29 +602,32 @@ CATEGORY_COLORS = {
 def build_tasks(wb):
     ws = wb.create_sheet(SH_TASKS)
     page(ws, tab=TAB_REF)
-    widths(ws, {"A": 20, "B": 22, "C": 14, "D": 76})
-    title_row(ws, 1, "מאגר משימות קבוע", span="A:D", size=18)
-    header_row(ws, 2, ["קטגוריה", "תחום אחריות", "חלון זמן", "משימה"])
+    widths(ws, {"A": 20, "B": 22, "C": 14, "D": 70, "E": 26})
+    title_row(ws, 1, "מאגר משימות קבוע", span="A:E", size=18)
+    header_row(ws, 2, ["קטגוריה", "תחום אחריות", "חלון זמן", "משימה", "עוגן בלו\"ז"])
 
     rows = read_csv("task_library.csv")
     for i in range(TASK_ROWS):
         r = 3 + i
         row = rows[i] if i < len(rows) else {}
         cat = row.get("קטגוריה", "")
-        for col, key in enumerate(["קטגוריה", "תחום אחריות", "חלון זמן", "משימה"], start=1):
+        for col, key in enumerate(["קטגוריה", "תחום אחריות", "חלון זמן", "משימה", "עוגן"],
+                                  start=1):
             c = data_cell(ws, r, col, row.get(key) or None, editable=False,
-                          wrap=(col == 4), center=(col == 3), bold=(col == 1))
+                          wrap=(col == 4), center=(col in (3, 5)), bold=(col == 1))
             if col == 1 and cat:
                 c.fill = fill(CATEGORY_COLORS.get(cat, BAND))
         ws.row_dimensions[r].height = 20
 
     dv_list(ws, '"{}"'.format(",".join(CATEGORY_COLORS)), "A3:A{}".format(2 + TASK_ROWS))
     dv_list(ws, '"{}"'.format(WINDOWS + ",משתנה"), "C3:C{}".format(2 + TASK_ROWS))
+    dv_list(ws, '"{}"'.format(",".join(a for a, _ in ANCHORS)), "E3:E{}".format(2 + TASK_ROWS))
     ws.freeze_panes = "A3"
     note_row(ws, 4 + TASK_ROWS,
              "זו רשימת ההיצע לגיליון «שיבוץ». מותר ורצוי להוסיף, למחוק ולתקן — הרשימה הנגללת "
              "והקטגוריה האוטומטית מתעדכנות לבד. משימות ניקיון מופיעות בנפרד לכל מרחב, "
-             "כדי לבחור בכל שבת אילו מרחבים מנקים ומתי.")
+             "כדי לבחור בכל שבת אילו מרחבים מנקים ומתי. עמודת «עוגן» היא ברירת המחדל "
+             "לשיוך המשימה בלו\"ז הצל.")
     return ws
 
 
@@ -609,11 +637,12 @@ def build_tasks(wb):
 def build_assign(wb):
     ws = wb.create_sheet(SH_ASSIGN)
     page(ws, landscape=True, tab=TAB_INPUT)
-    widths(ws, {"A": 20, "B": 13, "C": 9, "D": 44, "E": 17, "F": 52,
-                "G": 9, "H": 22, "I": 22})
-    title_row(ws, 1, "שיבוץ תורנויות לשבת", span="A:G", size=18)
-    header_row(ws, 2, ["קבוצה", "חלון זמן", "שעה", "משימה", "קטגוריה",
-                       "פרטים וכמויות", "בוצע", "מפתח (אל תיגעו)", "בדיקה"])
+    widths(ws, {"A": 20, "B": 12, "C": 8, "D": 42, "E": 16, "F": 40,
+                "G": 22, "H": 62, "I": 8, "J": 20, "K": 20, "L": 20, "M": 22})
+    title_row(ws, 1, "שיבוץ תורנויות לשבת", span="A:I", size=18)
+    header_row(ws, 2, ["קבוצה", "חלון זמן", "שעה", "משימה", "קטגוריה", "פרטים וכמויות",
+                       "עוגן בלו\"ז", "שורת צל", "בוצע",
+                       "עוגן בפועל", "מפתח קבוצה", "מפתח עוגן", "בדיקה"])
 
     last = 2 + ASSIGN_ROWS
     task_last = 2 + TASK_ROWS
@@ -631,29 +660,51 @@ def build_assign(wb):
         cat.fill = fill(CALC_BG)
         cat.font = f(10, color=MUTED)
         data_cell(ws, r, 6, None, wrap=True)
-        data_cell(ws, r, 7, None, editable=False, center=True)
+        data_cell(ws, r, 7, None, center=True)
 
-        key = ws.cell(row=r, column=8,
+        shadow = data_cell(
+            ws, r, 8,
+            '=IF($D{r}="","",IF($C{r}="","",{t}&" · ")&$D{r}'
+            '&IF($A{r}="",""," — "&$A{r})&IF($F{r}="",""," ("&$F{r}&")"))'.format(
+                r=r, t=time_text("$C{}".format(r))),
+            editable=False, wrap=True)
+        shadow.fill = fill(CALC_BG)
+        shadow.font = f(10)
+
+        data_cell(ws, r, 9, None, editable=False, center=True)
+
+        effective = ws.cell(
+            row=r, column=10,
+            value='=IF($D{r}="","",IF($G{r}="","{na}",$G{r}))'.format(r=r, na=NO_ANCHOR))
+        key = ws.cell(row=r, column=11,
                       value='=IF($A{r}="","",$A{r}&"|"&COUNTIF($A$3:$A{r},$A{r}))'.format(r=r))
-        key.font = f(9, color=MUTED)
+        akey = ws.cell(row=r, column=12,
+                       value='=IF($J{r}="","",$J{r}&"|"&COUNTIF($J$3:$J{r},$J{r}))'.format(r=r))
+        for helper in (effective, key, akey):
+            helper.font = f(9, color=MUTED)
 
         check = ws.cell(
-            row=r, column=9,
+            row=r, column=13,
             value='=IF($A{r}="","",IF(COUNTIF({g}$A$3:$A${gl},$A{r})=0,'
                   '"⚠ שם קבוצה לא מוכר",""))'.format(r=r, g=q(SH_GROUPS), gl=2 + MAX_GROUPS))
         check.font = f(10, bold=True, color=WARN_INK)
         check.alignment = align(h="center")
         ws.row_dimensions[r].height = 28
 
-    ws.column_dimensions["H"].hidden = True
+    for col in ("J", "K", "L"):
+        ws.column_dimensions[col].hidden = True
 
     dv_list(ws, "'{}'!$A$3:$A${}".format(SH_GROUPS, 2 + MAX_GROUPS), "A3:A{}".format(last))
     dv_list(ws, '"{}"'.format(WINDOWS), "B3:B{}".format(last))
     dv_list(ws, "'{}'!$D$3:$D${}".format(SH_TASKS, task_last), "D3:D{}".format(last))
-    dv_list(ws, '"✔"', "G3:G{}".format(last))
+    dv_list(ws, '"{}"'.format(",".join(a for a, _ in ANCHORS)), "G3:G{}".format(last))
+    dv_list(ws, '"✔"', "I3:I{}".format(last))
 
     ws.conditional_formatting.add(
-        "I3:I{}".format(last), FormulaRule(formula=["LEN($I3)>0"], fill=fill(WARN_BG)))
+        "M3:M{}".format(last), FormulaRule(formula=["LEN($M3)>0"], fill=fill(WARN_BG)))
+    ws.conditional_formatting.add(
+        "G3:G{}".format(last),
+        FormulaRule(formula=['AND($D3<>"",$G3="")'], fill=fill(WARN_BG)))
     ws.freeze_panes = "A3"
     return ws
 
@@ -718,9 +769,9 @@ def build_cards(wb):
         for n in range(1, CARD_TASK_ROWS + 1):
             r = hdr + n
             text_lookup = ('=IFERROR(INDEX({s}${col}$3:${col}${last},'
-                           'MATCH({g}&"|"&{n},{s}$H$3:$H${last},0))&"","")')
+                           'MATCH({g}&"|"&{n},{s}$K$3:$K${last},0))&"","")')
             num_lookup = ('=IFERROR(INDEX({s}${col}$3:${col}${last},'
-                          'MATCH({g}&"|"&{n},{s}$H$3:$H${last},0)),"")')
+                          'MATCH({g}&"|"&{n},{s}$K$3:$K${last},0)),"")')
             for col_idx, src in ((8, "B"), (9, "D"), (10, "F"), (12, "E")):
                 ws.cell(row=r, column=col_idx,
                         value=text_lookup.format(s=S, col=src, g=gref, n=n, last=assign_last))
@@ -781,6 +832,102 @@ def build_cards(wb):
 
     for idx in range(1, MAX_GROUPS):
         ws.row_breaks.append(Break(id=idx * block_height))
+    return ws
+
+
+# ---------------------------------------------------------------------------
+# גיליון: לו"ז צל
+# ---------------------------------------------------------------------------
+def build_shadow(wb):
+    """הלו"ז הציבורי מימין, ומשימות ההכנה שמאחוריו משמאל — כמו בפורמט הידני."""
+    ws = wb.create_sheet(SH_SHADOW)
+    page(ws, tab=TAB_OUTPUT)
+    widths(ws, {"A": 9, "B": 26, "C": 30, "D": 30, "E": 30})
+
+    S, L = q(SH_ASSIGN), q(SH_SCHED)
+    assign_last = 2 + ASSIGN_ROWS
+
+    title_row(ws, 1, 'לו"ז צל — מי עושה מה ומתי', span="A:E", size=20)
+    ws.merge_cells("A2:E2")
+    sub = ws.cell(
+        row=2, column=1,
+        value='=IF({a}$B$4="","בחר תאריך בגיליון «הגדרות»","שבת "&{d}&'
+        'IF({a}$B$5=""," "," · פרשת "&{a}$B$5))'.format(
+            a=q(SH_SET), d=date_text(q(SH_SET) + "$B$4")))
+    sub.font = f(12, bold=True, color=MUTED)
+    sub.alignment = align()
+
+    ws.merge_cells("A3:E3")
+    cover = ws.cell(
+        row=3, column=1,
+        value='="משימות בשיבוץ: "&COUNTA({s}$D$3:$D${l})'
+              '&"   ·   עוגנו: "&(COUNTA({s}$D$3:$D${l})'
+              '-COUNTIF({s}$J$3:$J${l},"{na}"))'
+              '&"   ·   ללא עוגן: "&COUNTIF({s}$J$3:$J${l},"{na}")'
+              '&IF(COUNTIF({s}$J$3:$J${l},"{na}")=0,"   ✔ הכל מופיע כאן",'
+              '"   ⚠ ראו «ללא עוגן» בתחתית")'.format(s=S, l=assign_last, na=NO_ANCHOR))
+    cover.font = f(11, bold=True)
+    cover.alignment = align(h="center")
+    cover.fill = fill(BAND)
+    cover.border = box()
+    ws.row_dimensions[3].height = 24
+    ws.conditional_formatting.add(
+        "A3:E3", FormulaRule(formula=['ISNUMBER(SEARCH("⚠",$A$3))'], fill=fill(WARN_BG)))
+
+    header_row(ws, 4, ["שעה", "בלו\"ז", "מה קורה מאחורי הקלעים", "", ""])
+    ws.merge_cells("C4:E4")
+
+    def lookup(anchor_ref, n, col):
+        return ('=IFERROR(INDEX({s}${c}$3:${c}${l},MATCH({a}&"|"&{n},{s}$L$3:$L${l},0))&"","")'
+                .format(s=S, c=col, l=assign_last, a=anchor_ref, n=n))
+
+    row = 5
+    blocks = [(name, sched_row, SHADOW_ROWS) for name, sched_row in ANCHORS]
+    blocks.append((NO_ANCHOR, None, SHADOW_LOOSE_ROWS))
+
+    for name, sched_row, count in blocks:
+        top, bottom = row, row + count - 1
+        loose = name == NO_ANCHOR
+
+        ws.merge_cells(start_row=top, start_column=1, end_row=bottom, end_column=1)
+        hour = ws.cell(row=top, column=1)
+        if sched_row:
+            hour.value = '=IF(N({l}$B${r})=0,"",{t})'.format(
+                l=L, r=sched_row, t=time_text("{}$B${}".format(L, sched_row)))
+        hour.font = f(12, bold=True, color=ACCENT)
+        hour.alignment = align(h="center", v="center")
+
+        ws.merge_cells(start_row=top, start_column=2, end_row=bottom, end_column=2)
+        event = ws.cell(row=top, column=2, value=name)
+        event.font = f(12, bold=True)
+        event.alignment = align(v="center", wrap=True)
+        event.fill = fill(WARN_BG if loose else (BAND if sched_row else "F7F9FC"))
+
+        for i in range(count):
+            r = top + i
+            anchor_ref = '"{}"'.format(name)
+            ws.cell(row=r, column=7, value=lookup(anchor_ref, i + 1, "H"))
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=5)
+            line = ws.cell(row=r, column=3, value="=$G{}".format(r))
+            line.font = f(11)
+            line.alignment = align(v="center", wrap=True)
+            for col in range(1, 6):
+                ws.cell(row=r, column=col).border = box()
+            ws.row_dimensions[r].height = 24
+
+        ws.conditional_formatting.add(
+            "C{}:E{}".format(top, bottom),
+            FormulaRule(formula=['$C{}<>""'.format(top)], fill=fill("FBFCFD")))
+        row = bottom + 1
+
+    ws.column_dimensions["G"].hidden = True
+    ws.freeze_panes = "A5"
+    ws.print_title_rows = "4:4"
+    note_row(ws, row + 1,
+             'כל שורה כאן נבנית לבד מגיליון «שיבוץ»: שעה · משימה — קבוצה (פרטים). '
+             'כדי שמשימה תופיע מול האירוע הנכון, בחרו לה «עוגן בלו\"ז» בגיליון «שיבוץ». '
+             'מה שאין לו עוגן מופיע בבלוק התחתון, כדי ששום דבר לא ייפול בין הכיסאות.',
+             last_col=5)
     return ws
 
 
@@ -1105,6 +1252,7 @@ def main():
     build_settings(wb)
     build_schedule(wb)
     build_cards(wb)
+    build_shadow(wb)
     build_plain(wb)
     build_checklist(wb)
     build_shopping(wb)

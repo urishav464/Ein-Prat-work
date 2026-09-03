@@ -8,6 +8,7 @@ placeholders, כדי שהמערכת תמשיך לעבוד עד שהרשימה ה
     python3 tools/roster.py
 """
 import csv
+import difflib
 import re
 import sys
 from pathlib import Path
@@ -15,18 +16,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 OUT = DATA / "students.csv"
-HEADERS = ["שם", "קבוצה קבועה", "הערה"]
+HEADERS = ["שם", "תוכנית", "קבוצה קבועה", "הערה"]
 PLACEHOLDER_COUNT = 40
+
+CANONICAL = {"מישל דויד": "מישל דוד"}
 
 NAME_HINTS = ("שם", "name", "חניך")
 SKIP_HINTS = ("חותמת", "timestamp", "מייל", "email", "טלפון", "phone")
 
 
-def _source_files():
+ELUL_PATTERN = re.compile(r"(elul|אלול)", re.UNICODE)
+
+
+def _source_files(elul=False):
     pattern = re.compile(r"(חניכ|students|רשימ)", re.UNICODE)
-    return sorted(p for p in DATA.glob("*")
-                  if p.suffix.lower() in (".xlsx", ".xlsm", ".csv")
-                  and p.name != OUT.name and pattern.search(p.stem))
+    files = [p for p in DATA.glob("*")
+             if p.suffix.lower() in (".xlsx", ".xlsm", ".csv")
+             and p.name != OUT.name and pattern.search(p.stem)]
+    return sorted(p for p in files if bool(ELUL_PATTERN.search(p.stem)) == elul)
 
 
 def _pick_name_column(header, rows):
@@ -54,8 +61,8 @@ def _read_rows(path):
     return (rows[0] if rows else []), rows[1:]
 
 
-def load_names():
-    for path in _source_files():
+def load_names(elul=False):
+    for path in _source_files(elul=elul):
         try:
             header, rows = _read_rows(path)
         except Exception as exc:                       # קובץ פגום/נעול — ננסה את הבא
@@ -68,11 +75,14 @@ def load_names():
         for row in rows:
             value = row[col] if col < len(row) else None
             name = " ".join(str(value).split()) if value else ""
+            name = CANONICAL.get(name, name)
             if name and name not in seen:
                 seen.add(name)
                 names.append(name)
         if names:
             return names, path.name
+    if elul:
+        return [], None
     return ["חניך {}".format(i) for i in range(1, PLACEHOLDER_COUNT + 1)], None
 
 
@@ -84,8 +94,32 @@ def read_students():
         return list(csv.DictReader(fh))
 
 
+def match_name(name, roster):
+    """התאמת שם שהוקלד לשם הקנוני ברשימה. מחזיר (שם, איך) או (None, "לא נמצא")."""
+    table = {_norm(r): r for r in roster}
+    n = _norm(CANONICAL.get(" ".join(str(name).split()), name))
+    if n in table:
+        return table[n], "מדויק"
+    words = set(n.split())
+    contained = [orig for key, orig in table.items()
+                 if words <= set(key.split()) or set(key.split()) <= words]
+    if len(contained) == 1:
+        return contained[0], "הכלה"
+    close = difflib.get_close_matches(n, list(table), n=1, cutoff=0.8)
+    if close:
+        return table[close[0]], "דמיון"
+    return None, "לא נמצא"
+
+
+def _norm(text):
+    text = re.sub(r"[\u0591-\u05C7]", "", str(text))
+    text = text.replace("״", '"').replace("׳", "'").replace("-", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def main():
     names, source = load_names()
+    elul_names, elul_source = load_names(elul=True)
     existing = {}
     if OUT.exists():                                   # שימור נעילות והערות קיימות
         with OUT.open(encoding="utf-8-sig", newline="") as fh:
@@ -94,15 +128,18 @@ def main():
     with OUT.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=HEADERS)
         writer.writeheader()
-        for name in names:
+        for name, program in ([(n, "מדרשה") for n in names]
+                              + [(n, "אלול") for n in elul_names if n not in names]):
             prev = existing.get(name, {})
             writer.writerow({"שם": name,
+                             "תוכנית": program,
                              "קבוצה קבועה": prev.get("קבוצה קבועה", ""),
                              "הערה": prev.get("הערה", "")})
 
-    print("{} חניכים ← {} (מקור: {})".format(
-        len(names), OUT.relative_to(ROOT), source or "placeholder"))
-    return names
+    print("{} חניכי מדרשה (מקור: {}) + {} חניכי אלול (מקור: {}) ← {}".format(
+        len(names), source or "placeholder", len(elul_names),
+        elul_source or "—", OUT.relative_to(ROOT)))
+    return names + elul_names
 
 
 if __name__ == "__main__":
