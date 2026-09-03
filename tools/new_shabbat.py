@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "shabbat-planner.xlsx"
 OUTDIR = ROOT / "shabbatot"
 
-SETTINGS_INPUTS = ["B8", "B9", "B14", "B15", "B16", "B17", "B22", "B23", "B24", "B27", "B28", "B29"]
+SETTINGS_INPUTS = ["B8", "B9", "B14", "B15", "B16", "B17",
+                   "B22", "B23", "B24", "B27", "B28", "B29"]
 
 
 def clear(ws, row, col):
@@ -72,13 +73,17 @@ def main():
     if args.clear_groups:
         gr = wb["קבוצות"]
         for r in range(3, gr.max_row + 1):
-            for col in (1, 2, 3):
+            for col in (1, 2):            # עמודת החניכים מחושבת — לא נוגעים בה
                 clear(gr, r, col)
+        st = wb["חניכים"]
+        for r in range(3, st.max_row + 1):
+            clear(st, r, 2)
 
     if args.clear_assignments:
         asg = wb["שיבוץ"]
         for r in range(3, asg.max_row + 1):
-            clear(asg, r, 1)
+            for col in (1, 2, 3, 4, 6, 7):   # עמודת הקטגוריה מחושבת
+                clear(asg, r, col)
 
     wb.save(out)
     print("נוצר: {}  ({}, {})".format(
