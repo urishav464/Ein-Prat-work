@@ -29,13 +29,26 @@ def path_for(date):
     return DIR / "{}.csv".format(date.isoformat())
 
 
-def load(date):
-    """שמות הנוכחים לתאריך, או None אם אין רשימה."""
+def _rows(date):
     path = path_for(date)
     if not path.exists():
         return None
     with path.open(encoding="utf-8-sig", newline="") as fh:
-        return [r["שם"] for r in csv.DictReader(fh) if (r.get("שם") or "").strip()]
+        return [r for r in csv.DictReader(fh) if (r.get("שם") or "").strip()]
+
+
+def load(date):
+    """שמות הנוכחים לתאריך, או None אם אין רשימה."""
+    rows = _rows(date)
+    return None if rows is None else [r["שם"] for r in rows]
+
+
+def load_available(date):
+    """רק מי שזמין לתורנות (עמודת «זמין לתורנות» = כן, או ריקה)."""
+    rows = _rows(date)
+    if rows is None:
+        return None
+    return [r["שם"] for r in rows if (r.get("זמין לתורנות") or "כן").strip() != "לא"]
 
 
 def parse_names(text):

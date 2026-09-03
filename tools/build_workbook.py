@@ -30,7 +30,7 @@ SH_TASKS, SH_RECIPES, SH_ITEMS, SH_ZMAN = "מאגר משימות", "מתכוני
 SH_SHADOW = 'לו"ז צל'
 
 # --- גדלים ------------------------------------------------------------------
-MAX_GROUPS = 6            # קבוצות נתמכות (כרטיסייה לכל אחת)
+MAX_GROUPS = 12           # קבוצות נתמכות (כולל תת-קבוצות)
 CARD_TASK_ROWS = 18       # שורות משימה בכל כרטיסייה
 ASSIGN_ROWS = 150         # שורות בגיליון השיבוץ
 STUDENT_ROWS = 130        # שורות בגיליון החניכים (מקום לגידול)
@@ -556,23 +556,28 @@ def build_groups(wb):
     page(ws, landscape=True, tab=TAB_INPUT)
     widths(ws, {"A": 22, "B": 18, "C": 26, "D": 90, "E": 14, "F": 12})
     title_row(ws, 1, "קבוצות האחריות", span="A:F", size=18)
-    header_row(ws, 2, ["קבוצה", "מוביל/ה", "חבילת אחריות",
+    header_row(ws, 2, ["קבוצה", "מוביל/ה", "קבוצת אם",
                        "חניכים (מחושב מגיליון «חניכים»)", "ערכת צבע", "מס' חניכים"])
 
     student_last = 2 + STUDENT_ROWS
+    try:                                   # מבנה הקבוצות הקבוע, אם הוגדר
+        plan = read_csv("group_plan.csv")
+    except FileNotFoundError:
+        plan = []
     for i in range(MAX_GROUPS):
         r = 3 + i
-        name = "קבוצה {}".format(i + 1) if i < 4 else None
-        data_cell(ws, r, 1, name, bold=True)
-        data_cell(ws, r, 2, None)
-        data_cell(ws, r, 3, None, center=True)
+        row = plan[i] if i < len(plan) else {}
+        data_cell(ws, r, 1, row.get("קבוצה") or None, bold=True)
+        data_cell(ws, r, 2, row.get("מוביל/ה") or None)
+        data_cell(ws, r, 3, row.get("קבוצת אם") or None, center=True)
         members = data_cell(
             ws, r, 4,
             '=IF($A{r}="","",{s}${col}${last}&"")'.format(
                 r=r, s=q(SH_STUDENTS), col=chr(ord("F") + i), last=student_last),
             editable=False, wrap=True)
         members.fill = fill(CALC_BG)
-        data_cell(ws, r, 5, THEME_ORDER[i], center=True)
+        data_cell(ws, r, 5, row.get("ערכת צבע") or THEME_ORDER[i % len(THEME_ORDER)],
+                  center=True)
         count = data_cell(
             ws, r, 6,
             '=IF($A{r}="","",COUNTIF({s}$B$3:$B${last},$A{r}))'.format(
@@ -584,8 +589,9 @@ def build_groups(wb):
     dv_list(ws, '"{}"'.format(",".join(THEME_ORDER)), "E3:E{}".format(2 + MAX_GROUPS))
     ws.freeze_panes = "A3"
     note_row(ws, 4 + MAX_GROUPS,
-             "שמות הקבוצות והמובילים נקבעים כאן. «חבילת אחריות» היא תחום האחריות של "
-             "הקבוצה בשבת הזו. רשימת החניכים מחושבת מגיליון «חניכים» — אין מה להקליד בה. "
+             "שמות הקבוצות והמובילים נקבעים כאן. «קבוצת אם» מאגדת תת-קבוצות תחת קבוצה "
+             "אחת (למשל ארבע תת-הקבוצות של בית המדרש). רשימת החניכים מחושבת מגיליון "
+             "«חניכים» — אין מה להקליד בה. "
              "ערכת הצבע קובעת את צבע הכרטיסייה.", last_col=6)
     return ws
 
@@ -731,7 +737,7 @@ def build_cards(wb):
         grow = 3 + idx
         gref = "{g}$A${r}".format(g=G, r=grow)
         theme_cell = "{g}$E${r}".format(g=G, r=grow)
-        strong, light = THEMES[THEME_ORDER[idx]]
+        strong, light = THEMES[THEME_ORDER[idx % len(THEME_ORDER)]]
 
         ws.merge_cells(start_row=top, start_column=1, end_row=top, end_column=6)
         c = ws.cell(row=top, column=1, value='=IF({r}="","",{r})'.format(r=gref))

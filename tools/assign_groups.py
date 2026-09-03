@@ -1,23 +1,21 @@
 # -*- coding: utf-8 -*-
-"""הצעת חלוקה ל-4 קבוצות ושיבוץ תחומי אחריות מתחלפים.
+"""שיבוץ החניכים לקבוצות לפי מבנה הקבוצות הקבוע.
 
     python3 tools/assign_groups.py 2026-09-04
-    python3 tools/assign_groups.py 2026-09-04 --groups 4 --clean שישי=בית מיכאל \\
-            --clean "מוצאי שבת=חדר אוכל,שירותי חדר אוכל,מטבח,חדר מקררים"
+    python3 tools/assign_groups.py 2026-09-04 --dry-run
 
-מה הסקריפט עושה:
-  1. מחלק את החניכים מ-data/students.csv לקבוצות שוות בגודלן. חניך עם ערך בעמודת
-     «קבוצה קבועה» נשאר תמיד בקבוצה שלו; השאר מתחלקים סביבו.
-  2. מסובב את חבילות האחריות בין הקבוצות לפי data/rotation_history.csv — מי שקיבל
-     חבילה מסוימת בשבת האחרונה לא יקבל אותה שוב עכשיו.
-  3. כותב את ההצעה לגיליונות «חניכים», «קבוצות» ו«שיבוץ» של קובץ השבת.
+המבנה מוגדר ב-data/group_plan.csv (קבוצה, קבוצת אם, גודל, מוביל/ה, חברים קבועים,
+ערכת צבע, תחומי אחריות) — לשנות מבנה בשבוע הבא זו עריכת שורה שם, בלי נגיעה בקוד.
 
-הכל הצעה בלבד — אפשר לערוך הכל ידנית באקסל אחר כך.
+מי זמין לתורנות נקבע ב-data/attendance/<תאריך>.csv. כשיש יותר זמינים ממקומות,
+הסקריפט מעדיף את מי שהיה תורן הכי מעט לאחרונה (data/duty_history.csv), וחניכי
+תוכנית אלול מתפזרים יחסית בין הקבוצות ולא מצטברים באחת.
 """
 import argparse
 import csv
 import random
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -26,38 +24,36 @@ from openpyxl.cell.cell import MergedCell
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import attendance as attendance_mod
+import roster
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-HISTORY = DATA / "rotation_history.csv"
+PLAN = DATA / "group_plan.csv"
+DUTY = DATA / "duty_history.csv"
 
 SH_STUDENTS, SH_GROUPS, SH_ASSIGN, SH_TASKS = "חניכים", "קבוצות", "שיבוץ", "מאגר משימות"
-
-# חבילות האחריות — כל קבוצה מקבלת חבילה אחת, והן מתחלפות משבת לשבת.
-# כל חבילה היא רשימת (חלון זמן, תחום אחריות) מתוך «מאגר משימות».
-BUNDLES = [
-    ("קידוש ומאפים", [("שישי", "מאפים"), ("שבת", "קידוש")]),
-    ("ארוחות שבת", [("שישי", "בישול"), ("שישי", "ארוחת ערב שבת"),
-                    ("שבת", "ארוחת צהריים שבת")]),
-    ("ארוחות שישי וסעודה שלישית", [("שישי", "ארוחת בוקר שישי"),
-                                   ("שישי", "ארוחת צהריים שישי"),
-                                   ("שבת", "סעודה שלישית")]),
-    ("טיש ואחריות טכנית", [("שישי", "טיש"), ("שישי", "חימום"), ("שישי", "הבדלה"),
-                           ("שישי", "חשמל"), ("שישי", "עיתון"), ("שישי", "מרחבים"),
-                           ("שבת", "חימום"), ("מוצאי שבת", "חשמל")]),
-]
-
 WINDOW_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
 WINDOW_ANCHOR = {"חמישי": "חמישי — הכנות", "שישי": "שישי — הכנות ועבודה",
                  "שבת": "קידוש", "מוצאי שבת": "ניקיונות וארגון הקמפוס"}
 
 
-def read_students():
-    path = DATA / "students.csv"
-    if not path.exists():
-        raise SystemExit("חסר data/students.csv — הריצו קודם: python3 tools/roster.py")
-    with path.open(encoding="utf-8-sig", newline="") as fh:
-        return [r for r in csv.DictReader(fh) if (r.get("שם") or "").strip()]
+# ---------------------------------------------------------------------------
+def read_plan():
+    with PLAN.open(encoding="utf-8-sig", newline="") as fh:
+        plan = []
+        for row in csv.DictReader(fh):
+            if not (row.get("קבוצה") or "").strip():
+                continue
+            plan.append({
+                "name": row["קבוצה"].strip(),
+                "parent": (row.get("קבוצת אם") or "").strip(),
+                "size": int(row["גודל"]),
+                "leader": (row.get("מוביל/ה") or "").strip(),
+                "fixed": [x.strip() for x in (row.get("חברים קבועים") or "").split(";") if x.strip()],
+                "theme": (row.get("ערכת צבע") or "ים").strip(),
+                "areas": [x.strip() for x in (row.get("תחומי אחריות") or "").split(";") if x.strip()],
+            })
+    return plan
 
 
 def read_tasks():
@@ -65,119 +61,125 @@ def read_tasks():
         return list(csv.DictReader(fh))
 
 
-def history():
-    if not HISTORY.exists():
-        return []
-    with HISTORY.open(encoding="utf-8-sig", newline="") as fh:
-        return list(csv.DictReader(fh))
+def duty_counts():
+    if not DUTY.exists():
+        return Counter()
+    with DUTY.open(encoding="utf-8-sig", newline="") as fh:
+        return Counter(r["שם"] for r in csv.DictReader(fh))
 
 
-def record(date, mapping):
-    rows = [r for r in history() if r["תאריך"] != date]
-    for group, bundle in mapping.items():
-        rows.append({"תאריך": date, "קבוצה": group, "חבילת אחריות": bundle})
-    rows.sort(key=lambda r: (r["תאריך"], r["קבוצה"]))
-    with HISTORY.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["תאריך", "קבוצה", "חבילת אחריות"])
+def record_duty(date, assignment):
+    rows = []
+    if DUTY.exists():
+        with DUTY.open(encoding="utf-8-sig", newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if r["תאריך"] != date]
+    for group, members in assignment.items():
+        rows += [{"תאריך": date, "שם": name, "קבוצה": group} for name in members]
+    rows.sort(key=lambda r: (r["תאריך"], r["קבוצה"], r["שם"]))
+    with DUTY.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["תאריך", "שם", "קבוצה"])
         writer.writeheader()
         writer.writerows(rows)
 
 
-def split_groups(students, names, seed):
-    """חלוקה שוות-גודל, מרובדת לפי תוכנית ומכבדת נעילות.
+# ---------------------------------------------------------------------------
+def assign(plan, available, programs, past, seed):
+    """משבץ חניכים לקבוצות העלה לפי התוכנית.
 
-    כל תוכנית (מדרשה / אלול) מתחלקת בנפרד בין הקבוצות, כך שבכל קבוצה יש ייצוג
-    מאוזן של שתיהן ולא קבוצה שכולה חניכי אלול.
+    סדר הקדימויות: מובילים וחברים קבועים ← חניכי אלול (מפוזרים יחסית) ←
+    השאר, כשמי שהיה תורן פחות פעמים נבחר קודם.
     """
-    groups = {name: [] for name in names}
-    by_program = {}
-    for s in students:
-        locked = (s.get("קבוצה קבועה") or "").strip()
-        if locked in groups:
-            groups[locked].append(s["שם"])
-        else:
-            by_program.setdefault(s.get("תוכנית") or "", []).append(s["שם"])
-
     rng = random.Random(seed)
-    counts = {name: len(groups[name]) for name in names}
-    for program in sorted(by_program):
-        free = by_program[program]
-        rng.shuffle(free)
-        per_program = {name: 0 for name in names}
-        for student in free:
-            target = min(names, key=lambda n: (per_program[n], counts[n], names.index(n)))
-            groups[target].append(student)
-            per_program[target] += 1
-            counts[target] += 1
+    groups = {g["name"]: [] for g in plan}
+    taken = set()
+
+    for g in plan:
+        for name in ([g["leader"]] if g["leader"] else []) + g["fixed"]:
+            match, _ = roster.match_name(name, available)
+            if match and match not in taken:
+                groups[g["name"]].append(match)
+                taken.add(match)
+
+    def pool(program):
+        people = [n for n in available if n not in taken and programs.get(n) == program]
+        rng.shuffle(people)
+        return sorted(people, key=lambda n: past.get(n, 0))
+
+    open_slots = lambda g: g["size"] - len(groups[g["name"]])
+
+    # אלול: כל חניך נכנס לקבוצה עם היחס הנמוך ביותר של אלול-לגודל, כך שהם
+    # מתפזרים על פני כל הקבוצות ולא מצטברים בגדולות (חלוקה יחסית פר-חניך).
+    elul = pool("אלול")
+    placed = {g["name"]: 0 for g in plan}
+    while elul:
+        candidates = [g for g in plan if open_slots(g) > 0]
+        if not candidates:
+            break
+        target = min(candidates,
+                     key=lambda g: ((placed[g["name"]] + 1) / g["size"], -g["size"]))
+        name = elul.pop(0)
+        groups[target["name"]].append(name)
+        placed[target["name"]] += 1
+        taken.add(name)
+
+    rest = pool("מדרשה") + elul
+    rest.sort(key=lambda n: past.get(n, 0))
+    for g in plan:
+        while open_slots(g) > 0 and rest:
+            name = rest.pop(0)
+            groups[g["name"]].append(name)
+            taken.add(name)
     return groups
 
 
-def rotate_bundles(names, past):
-    """כל קבוצה מקבלת חבילה שלא קיבלה בשבת האחרונה, בסבב קבוע."""
-    offset = len({r["תאריך"] for r in past})
-    return {name: BUNDLES[(i + offset) % len(BUNDLES)][0] for i, name in enumerate(names)}
-
-
-def anchor_for(task, window):
-    return (task.get("עוגן") or "").strip() or WINDOW_ANCHOR.get(window, "")
-
-
-def build_assignments(mapping, tasks, cleaning, skip_categories=()):
-    """שורות לגיליון «שיבוץ»: (קבוצה, חלון, שעה, משימה, פרטים, עוגן)."""
-    by_bundle = {title: areas for title, areas in BUNDLES}
+def build_assignments(plan, tasks):
+    """שורות לגיליון «שיבוץ» לפי תחומי האחריות של כל קבוצת עלה."""
     rows = []
-    for group, bundle in mapping.items():
-        for window, area in by_bundle[bundle]:
+    for g in plan:
+        for spec in g["areas"]:
+            window, _, area = spec.partition(":")
+            window, area = window.strip(), area.strip()
             for task in tasks:
-                if task["קטגוריה"] in skip_categories:
+                if task["תחום אחריות"] != area:
                     continue
-                if task["תחום אחריות"] == area and task["חלון זמן"] in (window, "משתנה"):
-                    rows.append((group, window, "", task["משימה"], "",
-                                 anchor_for(task, window)))
-
-    names = list(mapping)
-    for i, (window, space) in enumerate(cleaning):
-        group = names[i % len(names)]
-        for task in tasks:
-            if task["תחום אחריות"] == space and task["קטגוריה"] == "ניקיון וסידור":
-                rows.append((group, window, "", task["משימה"], "",
-                             anchor_for(task, window)))
-                break
-        else:
-            rows.append((group, window, "", "ניקיון וסידור {}".format(space), "",
-                         WINDOW_ANCHOR.get(window, "")))
-
-    order = {name: i for i, name in enumerate(mapping)}
-    rows.sort(key=lambda row: (order[row[0]], WINDOW_ORDER.get(row[1], 9)))
+                if task["חלון זמן"] not in (window, "משתנה"):
+                    continue
+                anchor = (task.get("עוגן") or "").strip() or WINDOW_ANCHOR.get(window, "")
+                rows.append((g["name"], window, "", task["משימה"], "", anchor))
+    order = {g["name"]: i for i, g in enumerate(plan)}
+    rows.sort(key=lambda r: (order[r[0]], WINDOW_ORDER.get(r[1], 9)))
     return rows
 
 
+# ---------------------------------------------------------------------------
 def set_cell(ws, row, col, value):
-    """כתיבה לתא, בדילוג על תאים ממוזגים (שורות ההערה בתחתית הגיליונות)."""
     cell = ws.cell(row=row, column=col)
     if not isinstance(cell, MergedCell):
         cell.value = value
 
 
-def write_workbook(path, groups, mapping, rows):
+def write_workbook(path, plan, groups, rows):
     wb = load_workbook(path)
     ws_students, ws_groups, ws_assign = wb[SH_STUDENTS], wb[SH_GROUPS], wb[SH_ASSIGN]
 
-    lookup = {}
-    for group, members in groups.items():
-        for name in members:
-            lookup[name] = group
+    lookup = {name: group for group, members in groups.items() for name in members}
     for r in range(3, ws_students.max_row + 1):
         name = ws_students.cell(row=r, column=1).value
         if name:
             set_cell(ws_students, r, 2, lookup.get(name))
 
-    for i, (group, bundle) in enumerate(mapping.items()):
-        set_cell(ws_groups, 3 + i, 1, group)
-        set_cell(ws_groups, 3 + i, 3, bundle)
+    for i, g in enumerate(plan):
+        r = 3 + i
+        set_cell(ws_groups, r, 1, g["name"])
+        set_cell(ws_groups, r, 2, g["leader"] or None)
+        set_cell(ws_groups, r, 3, g["parent"] or None)
+        set_cell(ws_groups, r, 5, g["theme"])
+    for r in range(3 + len(plan), ws_groups.max_row + 1):
+        for col in (1, 2, 3, 5):
+            set_cell(ws_groups, r, col, None)
 
     for r in range(3, ws_assign.max_row + 1):
-        for col in (1, 2, 3, 4, 6, 7, 9):
+        for col in (1, 2, 3, 4, 6, 7):
             set_cell(ws_assign, r, col, None)
     for i, (group, window, hour, task, detail, anchor) in enumerate(rows):
         r = 3 + i
@@ -195,71 +197,53 @@ def write_workbook(path, groups, mapping, rows):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="הצעת חלוקה לקבוצות ושיבוץ אחריות")
+    ap = argparse.ArgumentParser(description="שיבוץ לקבוצות לפי המבנה הקבוע")
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-04")
-    ap.add_argument("--groups", type=int, default=4, help="מספר הקבוצות (ברירת מחדל 4)")
-    ap.add_argument("--names", help="שמות הקבוצות מופרדים בפסיק")
-    ap.add_argument("--clean", action="append", default=[],
-                    help='מרחבי ניקיון: "מוצאי שבת=חדר אוכל,מטבח" — ניתן לחזור על הדגל')
-    ap.add_argument("--skip-category", action="append", default=[],
-                    help='קטגוריה שלא תשובץ אוטומטית, למשל "אפייה ובישול"')
     ap.add_argument("--seed", type=int, help="זרע אקראיות (לשחזור אותה חלוקה)")
-    ap.add_argument("--file", help="נתיב קובץ השבת (ברירת מחדל shabbatot/<תאריך>.xlsx)")
-    ap.add_argument("--dry-run", action="store_true", help="הדפסה בלבד, בלי לכתוב לקובץ")
+    ap.add_argument("--file", help="נתיב קובץ השבת")
+    ap.add_argument("--dry-run", action="store_true", help="הדפסה בלבד")
     args = ap.parse_args()
 
     date = datetime.strptime(args.date, "%Y-%m-%d").date()
     path = Path(args.file) if args.file else ROOT / "shabbatot" / "{}.xlsx".format(date.isoformat())
     if not args.dry_run and not path.exists():
-        raise SystemExit("לא נמצא {} — הריצו קודם: python3 tools/new_shabbat.py {}".format(
-            path, args.date))
+        raise SystemExit("לא נמצא {} — הריצו קודם tools/new_shabbat.py".format(path))
 
-    names = ([n.strip() for n in args.names.split(",")] if args.names
-             else ["קבוצה {}".format(i + 1) for i in range(args.groups)])
-
-    cleaning = []
-    for spec in args.clean:
-        window, _, spaces = spec.partition("=")
-        for space in spaces.split(","):
-            if space.strip():
-                cleaning.append((window.strip(), space.strip()))
-
-    students = read_students()
-    present = attendance_mod.load(date)
-    if present is None:
-        print("אין רשימת נוכחות ל-{} — משבץ את כל החניכים.".format(args.date))
-    else:
-        by_name = {s["שם"]: s for s in students}
-        students = [by_name[n] for n in present if n in by_name]
-
-    past = history()
-    groups = split_groups(students, names, args.seed if args.seed is not None else date.toordinal())
-    mapping = rotate_bundles(names, past)
-    rows = build_assignments(mapping, read_tasks(), cleaning, set(args.skip_category))
-
+    students = roster.read_students()
     programs = {s["שם"]: s.get("תוכנית", "") for s in students}
-    print("שבת {} · {} נוכחים · {} קבוצות".format(
-        date.strftime("%d/%m/%Y"), len(students), len(names)))
-    if args.skip_category:
-        print("לא שובצו אוטומטית: {}".format(", ".join(args.skip_category)))
-    for name in names:
-        counts = {}
-        for member in groups[name]:
-            counts[programs.get(member, "")] = counts.get(programs.get(member, ""), 0) + 1
-        breakdown = ", ".join("{} {}".format(v, k) for k, v in sorted(counts.items()))
-        print("\n  {} — {} ({} חניכים: {})".format(
-            name, mapping[name], len(groups[name]), breakdown))
-        print("    " + ", ".join(groups[name]))
-        for row in rows:
-            if row[0] == name:
-                print("      · [{}] {}".format(row[1], row[3]))
+    available = attendance_mod.load_available(date)
+    if available is None:
+        raise SystemExit("אין רשימת נוכחות ל-{} — הריצו קודם tools/attendance.py".format(args.date))
+
+    plan = read_plan()
+    groups = assign(plan, available, programs, duty_counts(),
+                    args.seed if args.seed is not None else date.toordinal())
+    rows = build_assignments(plan, read_tasks())
+
+    placed = sum(len(v) for v in groups.values())
+    print("שבת {} · {} זמינים · {} תורנים · {} קבוצות".format(
+        date.strftime("%d/%m/%Y"), len(available), placed, len(plan)))
+
+    parents = {}
+    for g in plan:
+        parents.setdefault(g["parent"] or g["name"], []).append(g)
+    for parent, leaves in parents.items():
+        total = sum(len(groups[g["name"]]) for g in leaves)
+        elul = sum(1 for g in leaves for n in groups[g["name"]] if programs.get(n) == "אלול")
+        print("\n■ {} ({} חניכים, מהם {} אלול)".format(parent, total, elul))
+        for g in leaves:
+            label = g["name"].split(" · ")[-1] if " · " in g["name"] else g["name"]
+            print("   {} ({}): {}".format(label, len(groups[g["name"]]),
+                                          ", ".join(groups[g["name"]])))
+
+    idle = [n for n in available if n not in {m for v in groups.values() for m in v}]
+    print("\nלא תורנים השבת ({}): {}".format(len(idle), ", ".join(idle)))
 
     if args.dry_run:
         print("\n(dry-run — לא נכתב דבר)")
         return
-
-    write_workbook(path, groups, mapping, rows)
-    record(date.isoformat(), mapping)
+    write_workbook(path, plan, groups, rows)
+    record_duty(date.isoformat(), groups)
     print("\nנכתב אל {}".format(path))
 
 

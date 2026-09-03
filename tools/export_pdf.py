@@ -33,6 +33,7 @@ CHROME_CANDIDATES = [
 ]
 
 WINDOW_ORDER = ["חמישי", "שישי", "שבת", "מוצאי שבת"]
+SPLIT_THRESHOLD = 0.75   # מתחת לזה — מפצלים את הפלייר לתת-קבוצות
 
 # ערכות צבע — תואמות ל-THEMES שבחוברת, עם גוון כהה לכותרות
 THEMES = {
@@ -97,11 +98,11 @@ def read_workbook(path):
 
     groups = []
     gr = wb["קבוצות"]
-    for r in range(3, 3 + 6):
+    for r in range(3, gr.max_row + 1):
         name = cell(gr, r, 1)
         if name:
             groups.append({"name": name, "leader": cell(gr, r, 2),
-                           "bundle": cell(gr, r, 3), "theme": cell(gr, r, 5) or "ים",
+                           "parent": cell(gr, r, 3), "theme": cell(gr, r, 5) or "ים",
                            "members": []})
 
     students = wb["חניכים"]
@@ -132,6 +133,9 @@ def read_workbook(path):
             "task": task, "details": cell(asg, r, 6), "anchor": cell(asg, r, 7),
             "category": categories.get(task, ""),
         })
+
+    for g in groups:
+        g["label"] = g["name"].split(" · ")[-1] if " · " in g["name"] else g["name"]
 
     return {"date": shabbat_date, "parasha": parasha, "candle": candle,
             "havdalah": havdalah, "places": places, "staff": staff,
@@ -236,6 +240,13 @@ h1{font-size:33pt;font-weight:700;color:var(--ink);line-height:1.05}
          padding:4mm 6mm;text-align:center;font-size:11.5pt;line-height:1.75;font-weight:500}
 .members b{display:block;font-size:9.5pt;letter-spacing:.06em;color:var(--ink);opacity:.65;
            margin-bottom:1.5mm;font-family:'Rubik',sans-serif}
+.team{margin:0 0 4mm;border:1.5px solid var(--mid);border-radius:4mm;overflow:hidden}
+.team > h3{background:var(--mid);color:var(--ink);font-size:12.5pt;padding:1.6mm 5mm;
+           display:flex;justify-content:space-between;align-items:baseline}
+.team > h3 span{font-size:9.5pt;font-weight:400;opacity:.8;font-family:'Heebo',sans-serif}
+.team .who{padding:2.2mm 5mm;font-size:10.5pt;font-weight:500;background:var(--soft);
+           line-height:1.6}
+.team .jobs{padding:1.5mm 3mm 2.5mm}
 .strip{margin:4mm 0 0;display:flex;justify-content:space-between;gap:1.5mm;
        border-top:1.5px dashed var(--mid);border-bottom:1.5px dashed var(--mid);padding:2.5mm 0}
 .strip div{text-align:center;flex:1}
@@ -291,11 +302,8 @@ def strip_items(events):
     return [(labels[n], hhmm(by_name[n]["hour"])) for n in keep if n in by_name]
 
 
-def flyer_html(group, data, events, fit=1.0, measure=False):
-    theme = THEMES.get(group["theme"], DEFAULT_THEME)
-    rows = [a for a in data["assignments"] if a["group"] == group["name"]]
-
-    days = []
+def task_rows_html(rows):
+    out = []
     for window in WINDOW_ORDER:
         items = [a for a in rows if a["window"] == window]
         if not items:
@@ -311,19 +319,46 @@ def flyer_html(group, data, events, fit=1.0, measure=False):
                     details='<div class="d">{}</div>'.format(esc(item["details"]))
                             if item["details"] else "",
                     tag=esc(item["category"] or "")))
-        days.append('<section class="day"><h2>{}</h2>{}</section>'.format(
+        out.append('<section class="day"><h2>{}</h2>{}</section>'.format(
             esc(window), "".join(tasks)))
+    return "".join(out)
 
-    if not days:
-        days = ['<div class="empty">אין עדיין משימות משובצות לקבוצה הזו</div>']
 
+def flyer_html(bundle, data, events):
+    """פלייר לקבוצת אם אחת, עם מקטע לכל תת-קבוצה."""
+    theme = THEMES.get(bundle["theme"], DEFAULT_THEME)
+    single = len(bundle["teams"]) == 1
     strip = "".join('<div><span>{}</span><strong>{}</strong></div>'.format(esc(l), esc(t))
                     for l, t in strip_items(events))
-    chips = []
-    if group["bundle"]:
-        chips.append('<div class="chip">{}</div>'.format(esc(group["bundle"])))
-    chips.append('<div class="chip ghost">מוביל/ה: {}</div>'.format(
-        esc(group["leader"]) if group["leader"] else "______"))
+
+    if single:
+        team = bundle["teams"][0]
+        body = ('<div class="members"><b>חניכי הקבוצה · {n}</b>{who}</div>'
+                '<div class="strip">{strip}</div><main>{days}</main>').format(
+            n=len(team["members"]), who=esc(", ".join(team["members"])) or "—",
+            strip=strip, days=task_rows_html(team["tasks"]) or
+                  '<div class="empty">אין עדיין משימות משובצות</div>')
+    else:
+        sections = []
+        for team in bundle["teams"]:
+            jobs = task_rows_html(team["tasks"])
+            sections.append(
+                '<div class="team"><h3>{label}{leader}</h3>'
+                '<div class="who">{who}</div>{jobs}</div>'.format(
+                    label=esc(team["label"]),
+                    leader='<span>מוביל/ה: {}</span>'.format(esc(team["leader"]))
+                           if team["leader"] else "",
+                    who=esc(", ".join(team["members"])) or "—",
+                    jobs='<div class="jobs">{}</div>'.format(jobs) if jobs else ""))
+        body = '<div class="strip">{}</div><main>{}</main>'.format(strip, "".join(sections))
+
+    total = sum(len(t["members"]) for t in bundle["teams"])
+    chips = ['<div class="chip">{} חניכים</div>'.format(total)]
+    if single and bundle["teams"][0]["leader"]:
+        chips.append('<div class="chip ghost">מוביל/ה: {}</div>'.format(
+            esc(bundle["teams"][0]["leader"])))
+    elif not single:
+        chips.append('<div class="chip ghost">{} תת-קבוצות</div>'.format(len(bundle["teams"])))
 
     when = "שבת {}".format(hebrew_date_range(data["date"])) if data["date"] else "שבת"
     if data["parasha"]:
@@ -337,21 +372,32 @@ body{{background:linear-gradient(180deg,{soft} 0%,#fff 42%)}}</style></head><bod
 <div class="inner">
 <header><h1>{title}</h1><div class="when">{when}</div>
 <div class="meta">{chips}</div></header>
-<div class="members"><b>חניכי הקבוצה · {count}</b>{members}</div>
-<div class="strip">{strip}</div>
-<main>{days}</main>
+{body}
 <footer>מדרשת עין פרת · הכנת שבת</footer>
 </div>
 </div>{fit}</body></html>""".format(
         fonts=font_face_css(), base=BASE_CSS, flyer=FLYER_CSS,
-        fit=MEASURE_SCRIPT if measure else '',
-        fitv=fit,
+        fit=MEASURE_SCRIPT if bundle.get("measure") else "", fitv=bundle.get("fit", 1.0),
         strong=theme["strong"], mid=theme["mid"], soft=theme["soft"], ink=theme["ink"],
         d1=deco_svg(theme["deco"], "d1"), d2=deco_svg(theme["deco"], "d2"),
         d3=deco_svg(theme["deco"], "d3"),
-        title=esc(group["name"]), when=esc(when), chips="".join(chips),
-        count=len(group["members"]), members=esc(", ".join(group["members"])) or "—",
-        strip=strip, days="".join(days))
+        title=esc(bundle["title"]), when=esc(when), chips="".join(chips), body=body)
+
+
+def bundles_from(data):
+    """מקבץ את קבוצות העלה לפי קבוצת אם — פלייר אחד לכל אם."""
+    order, bundles = [], {}
+    for group in data["groups"]:
+        parent = group.get("parent") or group["name"]
+        if parent not in bundles:
+            order.append(parent)
+            bundles[parent] = {"title": parent, "theme": group["theme"], "teams": []}
+        bundles[parent]["teams"].append({
+            "label": group["label"], "leader": group["leader"],
+            "members": group["members"],
+            "tasks": [a for a in data["assignments"] if a["group"] == group["name"]],
+        })
+    return [bundles[name] for name in order]
 
 
 SHADOW_CSS = """
@@ -508,14 +554,22 @@ def main():
 
     made = []
     if args.only != "shadow":
-        for group in data["groups"]:
-            pdf = out_dir / "{}.pdf".format(group["name"])
-            png = None if args.no_png else out_dir / "{}.png".format(group["name"])
-            fit = measure_fit(flyer_html(group, data, events, measure=True))
-            render(flyer_html(group, data, events, fit=fit), pdf, png)
-            if fit < 1:
-                print("  ({} הותאם ל-{:.0%} כדי להיכנס לעמוד אחד)".format(group["name"], fit))
-            made += [p for p in (pdf, png) if p]
+        for bundle in bundles_from(data):
+            fit = measure_fit(flyer_html(dict(bundle, measure=True), data, events))
+            # קבוצה עמוסה מדי לעמוד אחד — פלייר נפרד לכל תת-קבוצה, כדי שיישאר קריא
+            targets = ([bundle] if fit >= SPLIT_THRESHOLD or len(bundle["teams"]) == 1
+                       else [dict(bundle, title="{} · {}".format(bundle["title"], t["label"]),
+                                  teams=[t]) for t in bundle["teams"]])
+            if len(targets) > 1:
+                print("  ({} פוצל ל-{} פליירים — צפוף מדי לעמוד אחד)".format(
+                    bundle["title"], len(targets)))
+            for target in targets:
+                pdf = out_dir / "{}.pdf".format(target["title"])
+                png = None if args.no_png else out_dir / "{}.png".format(target["title"])
+                target_fit = (fit if len(targets) == 1
+                              else measure_fit(flyer_html(dict(target, measure=True), data, events)))
+                render(flyer_html(dict(target, fit=target_fit), data, events), pdf, png)
+                made += [x for x in (pdf, png) if x]
     if args.only != "flyers":
         pdf = out_dir / "לוז צל.pdf"
         render(shadow_html(data, events), pdf)
