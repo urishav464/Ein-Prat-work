@@ -174,7 +174,7 @@ def write_workbook(path, groups, mapping, rows):
 
     for i, (group, bundle) in enumerate(mapping.items()):
         set_cell(ws_groups, 3 + i, 1, group)
-        set_cell(ws_groups, 3 + i, 2, bundle)
+        set_cell(ws_groups, 3 + i, 3, bundle)
 
     for r in range(3, ws_assign.max_row + 1):
         for col in (1, 2, 3, 4, 6, 7, 9):

@@ -554,10 +554,10 @@ def build_students(wb):
 def build_groups(wb):
     ws = wb.create_sheet(SH_GROUPS)
     page(ws, landscape=True, tab=TAB_INPUT)
-    widths(ws, {"A": 24, "B": 20, "C": 96, "D": 14, "E": 12})
-    title_row(ws, 1, "קבוצות האחריות", span="A:E", size=18)
-    header_row(ws, 2, ["קבוצה", "מוביל/ה", "חניכים (מחושב מגיליון «חניכים»)",
-                       "ערכת צבע", "מס' חניכים"])
+    widths(ws, {"A": 22, "B": 18, "C": 26, "D": 90, "E": 14, "F": 12})
+    title_row(ws, 1, "קבוצות האחריות", span="A:F", size=18)
+    header_row(ws, 2, ["קבוצה", "מוביל/ה", "חבילת אחריות",
+                       "חניכים (מחושב מגיליון «חניכים»)", "ערכת צבע", "מס' חניכים"])
 
     student_last = 2 + STUDENT_ROWS
     for i in range(MAX_GROUPS):
@@ -565,26 +565,28 @@ def build_groups(wb):
         name = "קבוצה {}".format(i + 1) if i < 4 else None
         data_cell(ws, r, 1, name, bold=True)
         data_cell(ws, r, 2, None)
+        data_cell(ws, r, 3, None, center=True)
         members = data_cell(
-            ws, r, 3,
+            ws, r, 4,
             '=IF($A{r}="","",{s}${col}${last}&"")'.format(
                 r=r, s=q(SH_STUDENTS), col=chr(ord("F") + i), last=student_last),
             editable=False, wrap=True)
         members.fill = fill(CALC_BG)
-        data_cell(ws, r, 4, THEME_ORDER[i], center=True)
+        data_cell(ws, r, 5, THEME_ORDER[i], center=True)
         count = data_cell(
-            ws, r, 5,
+            ws, r, 6,
             '=IF($A{r}="","",COUNTIF({s}$B$3:$B${last},$A{r}))'.format(
                 r=r, s=q(SH_STUDENTS), last=student_last),
             editable=False, center=True, bold=True)
         count.fill = fill(CALC_BG)
         ws.row_dimensions[r].height = 46
 
-    dv_list(ws, '"{}"'.format(",".join(THEME_ORDER)), "D3:D{}".format(2 + MAX_GROUPS))
+    dv_list(ws, '"{}"'.format(",".join(THEME_ORDER)), "E3:E{}".format(2 + MAX_GROUPS))
     ws.freeze_panes = "A3"
     note_row(ws, 4 + MAX_GROUPS,
-             "שמות הקבוצות והמובילים נקבעים כאן. רשימת החניכים מחושבת מגיליון «חניכים» — "
-             "אין מה להקליד בה. ערכת הצבע קובעת את צבע הכרטיסייה.", last_col=5)
+             "שמות הקבוצות והמובילים נקבעים כאן. «חבילת אחריות» היא תחום האחריות של "
+             "הקבוצה בשבת הזו. רשימת החניכים מחושבת מגיליון «חניכים» — אין מה להקליד בה. "
+             "ערכת הצבע קובעת את צבע הכרטיסייה.", last_col=6)
     return ws
 
 
@@ -728,7 +730,7 @@ def build_cards(wb):
         top = 1 + idx * block_height
         grow = 3 + idx
         gref = "{g}$A${r}".format(g=G, r=grow)
-        theme_cell = "{g}$D${r}".format(g=G, r=grow)
+        theme_cell = "{g}$E${r}".format(g=G, r=grow)
         strong, light = THEMES[THEME_ORDER[idx]]
 
         ws.merge_cells(start_row=top, start_column=1, end_row=top, end_column=6)
@@ -740,7 +742,7 @@ def build_cards(wb):
 
         ws.merge_cells(start_row=top + 1, start_column=1, end_row=top + 1, end_column=6)
         c = ws.cell(row=top + 1, column=1,
-                    value='=IF({g}$C${r}="","",{g}$C${r})'.format(g=G, r=grow))
+                    value='=IF({g}$D${r}="","",{g}$D${r})'.format(g=G, r=grow))
         c.font = f(11, bold=True)
         c.alignment = align(h="center", wrap=True)
         c.fill = fill(light)
