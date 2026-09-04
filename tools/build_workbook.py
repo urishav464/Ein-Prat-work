@@ -610,32 +610,36 @@ CATEGORY_COLORS = {
 def build_tasks(wb):
     ws = wb.create_sheet(SH_TASKS)
     page(ws, tab=TAB_REF)
-    widths(ws, {"A": 20, "B": 22, "C": 14, "D": 70, "E": 26})
-    title_row(ws, 1, "מאגר משימות קבוע", span="A:E", size=18)
-    header_row(ws, 2, ["קטגוריה", "תחום אחריות", "חלון זמן", "משימה", "עוגן בלו\"ז"])
+    widths(ws, {"A": 20, "B": 22, "C": 13, "D": 66, "E": 9, "F": 26})
+    title_row(ws, 1, "מאגר משימות קבוע", span="A:F", size=18)
+    header_row(ws, 2, ["קטגוריה", "תחום אחריות", "חלון זמן", "משימה", "שעה", "עוגן בלו\"ז"])
 
     rows = read_csv("task_library.csv")
     for i in range(TASK_ROWS):
         r = 3 + i
         row = rows[i] if i < len(rows) else {}
         cat = row.get("קטגוריה", "")
-        for col, key in enumerate(["קטגוריה", "תחום אחריות", "חלון זמן", "משימה", "עוגן"],
-                                  start=1):
-            c = data_cell(ws, r, col, row.get(key) or None, editable=False,
-                          wrap=(col == 4), center=(col in (3, 5)), bold=(col == 1))
+        for col, key in enumerate(["קטגוריה", "תחום אחריות", "חלון זמן", "משימה",
+                                   "שעה", "עוגן"], start=1):
+            value = row.get(key) or None
+            if col == 5 and value:
+                value = as_time(value)
+            c = data_cell(ws, r, col, value, editable=False, wrap=(col == 4),
+                          center=(col in (3, 5, 6)), bold=(col == 1),
+                          fmt="hh:mm" if col == 5 else None)
             if col == 1 and cat:
                 c.fill = fill(CATEGORY_COLORS.get(cat, BAND))
         ws.row_dimensions[r].height = 20
 
     dv_list(ws, '"{}"'.format(",".join(CATEGORY_COLORS)), "A3:A{}".format(2 + TASK_ROWS))
     dv_list(ws, '"{}"'.format(WINDOWS + ",משתנה"), "C3:C{}".format(2 + TASK_ROWS))
-    dv_list(ws, '"{}"'.format(",".join(a for a, _ in ANCHORS)), "E3:E{}".format(2 + TASK_ROWS))
+    dv_list(ws, '"{}"'.format(",".join(a for a, _ in ANCHORS)), "F3:F{}".format(2 + TASK_ROWS))
     ws.freeze_panes = "A3"
     note_row(ws, 4 + TASK_ROWS,
              "זו רשימת ההיצע לגיליון «שיבוץ». מותר ורצוי להוסיף, למחוק ולתקן — הרשימה הנגללת "
              "והקטגוריה האוטומטית מתעדכנות לבד. משימות ניקיון מופיעות בנפרד לכל מרחב, "
-             "כדי לבחור בכל שבת אילו מרחבים מנקים ומתי. עמודת «עוגן» היא ברירת המחדל "
-             "לשיוך המשימה בלו\"ז הצל.")
+             "כדי לבחור בכל שבת אילו מרחבים מנקים ומתי. «שעה» ו«עוגן» הן ברירות המחדל "
+             "שנכתבות לשיבוץ ומשם ללו\"ז הצל.", last_col=6)
     return ws
 
 

@@ -16,7 +16,7 @@ import csv
 import random
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -83,7 +83,7 @@ def record_duty(date, assignment):
 
 
 # ---------------------------------------------------------------------------
-def assign(plan, available, programs, past, seed):
+def assign(plan, available, programs, past, seed, pins=None):
     """משבץ חניכים לקבוצות העלה לפי התוכנית.
 
     סדר הקדימויות: מובילים וחברים קבועים ← חניכי אלול (מפוזרים יחסית) ←
@@ -92,6 +92,11 @@ def assign(plan, available, programs, past, seed):
     rng = random.Random(seed)
     groups = {g["name"]: [] for g in plan}
     taken = set()
+
+    for name, group in (pins or {}).items():          # הצמדות ידניות לשבת הזו
+        if group in groups and name in available and name not in taken:
+            groups[group].append(name)
+            taken.add(name)
 
     for g in plan:
         for name in ([g["leader"]] if g["leader"] else []) + g["fixed"]:
@@ -145,7 +150,8 @@ def build_assignments(plan, tasks):
                 if task["חלון זמן"] not in (window, "משתנה"):
                     continue
                 anchor = (task.get("עוגן") or "").strip() or WINDOW_ANCHOR.get(window, "")
-                rows.append((g["name"], window, "", task["משימה"], "", anchor))
+                hour = (task.get("שעה") or "").strip()
+                rows.append((g["name"], window, hour, task["משימה"], "", anchor))
     order = {g["name"]: i for i, g in enumerate(plan)}
     rows.sort(key=lambda r: (order[r[0]], WINDOW_ORDER.get(r[1], 9)))
     return rows
@@ -186,7 +192,7 @@ def write_workbook(path, plan, groups, rows):
         set_cell(ws_assign, r, 1, group)
         set_cell(ws_assign, r, 2, window)
         if hour:
-            set_cell(ws_assign, r, 3, hour)
+            set_cell(ws_assign, r, 3, time(*[int(x) for x in hour.split(":")]))
         set_cell(ws_assign, r, 4, task)
         if detail:
             set_cell(ws_assign, r, 6, detail)
@@ -217,7 +223,8 @@ def main():
 
     plan = read_plan()
     groups = assign(plan, available, programs, duty_counts(),
-                    args.seed if args.seed is not None else date.toordinal())
+                    args.seed if args.seed is not None else date.toordinal(),
+                    pins=attendance_mod.load_pins(date))
     rows = build_assignments(plan, read_tasks())
 
     placed = sum(len(v) for v in groups.values())

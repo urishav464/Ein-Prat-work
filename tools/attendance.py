@@ -43,6 +43,15 @@ def load(date):
     return None if rows is None else [r["שם"] for r in rows]
 
 
+def load_pins(date):
+    """הצמדות ידניות של חניך לקבוצה בשבת הזו: {שם: קבוצה}."""
+    rows = _rows(date)
+    if rows is None:
+        return {}
+    return {r["שם"]: r["שיבוץ ידני"].strip() for r in rows
+            if (r.get("שיבוץ ידני") or "").strip()}
+
+
 def load_available(date):
     """רק מי שזמין לתורנות (עמודת «זמין לתורנות» = כן, או ריקה)."""
     rows = _rows(date)
