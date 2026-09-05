@@ -23,6 +23,7 @@ import roster
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "attendance"
 LINE_NOISE = re.compile(r"^\s*(?:[-•*]|\d+[.)]?)\s*")
+FIELDS = ["שם", "תוכנית", "זמין לתורנות", "שיבוץ ידני", "הערה"]
 
 
 def path_for(date):
@@ -108,11 +109,16 @@ def main():
                     print("  התאמה [{}]: «{}» ← {}".format(how, raw, name))
 
     DIR.mkdir(parents=True, exist_ok=True)
+    existing = {r["שם"]: r for r in (_rows(date) or [])}      # שומר זמינות והצמדות מהרצה קודמת
     with path_for(date).open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["שם", "תוכנית"])
+        writer = csv.DictWriter(fh, fieldnames=FIELDS)
         writer.writeheader()
         for name in matched:
-            writer.writerow({"שם": name, "תוכנית": program.get(name, "")})
+            old = existing.get(name, {})
+            writer.writerow({"שם": name, "תוכנית": program.get(name, ""),
+                             "זמין לתורנות": old.get("זמין לתורנות", "כן"),
+                             "שיבוץ ידני": old.get("שיבוץ ידני", ""),
+                             "הערה": old.get("הערה", "")})
 
     absent = [n for n in all_names if n not in matched]
     counts = {}
