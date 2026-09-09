@@ -39,6 +39,7 @@ paths:
 - **`lessons` is deliberately not four rows** — `slot_order` is 1..N, `lesson_role` free text (the archive holds ceremonies and song circles).
 - **`budget_used` is a view**, never a stored column.
 - **Seeding does not archive `students_tasks.md`** — the checkout is rebuilt from git on every deploy, so an `app_meta` flag guards the seed instead of a rename.
+- **The real trainees arrive by migration, not by re-seed.** `scripts/assign_trainees.py` (seed 5787, deterministic) maps the nine names onto `students.id` 1–9, deletes the tenth placeholder, and redistributes the 19 trainee Mishmarim (#03–#21, 38 seats = 7×4 + 2×5) under asserted rules — two distinct trainees per evening, nobody on two consecutive evenings, all 19 pairs distinct. It writes `migrations/2026-09-assign-trainees.sql` (one transaction; `UPDATE students` ×9, `DELETE` id 10, `DELETE FROM assignments` for #03–#21, `INSERT … ON CONFLICT DO NOTHING` ×38 — idempotent) **and** rewrites the owners in `Mishmer-section/2026-27/schedule.md`, `students.md` and the «אחראים» lines of `students_tasks.md`, so the seed, the docs and the database agree. The SQL is run by a human in the Supabase SQL Editor; no schema-version bump, since no structure changes. Re-running the script with the same seed reproduces the same file.
 - **The evening timeline is derived, never hand-typed.** `lessons.start_time` is computed by `recompute_lesson_times()` from 20:00 plus cumulative `duration_minutes` (breaks are ordinary rows with `is_break`); every duration edit reflows the whole evening, so slots cannot overlap. `create_default_timeline()` builds the real skeleton — three 75-minute lessons, 30/30/15-minute breaks, an hour of חבורות ending 02:00 — with titles/roles/formats EMPTY by design, and both topic-close paths (form and chat tool) call it when the evening is empty.
 - **Candidate speakers** (`lesson_speakers`): `add_lesson_speaker()` also teaches the shared index the person exists (manual source, phone as contact, title auto-split); candidate statuses route through `record_outreach()`; `close_lesson_speaker()` implements «סגרתי את X» — X becomes `lessons.speaker_name` with one ✅ row, the other candidates are deleted, the journal logs the close. **Phones live only in `lesson_speakers.phone` and `speakers.contact` — never in chat context or the generator digest.**
 - The status ladder merged in v2: `⏳ ממתין לתשובה` folded into `📩 נשלחה פנייה` — constants AND idempotent UPDATEs in the schema file; do not reintroduce it.
@@ -108,5 +109,9 @@ panel instead of on a slot.
   every room change, presenter add (`add_chavurot_presenter`) and presenter delete. One presenter →
   nothing extra. Closing a candidate (`_close_candidate` in `app.py`) also marks the slot's open
   «סגירת מרצה» task DONE, found by `lesson_id`.
+- **Every sort/slice on a date column wraps it in `str()`** — `due_date` too: the shim returns a
+  `date` where PostgREST returns text, and a task without a due date (the `or "9999"` fallback)
+  then raised `'<' not supported between 'str' and 'datetime.date'` in `mishmar_progress` and
+  in the workfile's `by_due` sort. Four sort keys now read `str(t.get("due_date") or "9999")`.
 - `created_at` is an ISO string from PostgREST and a `datetime` from the local shim: slice it as
   `str(value)[:10]`, never `value[:10]` — the speaker index crashed on the harness over exactly this.

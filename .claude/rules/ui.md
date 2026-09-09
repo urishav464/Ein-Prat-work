@@ -41,7 +41,7 @@ paths:
 - **Full-width sidebar controls need `align-self: stretch` AND the element container**: the nav radio's `stElementContainer` is sized to its content (137px in a 239px block), and the label's inner wrappers are RTL flex rows that pack RIGHT — so `width: 100%` on the label and `text-align: center` on the `<p>` changed nothing. The rules that work: stretch `stElementContainer`/`stRadio`/`radiogroup`, and `justify-content: center` on the label's inner `div`s (verified: left gap == right gap on all four cards).
 - **`st.caption` renders `data-testid="stCaptionContainer"`, NOT `stMarkdownContainer`** (`StreamlitMarkdown.*.js`, chosen by the `isCaption` prop). It must be in the RTL selector list explicitly — until it was, no caption in the app was ever right-aligned.
 - `build_stamp()` shows the deployed short SHA + commit time in the sidebar — the answer to "did the deploy update?".
-- Card primitive = `st.container(border=True)`. **In Streamlit 1.62 the border lives on the `stVerticalBlock` itself** — `stVerticalBlockBorderWrapper` is gone from the bundle, and the white/rounded/hairline card rule was silently dead for a whole release because it still named it. **Audit every `data-testid` in `RTL_CSS` against `streamlit/static/static/js/*.js` after any Streamlit upgrade** (the `design-review` agent does exactly this; zero hits = dead rule). Tags = `.chip .chip-{red,yellow,green,gray,gold,blue}`. Phases = `.stepper/.step/.step-bar`. Chat bubbles style `[data-testid="stChatMessage"]`; avatars hidden via `[data-testid^="stChatMessageAvatar"]`.
+- Card primitive = `st.container(border=True, key="card-…")`. **In Streamlit 1.62 the border lives on the `stVerticalBlock` itself** — `stVerticalBlockBorderWrapper` is gone from the bundle, and the white/rounded/hairline card rule was silently dead for a whole release because it still named it. **`data-test-scroll-behavior` is NOT a card discriminator either**: it sits on width-only, keyed and fragment wrappers too, and a rule anchored on it painted the whole workfile and the metric column white. The card rule is therefore **opt-in by key**: `[class*="st-key-card-"]` (white, hairline, 12px radius, `padding: var(--sp-4)`, inner `gap: var(--sp-2)`); every `st.container(border=True)` that is a card carries a `card-` key, and a bordered container without one is deliberately unstyled. **Audit every `data-testid` in `RTL_CSS` against `streamlit/static/static/js/*.js` after any Streamlit upgrade** (the `design-review` agent does exactly this; zero hits = dead rule). Tags = `.chip .chip-{red,yellow,green,gray,gold,blue}`. Phases = `.stepper/.step/.step-bar`. Chat bubbles style `[data-testid="stChatMessage"]`; avatars hidden via `[data-testid^="stChatMessageAvatar"]`.
 - The sidebar nav is `st.radio` restyled: the label IS the card; the radio mark is drawn twice in the DOM (hidden input wrapper `label > span:first-child` AND a 16px circle at `label > div > div > div:first-child`) — both must stay hidden.
 - No data dumps: prefer cards/grids/steppers over giant tables; long grids fold into expanders (open only when nothing urgent).
 
@@ -103,7 +103,10 @@ More probe traps that produced false test results here: **input placeholders nev
 - **The two workfile columns are the one media query**: `st.container(key="wf-cols").columns(...)`
   and `@media (max-width: 1100px) .st-key-wf-cols …` stacks them, evening first.
 - **The dashboard card's title is a tertiary button** inside a plain `if` — a deep link is a rerun
-  anyway (`_goto`), so `on_click` buys nothing there.
+  anyway (`_goto`), so `on_click` buys nothing there. The trainee's «שאר המשמרים שלי» mini-cards
+  (`_mini_mishmar_card`, key `mc-…`) open the workfile the same way; `[class*="st-key-pc-"] button,
+  [class*="st-key-mc-"] button { justify-content: flex-end; text-align: right }` keeps a
+  `width="stretch"` label at the right edge with the chips under RTL instead of centred.
 - The pinned «עברו את התאריך המומלץ» block is gone from the workfile board by request: the five
   groups (four phases + יום המשמר) are the board, and a folded phase declares its own lateness in
   its header badge.
@@ -131,10 +134,11 @@ More probe traps that produced false test results here: **input placeholders nev
   list (the old `st.columns` split truncated its submit to «+ מו…»). The חבורות add form takes a
   room (default בית מדרש), not a phone.
 - **A slot's open tasks are chips** (`st.container(border=True, width="content", key="ltc-…")`
-  inside a wrapping flex row, ✓ right after the text, lateness as red text). The wrapper's padding
-  is trimmed via `[data-testid="stLayoutWrapper"]:has(> [class*="st-key-ltc-"])` — the keyed class
-  sits on the inner block, the border and padding on its wrapper. They pack as many per row as the
-  column allows; in the 470px evening column that is usually one.
+  inside a wrapping flex row, ✓ right after the text as an `ib-lt-` box, lateness as red text).
+  The keyed class AND the border/padding both sit on the inner `stVerticalBlock`, so the trim is
+  `[class*="st-key-ltc-"] { padding: 2px 8px }` on the block itself — the earlier `:has()` rule
+  on the `stLayoutWrapper` trimmed nothing and left every chip 63px tall. Measured: 32px tall,
+  two per row in the evening column at 1500.
 - **Feedback stars + text are one flex row** (`fr.feedback` + `fr.text_input(width="stretch")`);
   two `st.columns` in the half-width panel overlapped.
 
@@ -143,9 +147,22 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Taken**: metric tiles (`[data-testid="stMetric"]` styled with the card grammar); a reading
   width (`stMainBlockContainer` max 1320px); solid muted ink `#5c6577` for `.card-meta`, `.step`
   and captions instead of `opacity` (0.65 of the text colour on parchment measured 4.0:1, under
-  4.5:1); icon-only buttons (✏️ 🗑 ✕) are `type="tertiary"` — a box around a glyph was the loudest
-  thing on the workfile; one voice for «nothing yet» via `_empty(text, hint)` (dashed hairline,
+  4.5:1); icon-only buttons (✏️ 🗑 ✕ ✓) were briefly `type="tertiary"` and then, by decision
+  («כולם בקופסאות קטנות ואחידות»), became **uniform 32×32 boxes**: every icon-only button has a
+  key prefixed `ib-` (`ib-dn-` ✓ · `ib-ed-` ✏️ · `ib-rm-`/`ib-rmc-`/`ib-rmch-` 🗑 · `ib-brx-`/`ib-lgx-`
+  ✕ · `ib-lt-` chip ✓) and one rule `[class*="st-key-ib-"] button { width/height: 2rem; padding: 0;
+  border: 1px solid var(--line) }`, navy border for `ib-dn-`/`ib-lt-` (the affirmative one); one voice for «nothing yet» via `_empty(text, hint)` (dashed hairline,
   muted), replacing the mix of `st.info` / `st.caption`.
+- **Fields must be bounded on both surfaces**: `secondaryBackgroundColor = #ffffff` makes every
+  input wrapper white with a **white 1px border**, invisible on a white card. The field rule
+  (`stTextInputRootElement`, `stNumberInputContainer`, `stTextArea textarea`, the selectbox's
+  `[data-baseweb="select"] > div:first-child`, `stFileUploaderDropzone`) paints `#fbfaf6` with a
+  `var(--line)` border, 8px radius.
+- **Gaps are on the scale, not Streamlit's default**: `stHorizontalBlock { gap: var(--sp-2) }`
+  (rows of controls were 16px apart) and the card's inner gap is 8px through the `card-` rule.
+- **Chips pad the keyed block, not its wrapper**: `[class*="st-key-ltc-"] { padding: 2px 8px }`
+  — the earlier `:has()` rule padded the `stLayoutWrapper`, so each chip kept the bordered block's
+  15px padding and stood 63px tall, one per row. Measured after: 32px tall, two per row at 1500.
 - **Not taken, by decision**: any palette change (navy/parchment is the brand), Inter/Geist
   (Hebrew: Rubik/Assistant), dark mode (locked light), sticky headers, third-party component
   libraries. A design finding that proposes any of these is out of scope.

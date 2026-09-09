@@ -23,7 +23,8 @@ Every finding you return is a measurement against a rule this repo already made.
   secondary buttons, `.chip` tags, the `.stepper`, headings with a navy `border-right` accent,
   RTL on every text container including `stCaptionContainer`. You check against THAT.
 - **Streamlit 1.62 renamed things.** `stVerticalBlockBorderWrapper` is gone (the border, radius and
-  padding sit on the `stVerticalBlock` itself, marked by `data-test-scroll-behavior`; sizing sits
+  padding sit on the `stVerticalBlock` itself; `data-test-scroll-behavior` is on plain wrappers
+  too and is NOT a card selector — cards are styled by key, `.st-key-card-…`; sizing sits
   on a `stLayoutWrapper` around it); `st.container(horizontal=True, wrap=…)` and
   `width=` exist; `st.caption` renders `stCaptionContainer`; icons are `stIconMaterial` ligature
   text. A selector that names a testid absent from the installed bundle is a dead rule, and a
@@ -69,8 +70,9 @@ ONLY the JSON in §5.
      (`.card-meta`, `.step`, chips, captions) against `#f2eee3` and `#ffffff`; an `opacity`
      must be composited into the colour first. Body text under 4.5:1 is a finding.
   3. **Spacing** — pixel values in `RTL_CSS` that are not on the 4/8 scale (allow 1–3px hairlines).
-  4. **Buttons** — per card/row: more than one `type="primary"`, or icon-only buttons (✏️ 🗑 ✕)
-     that are not `type="tertiary"`.
+  4. **Buttons** — per card/row: more than one `type="primary"`, or icon-only buttons (✏️ 🗑 ✕ ✓)
+     whose key does not start with `ib-` (the uniform 32×32 box rule is keyed, by decision).
+     A bordered container without a `card-` key is unstyled on purpose — not a finding.
   Optionally, the headless-Chromium pass `ui.md` describes (`/opt/pw-browsers/...chrome`,
   `--no-sandbox`, a throwaway local server): computed `background-color`/`border-radius` of a
   bordered container, horizontal overflow at 390px, stacked action rows.

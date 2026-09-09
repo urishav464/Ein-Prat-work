@@ -283,15 +283,52 @@ RTL_CSS = """
      Streamlit 1.62 draws st.container(border=True) on the stVerticalBlock
      ITSELF (1px at 20% text colour, 8px radius, 15px padding) — the old
      `stVerticalBlockBorderWrapper` is gone from the bundle, and this rule was
-     dead for a whole release. A bordered block is the one that carries
-     data-test-scroll-behavior; plain blocks do not (measured: 38 vs 5). ---- */
-  [data-testid="stVerticalBlock"][data-test-scroll-behavior] {
+     dead for a whole release. The next anchor tried, data-test-scroll-behavior,
+     is ALSO on width-only, keyed and fragment wrappers (measured: the workfile
+     wrapper and the metric column turned white). So cards opt in: every
+     st.container(border=True) that is a card carries key="card-…", and this
+     rule names nothing Streamlit can rename. ---- */
+  [class*="st-key-card-"] {
       background: #ffffff;
       border: 1px solid var(--line) !important;
       border-radius: 12px !important;
       padding: var(--sp-4) !important;
       gap: var(--sp-2);
       box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
+  }
+
+  /* ---- Fields must read as fields on BOTH surfaces. config.toml's
+     secondaryBackgroundColor is #fff, so Streamlit draws inputs white with a
+     white border — invisible on a white card or in a dialog. ---- */
+  [data-testid="stTextInputRootElement"],
+  [data-testid="stNumberInputContainer"],
+  [data-testid="stTextArea"] textarea,
+  [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child,
+  [data-testid="stFileUploaderDropzone"] {
+      background: #fbfaf6 !important;
+      border: 1px solid var(--line) !important;
+      border-radius: 8px !important;
+  }
+  [data-testid="stTextInputRootElement"]:focus-within,
+  [data-testid="stNumberInputContainer"]:focus-within,
+  [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child:focus-within {
+      border-color: #1d3e7d !important;
+  }
+  /* rhythm: 8px between a card's rows and between the controls in a row —
+     Streamlit's default is 16px for both, which read as "too much air" */
+  [data-testid="stHorizontalBlock"] { gap: var(--sp-2); }
+  /* icon-only buttons: uniform small squares, one grammar everywhere */
+  [class*="st-key-ib-"] button {
+      width: 2rem !important; min-width: 2rem; height: 2rem; min-height: 2rem;
+      padding: 0 !important; border: 1px solid var(--line); border-radius: 8px;
+      background: #ffffff; color: #1d3e7d; line-height: 1;
+  }
+  [class*="st-key-ib-"] button:hover { border-color: #1d3e7d; background: #f7f9fd; }
+  [class*="st-key-ib-dn-"] button, [class*="st-key-ib-lt-"] button { border-color: #1d3e7d; }
+  /* card titles that are buttons: the label sits at the right edge, with the
+     chips and the axis under it — a centred title read as "shifted" */
+  [class*="st-key-pc-"] button, [class*="st-key-mc-"] button {
+      justify-content: flex-end; text-align: right; padding-inline: 0;
   }
 
   /* ---- Expanders: hairline, not a boxed box ---- */
@@ -388,10 +425,10 @@ RTL_CSS = """
   [data-testid="stMetric"] { flex: 1 1 150px; }
   /* A slot's task chips: a bordered container's default padding is a card's;
      a chip wants a sliver, so two fit beside each other in a half-width column. */
-  [class*="st-key-ltc-"] { gap: .25rem !important; }
-  [data-testid="stLayoutWrapper"]:has(> [class*="st-key-ltc-"]) { padding: .15rem .45rem !important; }
+  [class*="st-key-ltc-"] { padding: 2px 8px !important; gap: 0 !important; }
+  [class*="st-key-ltc-"] [data-testid="stHorizontalBlock"] { gap: var(--sp-1); }
   [class*="st-key-ltc-"] [data-testid="stMarkdownContainer"] p { margin: 0; font-size: .78rem; }
-  [class*="st-key-ltc-"] button { padding: .1rem .45rem !important; min-height: 1.8rem; }
+  [class*="st-key-ltc-"] button { width: 1.6rem !important; min-width: 1.6rem; height: 1.6rem; min-height: 1.6rem; }
   /* Only where several cards actually fit does a cap make sense: below this a
      lone card should use the whole column, not sit in a 340px stripe. */
   @media (min-width: 1101px) {
@@ -615,7 +652,7 @@ def _mishmar_card(m: dict, progress: dict, overdue_count: int, owners: list[str]
     money. Fixed width on purpose (four fit a 1040px content column): the grid
     around it wraps 4 / 2 / 1 across."""
     topic = (m.get("topic") or "").strip()
-    with st.container(border=True, width=240):
+    with st.container(border=True, width=240, key=f"card-pc-{m['id']}"):
         if st.button(f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
                      f"{topic or 'ללא נושא'}",
                      key=f"pc-{m['id']}", type="tertiary", width="stretch", wrap=True):
@@ -706,7 +743,7 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
         return
     st.markdown(f"#### מה דורש התערבות ({total})")
     st.caption("ארבעה דברים שמעכבים ערב ואף לוח משימות לא מראה.")
-    with st.container(border=True):
+    with st.container(border=True, key="card-attention"):
         for m in no_topic:
             st.markdown(
                 f"🎯 **#{m['id']:02d}** בעוד {soon[m['id']]} ימים ועדיין ללא נושא — "
@@ -792,7 +829,7 @@ def show_admin_dashboard() -> None:
         # viewport shrinks, laid out by the browser — no rerun, no breakpoint.
         with st.container(horizontal=True, wrap=True, gap="small", key="overdue-grid"):
             for t in cards:
-                with st.container(border=True, width=300):
+                with st.container(border=True, width=300, key=f"card-ov-{t['id']}"):
                     chips = [_chip("באיחור", "red"),
                              _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
                     if t.get("category"):
@@ -1049,7 +1086,7 @@ def _task_card(t: dict, key_prefix: str, show_mishmar: bool = True,
                link: bool = False) -> None:
     """One task as a bordered card: description, chips, soft nudge, actions."""
     urgency = _urgency(t)
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-t-{t['id']}"):
         chips = []
         label, kind = _STATUS_CHIP.get(t.get("status"), ("", "gray"))
         if label:
@@ -1192,7 +1229,7 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
     """The trainee's ONE place to answer "what now?" — Mishmar identity,
     the phase stepper, and only the current phase's open tasks."""
     cur = progress["phases"][progress["current"]]
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-hero-{m['id']}"):
         chips = [_countdown_chip(m)]
         if m.get("mishmar_type"):
             chips.append(_chip(m["mishmar_type"], "gold"))
@@ -1230,7 +1267,7 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
         open_cur = [t for t in cur["tasks"] if t["status"] != "DONE"]
         if open_cur:
             st.markdown(f"**המשימות של שלב «{cur['label']}» ({len(open_cur)}):**")
-            _card_grid(sorted(open_cur, key=lambda t: t.get("due_date") or "9999"),
+            _card_grid(sorted(open_cur, key=lambda t: str(t.get("due_date") or "9999")),
                        f"hero-{m['id']}", show_mishmar=False, link=True)
             # A teaser, not a list: the next phase exists, and it can wait.
             ni = progress["current"] + 1
@@ -1249,12 +1286,13 @@ def _mini_mishmar_card(m: dict, progress: dict,
                        owners: Optional[list[str]] = None) -> None:
     """Same grammar as the instructor's pipeline row — partner names and the
     dated phase axis — so a trainee reads their own queue the same way."""
-    with st.container(border=True):
-        st.markdown(
-            f"<div class='task-desc'>#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}</div>"
-            f"<div>{_countdown_chip(m)}{_owners_chip(owners or [])}</div>",
-            unsafe_allow_html=True,
-        )
+    with st.container(border=True, key=f"card-mc-{m['id']}"):
+        # the date is the door — same as the instructor's cards
+        if st.button(f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}",
+                     key=f"mc-{m['id']}", type="tertiary", width="stretch"):
+            _goto(NAV_WORKFILE, m["id"])
+        st.markdown(f"<div>{_countdown_chip(m)}{_owners_chip(owners or [])}</div>",
+                    unsafe_allow_html=True)
         st.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
 
 
@@ -1289,7 +1327,7 @@ def show_student_view(student_name: str) -> None:
     if overdue:
         st.markdown(f"#### עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
         st.caption("המלצה — לא חוק. אבל אלה קודמים לכל השאר.")
-        _card_grid(sorted(overdue, key=lambda t: t.get("due_date") or "9999"),
+        _card_grid(sorted(overdue, key=lambda t: str(t.get("due_date") or "9999")),
                    "ovd", link=True)
 
     st.markdown("#### המשמר הבא שלי")
@@ -1371,7 +1409,7 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
     are never carried at all."""
     name = c["name"]
     display = f"{c['title']} {name}" if c.get("title") else name
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-scout-{idx}"):
         label, kind = CONFIDENCE_CHIP.get(c.get("confidence") or "low",
                                           CONFIDENCE_CHIP["low"])
         chips = [_chip(label, kind)]
@@ -1671,7 +1709,7 @@ def _speaker_index_card(r: dict, history: list[dict], dup_count: int,
     it landed. Outreach status is NOT on this screen: the index is memory, and
     a booking state told nobody anything while browsing."""
     teaching = teaching or {}
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-sp-{r['speaker_id']}"):
         warn = " ⚠️" if dup_count > 1 else ""
         domains = [d.strip() for d in (r.get("domains") or "").split(",") if d.strip()]
         chips = "".join(_chip(d, "blue") for d in domains[:3])
@@ -1902,7 +1940,7 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
             if cand.get("room") in dm.CHAVUROT_ROOMS else 0,
             format_func=lambda r: r or "— חלל —", label_visibility="collapsed",
             on_change=_room_changed, args=(cand["id"], rkey, mid))
-        top.button("🗑", key=f"rmch-{cand['id']}", help="הסרת המעביר", type="tertiary",
+        top.button("🗑", key=f"ib-rmch-{cand['id']}", help="הסרת המעביר",
                    on_click=_remove_presenter, args=(cand["id"], mid))
         skey = f"csrc-{cand['id']}"
         st.text_input(
@@ -1965,7 +2003,7 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
         cr.button("✅ סגור מרצה", key=f"close-{cand['id']}", type="primary",
                   help="הופך למרצה של השיעור; שאר המועמדים יוסרו ומשימת סגירת המרצה נסגרת",
                   on_click=_close_candidate, args=(l["id"], cand["name"], mid))
-        cr.button("🗑", key=f"rmc-{cand['id']}", type="tertiary",
+        cr.button("🗑", key=f"ib-rmc-{cand['id']}",
                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
     # The add form sits right under the list, as one flex row — the old three
@@ -2053,7 +2091,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
 
     # --- the topic: a hero form until it exists, a quiet line after ---
     if not m.get("topic"):
-        with st.container(border=True):
+        with st.container(border=True, key=f"card-topic-{mid}"):
             st.markdown("#### הצעד הראשון: לסגור נושא")
             st.caption(
                 "הנושא הוא מנוע הערב כולו — מומלץ לסגור אותו כשלושה שבועות לפני. "
@@ -2139,7 +2177,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 key=f"brk-{l['id']}", label_visibility="collapsed", width=110,
                 on_change=lambda mid=mid, lid=l["id"], k=f"brk-{l['id']}":
                     dm.set_lesson_duration(mid, lid, int(st.session_state[k])))
-            br.button("✕", key=f"brx-{l['id']}", type="tertiary",
+            br.button("✕", key=f"ib-brx-{l['id']}",
                       help="מחיקת ההפסקה — הזמנים שאחריה מתעדכנים",
                       on_click=dm.delete_lesson_with_tasks, args=(mid, l["id"]))
             continue
@@ -2150,7 +2188,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
         # used to get an ordinary speaker slot, with no «מי מעביר» anywhere.
         is_chavurot = dm.is_chavurot(l)
         my_tasks = linked.get(l["id"], [])
-        with st.container(border=True):
+        with st.container(border=True, key=f"card-l-{l['id']}"):
             head = _clean(l.get("title") or "") or f"שיעור {lesson_no} — ללא כותרת"
             if is_chavurot and not l.get("title"):
                 head = "חבורות"
@@ -2210,7 +2248,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                                 + ("⏰ " if late else "")
                                 + f"{_clean(t['task_description'])}</span>",
                                 unsafe_allow_html=True, width="content")
-                            ch.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
+                            ch.button("✓", key=f"ib-lt-{t['id']}", help="סמן שבוצע",
                                       on_click=_set_status,
                                       args=(t["id"], "DONE", "בוצע 🎉"))
 
@@ -2225,7 +2263,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                              help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור"):
                     _lesson_edit_dialog(mid, l)
             # opening a dialog IS a rerun, so a plain `if` is the honest form here
-            if tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע", type="tertiary"):
+            if tc.button("✏️", key=f"ib-ed-{l['id']}", help="עריכת המקטע"):
                 _lesson_edit_dialog(mid, l)
 
 
@@ -2284,7 +2322,7 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
                if it.get("detail") else "")
             + "</div>", unsafe_allow_html=True, width="stretch")
-        lr.button("🗑", key=f"lgx-{it['id']}", type="tertiary",
+        lr.button("🗑", key=f"ib-lgx-{it['id']}",
                   on_click=dm.delete_logistics_item, args=(it["id"],))
     if not items:
         _empty("עוד לא נוספו שורות.")
@@ -2340,7 +2378,7 @@ def _rooms_summary(mid: int, legacy: list[dict],
                             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
                                if it.get("detail") else ""),
                             unsafe_allow_html=True, width="stretch")
-                lr.button("🗑", key=f"lgold-{it['id']}", type="tertiary",
+                lr.button("🗑", key=f"ib-lgold-{it['id']}",
                           on_click=dm.delete_logistics_item, args=(it["id"],))
 
 
@@ -2512,7 +2550,7 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         guessed = bool(slot_id)
     slot = next((l for l in slots if l["id"] == slot_id), None)
 
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-wt-{key_prefix}-{t['id']}"):
         chips = []
         if t.get("category"):
             chips.append(_chip(t["category"], "gold"))
@@ -2552,14 +2590,14 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
                     _goto(NAV_WORKFILE, mid, WF_STRUCTURE, task_focus=t["id"])
                 else:
                     _goto(NAV_WORKFILE, mid, WF_LOGISTICS)
-            row.button("✓", key=f"{k}-dn", help="סמן שבוצע",
+            row.button("✓", key=f"ib-dn-{k}", help="סמן שבוצע",
                       on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
         else:
             row.button("↩ החזר", key=f"{k}-re",
                       on_click=_set_status, args=(t["id"], "TO DO"))
-        if row.button("✏️", key=f"{k}-ed", help="עריכה", type="tertiary"):
+        if row.button("✏️", key=f"ib-ed-{k}", help="עריכה"):
             _task_edit_dialog(t, slots)
-        row.button("🗑", key=f"{k}-rm", help="מחיקה", type="tertiary",
+        row.button("🗑", key=f"ib-rm-{k}", help="מחיקה",
                   on_click=dm.delete_task, args=(t["id"],))
 
 
@@ -2583,7 +2621,7 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
     """Phase accordion of OPEN tasks; day-of work as its own group; the
     after-work lives in the after-Mishmar section; done tasks sink to the
     bottom, out of the way entirely."""
-    by_due = lambda t: t.get("due_date") or "9999"
+    by_due = lambda t: str(t.get("due_date") or "9999")
     all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
     done = [t for t in all_tasks if t["status"] == "DONE"]
 
@@ -2760,7 +2798,7 @@ def _workfile_body(mid: int) -> None:
     partners = dm.get_partners(mid)
 
     # --- the Mishmar's identity card: who, when, where it stands ---
-    with st.container(border=True):
+    with st.container(border=True, key=f"card-wf-{mid}"):
         chips = [_countdown_chip(m)]
         if m.get("mishmar_type"):
             chips.append(_chip(m["mishmar_type"], "gold"))

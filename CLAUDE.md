@@ -23,6 +23,7 @@ python3 -m py_compile app.py data_manager.py chat_agent.py speaker_search.py cha
 MISHMAR_NO_CACHE=1 streamlit run app.py                                                                  # read cache off, for scripts that write around the seam
 python3 scripts/rerun_audit.py app.py                 # what every click costs; exit 1 on a write+st.rerun() double run
 python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules/streamlit-dom.md after a Streamlit upgrade
+python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (seed 5787)
 ```
 
 There is no test suite and no live Supabase reachable from a sandbox. Verification runs on a local PostgreSQL 16 + a PostgREST-shaped shim + headless Chromium — described in `.claude/rules/database.md` §"Verifying changes" and `.claude/rules/ui.md` §"Verifying the UI", run end to end by the `deploy-check` agent. Without Streamlit secrets the app boots in name-only dev login, but storage still needs Supabase — there is no local storage mode.
@@ -62,6 +63,8 @@ supabase_schema.sql    # tables, views, RLS + GRANTs — run in Supabase SQL Edi
 DEPLOY.md              # Supabase + Streamlit Secrets setup, RLS rationale, first-run seed
 system_rules.md        # operating layer: roles, pedagogy, speaker mandate, budget
 students_tasks.md      # seed data read on first run
+migrations/            # one-off SQL run by a human in the SQL Editor (trainee names + pairs)
+scripts/               # rerun_audit · streamlit_dom_context · assign_trainees (writes migrations/ + docs)
 Mishmer-section/       # generator prompt · templates · speakers · 2025-26 archive · 2026-27 season
 Invitations/           # house style, watercolor prompts, past posters
 ```

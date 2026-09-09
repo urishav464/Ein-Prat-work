@@ -884,7 +884,7 @@ def mishmar_progress(mishmar_id: Optional[int] = None,
     total = len(tasks)
     done = sum(1 for t in tasks if t.get("status") == "DONE")
     open_current = [t for t in phases[current]["tasks"] if t.get("status") != "DONE"]
-    open_current.sort(key=lambda t: t.get("due_date") or "9999")
+    open_current.sort(key=lambda t: str(t.get("due_date") or "9999"))
     return {
         "mishmar": m,
         "phases": phases,
