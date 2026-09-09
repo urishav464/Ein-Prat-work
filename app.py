@@ -251,7 +251,7 @@ RTL_CSS = """
   /* ---- Keyboard: a ring you can see. Streamlit's own focus style is faint on
      tertiary buttons and absent on the nav cards (their radio input is hidden). ---- */
   button:focus-visible, input:focus-visible, textarea:focus-visible,
-  [data-baseweb="select"]:focus-within,
+  [data-testid="stSelectbox"] div[role="group"]:focus-within,
   [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:focus-visible) {
       outline: 2px solid #1d3e7d !important;
       outline-offset: 2px;
@@ -433,7 +433,7 @@ RTL_CSS = """
   .step { display: flex; flex-direction: column; align-items: center; gap: 3px;
           flex: 0 0 auto; font-size: .7rem; color: #5c6577; min-width: 58px; }
   .step .dot {
-      width: 34px; height: 34px; border-radius: 50%;
+      width: 32px; height: 32px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       background: #eeece7; border: 2px solid #ddd6c6; font-size: .95rem;
   }
@@ -481,6 +481,15 @@ RTL_CSS = """
       /* direct children only — the flex rows INSIDE the columns must stay rows */
       .st-key-wf-cols > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-direction: column; }
       .st-key-wf-cols > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width: 100% !important; flex: 1 1 100% !important; }
+      /* the speaker index keeps three columns at any width — with the sidebar
+         open at 900px that leaves ~140px per card and every name wraps. Two
+         across here; Streamlit stacks columns natively below ~640px. */
+      [class*="st-key-sp-row-"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+      [class*="st-key-sp-row-"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+          /* no grow: the third card of a row wraps and stays half-width,
+             so the grid reads as a grid instead of alternating 2-then-1 */
+          width: calc(50% - var(--sp-2)) !important; flex: 0 1 calc(50% - var(--sp-2)) !important;
+      }
   }
   @media (max-width: 740px) {
       .stepper { flex-wrap: nowrap; overflow-x: auto; }
@@ -490,8 +499,8 @@ RTL_CSS = """
       .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-overdue-grid > * {
           flex: 0 0 100% !important; width: 100% !important; max-width: 100% !important; }
       .step { min-width: 48px; font-size: .62rem; }
-      .step .dot { width: 26px; height: 26px; font-size: .78rem; }
-      .chip { font-size: .66rem; padding: 1px 7px; }
+      .step .dot { width: 24px; height: 24px; font-size: .78rem; }
+      .chip { font-size: .66rem; padding: 1px var(--sp-2); }
       h1 { font-size: 1.5rem !important; }
       .block-container { padding-left: .8rem; padding-right: .8rem; }
   }
@@ -611,8 +620,13 @@ def show_login() -> None:
 
     with box:
         with st.form("login", border=False):
-            name = st.text_input("השם שלך", placeholder="למשל: חניך 3",
-                                 label_visibility="collapsed")
+            # the example comes from the database, not from a literal: it used
+            # to read «חניך 3», a placeholder name the trainee migration
+            # deleted — and a name that does not exist logs in and shows nothing
+            name = st.text_input(
+                "השם שלך",
+                placeholder=f"למשל: {student_names[0]}" if student_names else "השם המלא שלך",
+                label_visibility="collapsed")
             submitted = st.form_submit_button("כניסה", width="stretch",
                                               type="primary")
         with st.expander("מצב פיתוח — פרטים"):

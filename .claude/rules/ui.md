@@ -114,7 +114,15 @@ More probe traps that produced false test results here: **input placeholders nev
   cards wrap 4 / 2 / 1 across. Below 740px the CSS forces those cards to 100% (keyed containers
   `pipeline-grid` / `pipeline-past` → `.st-key-…`).
 - **The two workfile columns are the one media query**: `st.container(key="wf-cols").columns(...)`
-  and `@media (max-width: 1100px) .st-key-wf-cols …` stacks them, evening first.
+  and `@media (max-width: 1100px) .st-key-wf-cols …` stacks them, evening first. The speaker
+  index's `sp-row-{i}` rows share that breakpoint: `st.columns(3)` never reflows, and with the
+  sidebar open at 900px three columns left ~140px per card and wrapped every name — below 1100px
+  they wrap to two at `flex: 0 1 calc(50% - var(--sp-2))` (**no grow**, or the third card of a
+  row spans the whole line and the grid reads as 2-then-1). Streamlit stacks columns natively
+  below ~640px.
+- **The dev-login placeholder is read from the database**, not typed: it named «חניך 3» until the
+  trainee migration deleted that row, and a name that does not exist logs in and shows an empty
+  home. It is now `student_names[0]`.
 - **The dashboard card's title is a tertiary button** inside a plain `if` — a deep link is a rerun
   anyway (`_goto`), so `on_click` buys nothing there. The trainee's «שאר המשמרים שלי» mini-cards
   (`_mini_mishmar_card`, key `mc-…`) open the workfile the same way; `[class*="st-key-pc-"] button,
