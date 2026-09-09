@@ -92,7 +92,7 @@ panel instead of on a slot.
 - **`is_chavurot(lesson)`** (public alias of `_is_chavurot`) reads role **or** format **or** title.
   The UI used to test `lesson_role == "חבורות"` alone, so a slot marked חבורות in the FORMAT field
   never grew a presenters list.
-- **`CHAVUROT_ROOMS`** — בית מיכאל · כיתת בית מדרש · כיתת שבייד · ספריית שבייד. Exactly four;
+- **`CHAVUROT_ROOMS`** — בית מדרש · כיתת בית מדרש · כיתת שבייד · ספריית שבייד. Exactly four;
   `set_candidate_room` raises `ValueError` on anything else. A room used twice is flagged in the UI,
   never blocked. `set_candidate_source` holds one source sheet per presenter.
   Both live on `lesson_speakers` (`room`, `source_url` — schema v6).
@@ -101,3 +101,12 @@ panel instead of on a slot.
   slot is created by `sync_lesson_tasks` and dies with the slot.
 - **`upload_source_sheet` returns `(url, error)`** — the old silent `None` turned a Storage
   misconfiguration into a button that looked broken.
+- **Rooms drive day-of tasks.** `DEFAULT_ROOM` (בית מדרש) is where presenter #1 is assumed to sit,
+  covered by the template's «סידור הבית מדרש». With **two or more** presenters, every distinct
+  other room they chose yields a slot-owned «סידור <חלל>» (`יום המשמר`), created and retired by
+  `sync_lesson_tasks` — which now reads the presenters in one query and is called by the UI after
+  every room change, presenter add (`add_chavurot_presenter`) and presenter delete. One presenter →
+  nothing extra. Closing a candidate (`_close_candidate` in `app.py`) also marks the slot's open
+  «סגירת מרצה» task DONE, found by `lesson_id`.
+- `created_at` is an ISO string from PostgREST and a `datetime` from the local shim: slice it as
+  `str(value)[:10]`, never `value[:10]` — the speaker index crashed on the harness over exactly this.

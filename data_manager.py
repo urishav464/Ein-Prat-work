@@ -1502,7 +1502,7 @@ DEFAULT_TASK_TEMPLATE: tuple[tuple[str, str], ...] = (
     ("נושא",      "סגירת נושא"),
     ("הזמנה",     "הזמנה — עיצוב והפצה"),
     ("כיבוד",     "כיבוד להפסקות"),
-    ("יום המשמר", "סידור החדרים"),
+    ("יום המשמר", "סידור הבית מדרש"),
     ("יום המשמר", "קבלת פנים ופתיחה"),
     ("אחרי",      "מתנות למרצים אשר הגיעו בחינם"),
     ("אחרי",      "משוב וסיכום"),
@@ -1530,8 +1530,12 @@ def reseed_mishmar_tasks(mishmar_id: int) -> int:
 # the night is answered from here, and free text made every evening's answer
 # different.
 CHAVUROT_ROOMS: tuple[str, ...] = (
-    "בית מיכאל", "כיתת בית מדרש", "כיתת שבייד", "ספריית שבייד",
+    "בית מדרש", "כיתת בית מדרש", "כיתת שבייד", "ספריית שבייד",
 )
+# The first presenter is assumed to sit here; the template's «סידור הבית מדרש»
+# covers that room on the night. Every OTHER room a presenter picks needs its own
+# day-of task — created and retired by sync_lesson_tasks as the rooms change.
+DEFAULT_ROOM = CHAVUROT_ROOMS[0]
 
 
 _CHAVUROT_SLOT_TASKS: tuple[tuple[str, str], ...] = (
@@ -1541,12 +1545,20 @@ _CHAVUROT_SLOT_TASKS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _slot_tasks(lesson: dict, index: int) -> tuple[tuple[str, str], ...]:
+def _slot_tasks(lesson: dict, index: int,
+                presenters: Optional[list[dict]] = None) -> tuple[tuple[str, str], ...]:
     """The tasks a slot OWNS — (category, description). A חבורות slot is a
     different animal: several presenters, a source sheet each, and rooms to
-    split between them."""
+    split between them. With two or more presenters, each room other than the
+    בית מדרש needs setting up on the night — one «סידור <חלל>» per distinct room."""
     if _is_chavurot(lesson):
-        return _CHAVUROT_SLOT_TASKS
+        rooms: list[str] = []
+        if presenters and len(presenters) >= 2:
+            for c in presenters:
+                r = c.get("room")
+                if r and r != DEFAULT_ROOM and r in CHAVUROT_ROOMS and r not in rooms:
+                    rooms.append(r)
+        return _CHAVUROT_SLOT_TASKS + tuple(("יום המשמר", f"סידור {r}") for r in rooms)
     return (
         ("מרצים", f"סגירת מרצה — שיעור {index}"),
         ("תוכן",  f"דף מקורות — שיעור {index}"),
@@ -1558,7 +1570,8 @@ def _slot_owned_texts(index: int) -> set[str]:
     shapes. A task outside this set was written by a human and is never
     touched — inside it, it is ours to retire when the slot changes shape."""
     return {t for _, t in _CHAVUROT_SLOT_TASKS} | {
-        f"סגירת מרצה — שיעור {index}", f"דף מקורות — שיעור {index}"}
+        f"סגירת מרצה — שיעור {index}", f"דף מקורות — שיעור {index}"} | {
+        f"סידור {r}" for r in CHAVUROT_ROOMS}
 
 
 def sync_lesson_tasks(mishmar_id: int) -> dict:
@@ -1574,9 +1587,11 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
     removes only OPEN slot-owned tasks whose slot is gone, and never touches a
     DONE row — history is not tidied away.
     """
-    _invalidate(("lessons", "tasks"))     # the caller may have just inserted rows
+    _invalidate(("lessons", "tasks", "lesson_speakers"))   # the caller may have just written
     lessons = [l for l in get_lessons(mishmar_id) if not l.get("is_break")]
     tasks = get_tasks_for_mishmar(mishmar_id)
+    # one query for every presenter — the rooms decide the day-of tasks
+    presenters = get_lesson_speakers(mishmar_id, lessons=lessons) if lessons else {}
     live_ids = {l["id"] for l in lessons}
     by_lesson: dict[int, set[str]] = {}
     for t in tasks:
@@ -1592,8 +1607,9 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
     created = removed = 0
     for i, l in enumerate(lessons, 1):
         have = by_lesson.get(l["id"], set())
-        expected = {text for _, text in _slot_tasks(l, i)}
-        for category, text in _slot_tasks(l, i):
+        owned = _slot_tasks(l, i, presenters.get(l["id"], []))
+        expected = {text for _, text in owned}
+        for category, text in owned:
             if text in have:
                 continue
             add_task(mishmar_id, text, category=category, lesson_id=l["id"])
@@ -1633,6 +1649,15 @@ def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:
     _t("lessons").delete().eq("id", lesson_id).execute()
     recompute_lesson_times(mishmar_id)
     return {"tasks": len(tasks)}
+
+
+def add_chavurot_presenter(lesson_id: int, name: str, room: Optional[str] = None,
+                           student_id: Optional[int] = None) -> Optional[int]:
+    """A presenter joins a חבורות slot with a room instead of a phone."""
+    cid = add_lesson_speaker(lesson_id, name, student_id=student_id)
+    if cid and room:
+        set_candidate_room(cid, room)
+    return cid
 
 
 def set_candidate_room(candidate_id: int, room: Optional[str]) -> None:
@@ -2158,6 +2183,7 @@ _WRITES = {
     "delete_lesson_with_tasks": ("lessons", "tasks"),
     "sync_lesson_tasks": ("tasks",),
     "set_candidate_room": ("lesson_speakers",),
+    "add_chavurot_presenter": ("lesson_speakers", "speakers"),
     "set_candidate_source": ("lesson_speakers",),
     "add_lesson_speaker": ("lesson_speakers", "speakers"),
     "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),

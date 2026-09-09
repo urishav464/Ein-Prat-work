@@ -125,3 +125,15 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Cards fill their row**: `flex: 1 1 240px` on `.st-key-pipeline-grid` / `.st-key-overdue-grid`
   children, capped (`max-width`) only above 1101px so a lone card does not sit in a stripe, and
   forced to 100% below 740px. Measured 4 / 1 / 1 across at 1500 / 900 / 390 with no h-overflow.
+- **Closing a speaker happens next to the candidate** («✅ סגור מרצה» on each candidate row); there
+  is no slot-level «סגירת מרצה» button — it only ever created a task the sync had already made,
+  and a pair typed a name into the add form and pressed it. The add form is one flex row under the
+  list (the old `st.columns` split truncated its submit to «+ מו…»). The חבורות add form takes a
+  room (default בית מדרש), not a phone.
+- **A slot's open tasks are chips** (`st.container(border=True, width="content", key="ltc-…")`
+  inside a wrapping flex row, ✓ right after the text, lateness as red text). The wrapper's padding
+  is trimmed via `[data-testid="stLayoutWrapper"]:has(> [class*="st-key-ltc-"])` — the keyed class
+  sits on the inner block, the border and padding on its wrapper. They pack as many per row as the
+  column allows; in the 470px evening column that is usually one.
+- **Feedback stars + text are one flex row** (`fr.feedback` + `fr.text_input(width="stretch")`);
+  two `st.columns` in the half-width panel overlapped.

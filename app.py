@@ -352,6 +352,12 @@ RTL_CSS = """
   .st-key-pipeline-grid > *, .st-key-pipeline-past > * { flex: 1 1 240px !important; }
   .st-key-overdue-grid > * { flex: 1 1 300px !important; }
   [data-testid="stMetric"] { flex: 1 1 150px; }
+  /* A slot's task chips: a bordered container's default padding is a card's;
+     a chip wants a sliver, so two fit beside each other in a half-width column. */
+  [class*="st-key-ltc-"] { gap: .25rem !important; }
+  [data-testid="stLayoutWrapper"]:has(> [class*="st-key-ltc-"]) { padding: .15rem .45rem !important; }
+  [class*="st-key-ltc-"] [data-testid="stMarkdownContainer"] p { margin: 0; font-size: .78rem; }
+  [class*="st-key-ltc-"] button { padding: .1rem .45rem !important; min-height: 1.8rem; }
   /* Only where several cards actually fit does a cap make sense: below this a
      lone card should use the whole column, not sit in a 340px stripe. */
   @media (min-width: 1101px) {
@@ -658,7 +664,7 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
     for o in latest.values():
         if "📩" not in (o.get("status") or ""):
             continue
-        when = _parse_date((o.get("created_at") or "")[:10])
+        when = _parse_date(str(o.get("created_at") or "")[:10])
         if when and (today - when).days >= 10:
             waiting.append((o, (today - when).days))
 
@@ -1512,7 +1518,7 @@ def show_speaker_search() -> None:
                 r1.markdown(
                     f"**{_clean(row['topic'])}**"
                     + (f" · {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
-                    + f" <span class='card-meta'>{(row.get('created_at') or '')[:10]} · "
+                    + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · "
                     + f"{len((row.get('results_json') or {}).get('candidates') or [])} מועמדים</span>",
                     unsafe_allow_html=True)
                 r2.button("פתח", key=f"reopen-{row['id']}",
@@ -1687,7 +1693,7 @@ def _speaker_index_card(r: dict, history: list[dict], dup_count: int,
                         who = o.get("student_name") or "צוות"
                         where = f"משמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "—"
                         st.markdown(
-                            f"- {o['status']} · {where} · {who} · {(o.get('created_at') or '')[:10]}"
+                            f"- {o['status']} · {where} · {who} · {str(o.get('created_at') or '')[:10]}"
                             + (f" — {_clean(o['note'])}" if o.get("note") else ""))
 
 
@@ -1801,8 +1807,27 @@ def _slot_times(l: dict) -> str:
 def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
     res = dm.close_lesson_speaker(lesson_id, name, mishmar_id=mid,
                                   student_id=st.session_state.student_id)
+    # The slot's own «סגירת מרצה» task is what this click means — close it too,
+    # found by lesson_id (no guessing), open ones only.
+    closed_tasks = 0
+    for t in dm.get_tasks_for_mishmar(mid):
+        if (t.get("lesson_id") == lesson_id and t.get("category") == "מרצים"
+                and t.get("status") != "DONE"):
+            dm.update_task_status(t["id"], "DONE")
+            closed_tasks += 1
     st.toast(f"«{res['closed']}» נסגר לשיעור"
+             + (" · משימת סגירת המרצה סומנה כבוצעה" if closed_tasks else "")
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
+
+
+def _room_changed(cid: int, key: str, mid: int) -> None:
+    dm.set_candidate_room(cid, st.session_state[key] or None)
+    dm.sync_lesson_tasks(mid)          # the day-of «סידור <חלל>» tasks follow the rooms
+
+
+def _remove_presenter(cid: int, mid: int) -> None:
+    dm.delete_lesson_candidate(cid)
+    dm.sync_lesson_tasks(mid)
 
 
 def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
@@ -1812,6 +1837,8 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
     used = [c.get("room") for c in cands if c.get("room")]
     if cands:
         st.markdown("**מעבירי החבורות:**")
+        st.caption("מעביר אחד — בבית המדרש (משימת «סידור הבית מדרש»). "
+                   "משני מעבירים, כל חלל נוסף מקבל משימת סידור משלו ליום המשמר.")
     for cand in cands:
         clash = cand.get("room") and used.count(cand["room"]) > 1
         top = st.container(horizontal=True, wrap=True, gap="small",
@@ -1828,10 +1855,9 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
             index=(dm.CHAVUROT_ROOMS.index(cand["room"]) + 1)
             if cand.get("room") in dm.CHAVUROT_ROOMS else 0,
             format_func=lambda r: r or "— חלל —", label_visibility="collapsed",
-            on_change=lambda cid=cand["id"], k=rkey: dm.set_candidate_room(
-                cid, st.session_state[k] or None))
+            on_change=_room_changed, args=(cand["id"], rkey, mid))
         top.button("🗑", key=f"rmch-{cand['id']}", help="הסרת המעביר",
-                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
+                   on_click=_remove_presenter, args=(cand["id"], mid))
         skey = f"csrc-{cand['id']}"
         st.text_input(
             "דף מקורות", key=skey, value=cand.get("source_url") or "",
@@ -1844,14 +1870,16 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
 
     with st.form(f"addch-{l['id']}", border=False):
         fr = st.container(horizontal=True, wrap=True, gap="small")
-        nm = fr.text_input("שם המעביר", key=f"chn-{l['id']}", width=200,
+        nm = fr.text_input("שם המעביר", key=f"chn-{l['id']}", width="stretch",
                            label_visibility="collapsed", placeholder="שם המעביר")
-        ph = fr.text_input("טלפון", key=f"chp-{l['id']}", width=150,
-                           label_visibility="collapsed", placeholder="טלפון (רשות)")
+        room = fr.selectbox("חלל", dm.CHAVUROT_ROOMS, key=f"chr-{l['id']}", width=170,
+                            index=0, label_visibility="collapsed")
         if fr.form_submit_button("➕ מעביר") and nm.strip():
-            dm.add_lesson_speaker(l["id"], nm.strip(), phone=ph,
-                                  student_id=st.session_state.student_id)
-            st.toast(f"«{nm.strip()}» נוסף כמעביר חבורה")
+            dm.add_chavurot_presenter(l["id"], nm.strip(), room=room,
+                                      student_id=st.session_state.student_id)
+            res = dm.sync_lesson_tasks(mid)
+            st.toast(f"«{nm.strip()}» נוסף כמעביר חבורה — {room}"
+                     + (f" · נוספה משימת סידור" if res["created"] else ""))
             st.rerun()
 
 
@@ -1888,19 +1916,21 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
             on_change=lambda cid=cand["id"], k=skey: dm.update_lesson_speaker_status(
                 cid, st.session_state[k], mishmar_id=mid,
                 student_id=st.session_state.student_id))
-        cr.button("✅ סגרנו", key=f"close-{cand['id']}",
-                  help="הופך למרצה של השיעור; שאר המועמדים יוסרו",
+        cr.button("✅ סגור מרצה", key=f"close-{cand['id']}", type="primary",
+                  help="הופך למרצה של השיעור; שאר המועמדים יוסרו ומשימת סגירת המרצה נסגרת",
                   on_click=_close_candidate, args=(l["id"], cand["name"], mid))
         cr.button("🗑", key=f"rmc-{cand['id']}",
                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
+    # The add form sits right under the list, as one flex row — the old three
+    # columns squeezed the submit into «+ מו…» and it looked like a text field.
     with st.form(f"addcand-{l['id']}", border=False):
-        f1, f2, f3 = st.columns([1.6, 1.3, 0.8])
-        nm = f1.text_input("שם מרצה", key=f"cn-{l['id']}",
+        fr = st.container(horizontal=True, wrap=True, gap="small")
+        nm = fr.text_input("שם מרצה", key=f"cn-{l['id']}", width="stretch",
                            label_visibility="collapsed", placeholder="שם מרצה אפשרי")
-        ph = f2.text_input("טלפון", key=f"cp-{l['id']}",
+        ph = fr.text_input("טלפון", key=f"cp-{l['id']}", width=150,
                            label_visibility="collapsed", placeholder="טלפון (רשות)")
-        if f3.form_submit_button("➕ מועמד") and nm.strip():
+        if fr.form_submit_button("➕ מועמד") and nm.strip():
             dm.add_lesson_speaker(l["id"], nm.strip(), phone=ph,
                                   student_id=st.session_state.student_id)
             st.toast(f"«{nm.strip()}» נוסף כמועמד — וגם למאגר המשותף")
@@ -2119,29 +2149,33 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             # The tasks that belong to THIS slot, closable where the work is.
             # This is the half that was missing: the board could point at the
             # evening, and the evening could not point back.
-            for t in open_here:
-                tr = st.container(horizontal=True, wrap=False, gap="small",
-                                  vertical_alignment="center")
-                tr.markdown(
-                    f"<div class='card-meta' style='opacity:.9'>📌 "
-                    f"{_clean(t['task_description'])}"
-                    + (_chip("באיחור", "red") if t.get("overdue") else "")
-                    + "</div>", unsafe_allow_html=True, width="stretch")
-                tr.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
-                           on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
+            # Small chips, several per row when the width allows, each with
+            # its ✓ right after the text — not a full-width line with the
+            # button orphaned at the far edge.
+            if open_here:
+                chips_row = st.container(horizontal=True, wrap=True, gap="small")
+                for t in open_here:
+                    with chips_row:
+                        with st.container(border=True, width="content", key=f"ltc-{t['id']}"):
+                            ch = st.container(horizontal=True, wrap=False, gap="small",
+                                              vertical_alignment="center")
+                            late = bool(t.get("overdue"))
+                            ch.markdown(
+                                f"<span class='card-meta' style='opacity:.95;white-space:nowrap;"
+                                f"{'color:#b42318;font-weight:600' if late else ''}'>"
+                                + ("⏰ " if late else "")
+                                + f"{_clean(t['task_description'])}</span>",
+                                unsafe_allow_html=True, width="content")
+                            ch.button("✓", key=f"lt-{t['id']}", help="סמן שבוצע",
+                                      on_click=_set_status,
+                                      args=(t["id"], "DONE", "בוצע 🎉"))
 
             # The slot's own controls. «דף מקורות» opens the EDITOR, where the
             # upload and the link field live — it used to create a task and
             # navigate back to this same panel, which read as a dead button.
+            # No slot-level «סגירת מרצה» here: closing happens next to the
+            # candidate's name, and the task already exists from the sync.
             tc = st.container(horizontal=True, wrap=True, gap="small")
-            if not is_chavurot and not l.get("speaker_name"):
-                if tc.button("🎤 סגירת מרצה", key=f"td-{l['id']}-0",
-                             help="פותח את המשימה — או פותח אותה אם עוד אין"):
-                    if not any(t.get("category") == "מרצים" for t in open_here):
-                        dm.add_task(mid, f"סגירת מרצה — {head}", category="מרצים",
-                                    lesson_id=l["id"])
-                        st.toast("נפתחה משימת סגירת מרצה וקושרה למקטע")
-                    _goto(NAV_WORKFILE, mid, WF_STRUCTURE)
             if not is_chavurot:
                 tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
                           help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור",
@@ -2580,13 +2614,15 @@ def _after_tab(mid: int) -> None:
                     + (f" · 🎤 {_clean(l['speaker_name'])}" if l.get("speaker_name") else "")
                     + (" · ✅ כבר נשלח" if name in my_titles else ""),
                     unsafe_allow_html=True)
-                c1, c2 = st.columns([1, 2.6])
-                with c1:
-                    st.caption("ציון")
-                    stars = st.feedback("stars", key=f"fb-r-{l['id']}")
+                # one flex row: the stars at their own width, the text taking
+                # the rest — two columns in a half-width panel overlapped
+                fr = st.container(horizontal=True, wrap=True, gap="small",
+                                  vertical_alignment="center")
+                stars = fr.feedback("stars", key=f"fb-r-{l['id']}")
                 rating = None if stars is None else stars + 1   # 0-based → 1–5
-                words = c2.text_input("התייחסות", key=f"fb-w-{l['id']}",
-                                      placeholder="מה עבד, מה פחות")
+                words = fr.text_input("התייחסות", key=f"fb-w-{l['id']}", width="stretch",
+                                      label_visibility="collapsed",
+                                      placeholder="התייחסות — מה עבד, מה פחות")
                 entries.append((l, name, rating, words))
             if st.form_submit_button("💾 שמור משוב על הערב", type="primary"):
                 n = 0
