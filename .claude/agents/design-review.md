@@ -65,7 +65,11 @@ ONLY the JSON in §5.
 - `Bash` for the four measurements:
   1. **Dead selectors** — extract every `data-testid="…"` from `RTL_CSS` and count it in the
      installed bundle (`python3 -c "import streamlit,os;print(os.path.dirname(streamlit.__file__))"`
-     → `static/static/js/*.js`). Zero hits = dead.
+     → `static/static/js/*.js`). Zero hits = dead. **Check `data-baseweb="…"` and `role="…"`
+     selectors the same way, and prefer counting nodes in the live DOM over counting strings in
+     the bundle** — a testid-only audit passed `[data-baseweb="select"]` twice while it matched
+     **zero nodes**: 1.62 renders the selectbox through react-aria (`div[role="group"]`), so the
+     field-background and RTL rules for every dropdown in the app were dead.
   2. **Contrast** — WCAG relative luminance on the text colours the CSS actually sets
      (`.card-meta`, `.step`, chips, captions) against `#f2eee3` and `#ffffff`; an `opacity`
      must be composited into the colour first. Body text under 4.5:1 is a finding.

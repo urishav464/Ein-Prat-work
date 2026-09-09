@@ -109,13 +109,24 @@ RTL_CSS = """
      for a long time no caption in the app was ever told it is Hebrew — every
      one of them hugged the left edge. */
   [data-testid="stCaptionContainer"],
-  [data-testid="stMetric"] {
+  [data-testid="stMetric"],
+  /* Streamlit portals these to <body>, OUTSIDE stAppViewContainer — so every
+     rule scoped to the app container stops at their edge and they render LTR:
+     the dialog's title hugged the left, «כותרת | משך» read left-to-right and
+     the button row put «שמור» on the wrong side. Measured: the dialog's parent
+     IS <body> and its computed direction was ltr. */
+  [data-testid="stDialog"],
+  [data-testid="stPopoverBody"],
+  [data-testid="stToastContainer"],
+  [data-testid="stSelectboxVirtualDropdown"] {
       direction: rtl;
       text-align: right;
   }
   .stTextInput input,
   .stTextArea textarea,
-  .stSelectbox div[data-baseweb="select"] {
+  /* 1.62 renders the select through react-aria, NOT BaseWeb: the old
+     `div[data-baseweb="select"]` matched nothing (measured: 0 nodes). */
+  [data-testid="stSelectbox"] input {
       direction: rtl;
       text-align: right;
   }
@@ -209,7 +220,7 @@ RTL_CSS = """
       border: 1px solid #e8e2d4;
       border-radius: 12px;
       padding: 0.6rem 0.9rem;
-      margin-bottom: 0.4rem;
+      margin-bottom: var(--sp-2);
       width: 100%;
       cursor: pointer;
       transition: border-color .15s ease, background .15s ease, transform .1s ease;
@@ -303,7 +314,10 @@ RTL_CSS = """
   [data-testid="stTextInputRootElement"],
   [data-testid="stNumberInputContainer"],
   [data-testid="stTextArea"] textarea,
-  [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child,
+  /* the select's control in 1.62 is react-aria's `div[role="group"]`; the old
+     BaseWeb selector matched nothing, which is why every dropdown stayed
+     white-on-white while the text inputs went cream */
+  [data-testid="stSelectbox"] div[role="group"],
   [data-testid="stFileUploaderDropzone"] {
       background: #fbfaf6 !important;
       border: 1px solid var(--line) !important;
@@ -311,9 +325,34 @@ RTL_CSS = """
   }
   [data-testid="stTextInputRootElement"]:focus-within,
   [data-testid="stNumberInputContainer"]:focus-within,
-  [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child:focus-within {
+  [data-testid="stSelectbox"] div[role="group"]:focus-within {
       border-color: #1d3e7d !important;
   }
+  /* Streamlit gives stMarkdownContainer `margin-bottom: -16px` to cancel the
+     bottom margin of a trailing <p>. Our raw-HTML blocks end in a <div>, so
+     the negative margin ate 16px of real content: measured, the action row of
+     an overdue card started 11px ABOVE the end of its `.card-meta` line and
+     drew on top of it. Give back the space wherever the last child is not a
+     paragraph; Streamlit's own text blocks keep the cancellation. */
+  [data-testid="stMarkdownContainer"]:has(> :last-child:not(p)) {
+      margin-bottom: 0 !important;
+  }
+  /* four metric tiles, one height: the tile carrying a delta chip is 24px
+     taller than the plain ones and hung below the row's baseline */
+  [class*="st-key-metric-row"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
+  [class*="st-key-metric-row"] { align-items: stretch; }
+  [class*="st-key-metric-row"] [data-testid="stMetric"] { height: 100%; }
+  /* the speaker index: three cards to a row, one height, doors at the foot */
+  [class*="st-key-sp-row-"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {
+      align-items: stretch;
+  }
+  /* the column's block is already stretched to the row's height; the wrapper
+     around the card is a flex ITEM in it and stays content-tall unless told */
+  [class*="st-key-sp-row-"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] { height: 100%; }
+  [class*="st-key-sp-row-"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] { flex: 1 1 auto; }
+  [class*="st-key-card-sp-"] { height: 100%; }
+  [class*="st-key-card-sp-"] > [data-testid="stElementContainer"]:last-child,
+  [class*="st-key-card-sp-"] > [data-testid="stLayoutWrapper"]:last-child { margin-top: auto; }
   /* rhythm: 8px between a card's rows and between the controls in a row —
      Streamlit's default is 16px for both, which read as "too much air" */
   [data-testid="stHorizontalBlock"] { gap: var(--sp-2); }
@@ -368,7 +407,7 @@ RTL_CSS = """
   /* ---- Chips ---- */
   .chip {
       display: inline-block;
-      padding: 1px 10px;
+      padding: 1px var(--sp-2);
       border-radius: 999px;
       font-size: 0.72rem;
       font-weight: 600;
@@ -524,7 +563,7 @@ def _login_frame():
             f"<div style='font-size:2.2rem'>🕯️</div>"
             f"<div style='font-family:Rubik,Assistant,sans-serif;font-weight:800;"
             f"font-size:1.45rem;color:#1d3e7d'>{APP_TITLE}</div>"
-            f"<div style='opacity:.6;font-size:.85rem'>מדרשת עין פרת</div></div>",
+            f"<div style='color:#5c6577;font-size:.85rem'>מדרשת עין פרת</div></div>",
             unsafe_allow_html=True,
         )
     return box
@@ -787,26 +826,28 @@ def show_admin_dashboard() -> None:
 
     # A wrapping row, not st.columns: four tiles across on a desktop, two on
     # a phone — laid out by the browser, no rerun.
-    with st.container(horizontal=True, wrap=True, gap="medium"):
-        st.metric("משמרים", len(mishmarim), width=150)
-        st.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}", width=150)
-        st.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]), width=150)
-        # What a Mishmar that ALREADY HAPPENED cost, on average. The old tile
-        # showed the ₪500 indication — a constant, which tells nobody anything.
-        # Dividing by all 21 would read as a collapsing average all season, so
-        # the denominator is the evenings behind us, and it says which those are.
-        avg = budget["avg_per_past"]
-        c4 = st.container(width=210)
-        with c4:
-            if avg is None:
-                st.metric("ממוצע הוצאות למשמר", "—")
-                st.caption("עוד לא התקיים משמר")
-            else:
-                st.metric("ממוצע הוצאות למשמר", _fmt_nis(avg),
-                          delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
-                          delta_color="off")
-                st.caption(f"על פני {budget['past_count']} משמרים שהתקיימו · "
-                           f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])}")
+    # What a Mishmar that ALREADY HAPPENED cost, on average. The old tile
+    # showed the ₪500 indication — a constant, which tells nobody anything.
+    # Dividing by all 21 would read as a collapsing average all season, so
+    # the denominator is the evenings behind us, and it says which those are.
+    avg = budget["avg_per_past"]
+    with st.container(horizontal=True, wrap=True, gap="medium", key="metric-row"):
+        st.metric("משמרים", len(mishmarim), width=190)
+        st.metric("עם נושא סגור", f"{len(with_topic)} / {len(mishmarim)}", width=190)
+        st.metric("סה״כ הוצאות", _fmt_nis(budget["total_spent"]), width=190)
+        # The fourth tile used to carry its caption INSIDE a 210px container:
+        # one tile 210×163 beside three of 150×81, which read as a broken grid.
+        # Four identical tiles; the sentence explaining the average goes under
+        # the row, where it has the width to be a sentence.
+        if avg is None:
+            st.metric("ממוצע הוצאות למשמר", "—", width=190)
+        else:
+            st.metric("ממוצע הוצאות למשמר", _fmt_nis(avg),
+                      delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
+                      delta_color="off", width=190)
+    st.caption("עוד לא התקיים משמר" if avg is None else
+               f"הממוצע הוא על פני {budget['past_count']} משמרים שהתקיימו · "
+               f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])} למשמר")
     if total_all:
         st.progress(done_all / total_all,
                     text=f"התקדמות העונה: {done_all}/{total_all} משימות הושלמו")
@@ -1154,7 +1195,7 @@ def _stepper_html(progress: dict) -> str:
         parts.append(
             f"<div class='step {cls}'><div class='dot'>"
             f"{'✓' if ph['complete'] else ph['icon']}</div>"
-            f"<div>{ph['label']}</div><div style='opacity:.55'>{count}</div></div>"
+            f"<div>{ph['label']}</div><div style='color:#5c6577'>{count}</div></div>"
         )
         if i < len(progress["phases"]) - 1:
             parts.append(f"<div class='step-bar {'done' if ph['complete'] else ''}'></div>")
@@ -1236,7 +1277,7 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
         st.markdown(
             f"<div style='display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap'>"
             f"<span style='font-size:1.25rem;font-weight:800'>🕯️ משמר #{m['id']:02d}</span>"
-            f"<span style='opacity:.7'>{m['gregorian_date']} · {m['hebrew_date']}</span>"
+            f"<span style='color:#5c6577'>{m['gregorian_date']} · {m['hebrew_date']}</span>"
             f"<span>{''.join(c for c in chips if c)}</span></div>",
             unsafe_allow_html=True,
         )
@@ -1843,7 +1884,10 @@ def show_speaker_index() -> None:
 
     shown = st.session_state.setdefault("speaker_page_size", 24)
     for i in range(0, min(len(rows), shown), 3):
-        cols = st.columns(3)
+        # keyed so the CSS can stretch the three cards of THIS row to one
+        # height — st.columns leaves them `align-items: start` and the «פרטים»
+        # doors landed at three different heights (measured 93 / 122 / 173px).
+        cols = st.container(key=f"sp-row-{i}").columns(3)
         for col, r in zip(cols, rows[i:i + 3]):
             with col:
                 _speaker_index_card(
@@ -2243,7 +2287,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                                               vertical_alignment="center")
                             late = bool(t.get("overdue"))
                             ch.markdown(
-                                f"<span class='card-meta' style='opacity:.95;white-space:nowrap;"
+                                f"<span class='card-meta' style='white-space:nowrap;"
                                 f"{'color:#b42318;font-weight:600' if late else ''}'>"
                                 + ("⏰ " if late else "")
                                 + f"{_clean(t['task_description'])}</span>",
@@ -2316,7 +2360,7 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
                     label_visibility="collapsed",
                     on_change=lambda i=it["id"], k=f"lg-{it['id']}":
                         dm.toggle_logistics_item(i, st.session_state[k]))
-        style = "opacity:.5;text-decoration:line-through" if it.get("done") else ""
+        style = "color:#5c6577;text-decoration:line-through" if it.get("done") else ""
         lr.markdown(
             f"<div style='{style}'>{_clean(it['label'])}"
             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
@@ -2804,11 +2848,11 @@ def _workfile_body(mid: int) -> None:
             chips.append(_chip(m["mishmar_type"], "gold"))
         if partners:
             chips.append(_chip("👥 " + " · ".join(p["name"] for p in partners), "blue"))
-        title = _clean(m.get("topic") or "") or "<span style='opacity:.5'>עדיין בלי נושא</span>"
+        title = _clean(m.get("topic") or "") or "<span style='color:#5c6577'>עדיין בלי נושא</span>"
         st.markdown(
             f"<div style='display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap'>"
             f"<span style='font-size:1.35rem;font-weight:800'>🕯️ {title}</span>"
-            f"<span style='opacity:.65'>משמר #{m['id']:02d} · {m['gregorian_date']} · "
+            f"<span style='color:#5c6577'>משמר #{m['id']:02d} · {m['gregorian_date']} · "
             f"{m['hebrew_date']}</span></div>"
             f"<div style='margin-top:.25rem'>{''.join(c for c in chips if c)}</div>",
             unsafe_allow_html=True,
@@ -2864,7 +2908,7 @@ def show_sidebar() -> None:
         st.markdown(
             f"<div class='side-avatar'>{_clean(name[:1]) or '·'}</div>"
             f"<div style='font-weight:800;font-size:1.05rem'>{_clean(name)}</div>"
-            f"<div style='opacity:.6;font-size:.8rem'>"
+            f"<div style='color:#5c6577;font-size:.8rem'>"
             f"{'מדריך · אדמין' if st.session_state.role == 'admin' else 'חניך · שנה ב׳'}"
             f"</div>",
             unsafe_allow_html=True,

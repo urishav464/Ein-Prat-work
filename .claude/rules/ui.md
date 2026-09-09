@@ -31,6 +31,19 @@ paths:
 - Anything inside a raw-HTML block needs `html.escape` plus markdown stripping (`_clean()`), or backticks and `**` render literally.
 - Never start a Hebrew title with a leading digit (bidi misplaces it — "כל 21 המשמרים", not "21 המשמרים").
 
+## What Streamlit portals to `<body>` never inherits the app's RTL
+
+`st.dialog`, popovers, toasts and the selectbox's dropdown are rendered **outside
+`[data-testid="stAppViewContainer"]`** (measured: the dialog's `parentElement` is `BODY`). Every
+rule scoped to that container therefore stops at their edge, and they render **LTR**: the slot
+editor's title hugged the left, its field pair read «כותרת | משך» left-to-right, and its button
+row put «💾 שמור» leftmost with «🗑 מחק מקטע» where the eye lands first. Element- and class-scoped
+rules (`h1..h6`, `.stButton button`) still reach inside, which is what made the bug look partial
+and survive two design passes. The four portal roots are named explicitly in the base RTL rule —
+`stDialog`, `stPopoverBody`, `stToastContainer`, `stSelectboxVirtualDropdown`. **Add any new
+portaled primitive to that list**; measure with `!!el.closest('[data-testid=stAppViewContainer]')`,
+never by eye.
+
 ## The design system (config.toml theme + one injected CSS layer)
 
 - **Base colors live in `.streamlit/config.toml`** (Ein-Prat brand: navy `#1d3e7d` primary on parchment `#f2eee3`) so Streamlit's own primitives — primary buttons, progress bars, focus rings — follow without CSS fights. The CSS layer adds Rubik headings / Assistant body, a 4/8px spacing scale (`--sp-1..6`), hairline card borders instead of shadows, and ghost secondary buttons.
@@ -147,7 +160,9 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Taken**: metric tiles (`[data-testid="stMetric"]` styled with the card grammar); a reading
   width (`stMainBlockContainer` max 1320px); solid muted ink `#5c6577` for `.card-meta`, `.step`
   and captions instead of `opacity` (0.65 of the text colour on parchment measured 4.0:1, under
-  4.5:1); icon-only buttons (✏️ 🗑 ✕ ✓) were briefly `type="tertiary"` and then, by decision
+  4.5:1) — **and the same for inline `style='opacity:…'` on raw HTML**: seven such spans survived
+  the first pass at .5–.7 (2.78:1 to 4.72:1 composited) and are now `color:#5c6577` too; the
+  struck-through «done» logistics line keeps the strike and drops the dimming; icon-only buttons (✏️ 🗑 ✕ ✓) were briefly `type="tertiary"` and then, by decision
   («כולם בקופסאות קטנות ואחידות»), became **uniform 32×32 boxes**: every icon-only button has a
   key prefixed `ib-` (`ib-dn-` ✓ · `ib-ed-` ✏️ · `ib-rm-`/`ib-rmc-`/`ib-rmch-` 🗑 · `ib-brx-`/`ib-lgx-`
   ✕ · `ib-lt-` chip ✓) and one rule `[class*="st-key-ib-"] button { width/height: 2rem; padding: 0;
@@ -156,8 +171,27 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Fields must be bounded on both surfaces**: `secondaryBackgroundColor = #ffffff` makes every
   input wrapper white with a **white 1px border**, invisible on a white card. The field rule
   (`stTextInputRootElement`, `stNumberInputContainer`, `stTextArea textarea`, the selectbox's
-  `[data-baseweb="select"] > div:first-child`, `stFileUploaderDropzone`) paints `#fbfaf6` with a
-  `var(--line)` border, 8px radius.
+  control, `stFileUploaderDropzone`) paints `#fbfaf6` with a `var(--line)` border, 8px radius.
+- **The selectbox is react-aria in 1.62, not BaseWeb.** `[data-baseweb="select"]` matches **zero
+  nodes** (measured); the control is `[data-testid="stSelectbox"] div[role="group"]` and the value
+  sits in its `input`. Two rules named the BaseWeb selector — the field background and the RTL
+  rule — so every dropdown in the app stayed white-on-white while the text inputs went cream.
+  **A dead-selector audit that only checks `data-testid` misses this**: `data-baseweb` and
+  `role` selectors need checking too.
+- **Streamlit's `stMarkdownContainer` carries `margin-bottom: -16px`** to cancel the bottom margin
+  of a trailing `<p>`. Our raw-HTML blocks end in a `<div>`, so the negative margin ate 16px of
+  real content: the overdue card's action row started **11px above the end of its `.card-meta`
+  line** and drew on top of it. The rule
+  `[data-testid="stMarkdownContainer"]:has(> :last-child:not(p)) { margin-bottom: 0 }` gives the
+  space back wherever the last child is not a paragraph, and leaves Streamlit's own text alone.
+- **Equal heights are opt-in, per row.** `st.columns` leaves its row `align-items: start`, so the
+  speaker index's three cards ended at three different heights (93 / 122 / 173px) and the «פרטים»
+  doors never lined up. Each row is wrapped in a keyed container (`sp-row-{i}`); the CSS stretches
+  the row, gives the column's block `height: 100%`, makes the card's `stLayoutWrapper` a growing
+  flex item (`flex: 1 1 auto` — it is a flex ITEM in a column and stays content-tall otherwise),
+  and pushes the card's last child down with `margin-top: auto`. Measured after: 189 / 189 / 189.
+  The four dashboard metric tiles use the same grammar (`metric-row`), all at `width=190`; the
+  fourth tile's explanatory caption moved OUT of the row, where it has room to be a sentence.
 - **Gaps are on the scale, not Streamlit's default**: `stHorizontalBlock { gap: var(--sp-2) }`
   (rows of controls were 16px apart) and the card's inner gap is 8px through the `card-` rule.
 - **Chips pad the keyed block, not its wrapper**: `[class*="st-key-ltc-"] { padding: 2px 8px }`
