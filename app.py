@@ -310,7 +310,11 @@ RTL_CSS = """
       box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
   }
   [data-testid="stMetricValue"] { font-size: 1.45rem !important; font-weight: 700; color: #1d3e7d; }
+  /* Streamlit ellipsizes a metric label at the tile's width; Hebrew labels
+     are long, so let them wrap instead of cutting «ממוצע הוצאות למשמר». */
   [data-testid="stMetricLabel"] { color: #5c6577; }
+  [data-testid="stMetricLabel"] > div, [data-testid="stMetricLabel"] p {
+      white-space: normal !important; overflow: visible !important; text-overflow: clip; }
 
   /* ---- Chips ---- */
   .chip {
@@ -744,7 +748,7 @@ def show_admin_dashboard() -> None:
         # Dividing by all 21 would read as a collapsing average all season, so
         # the denominator is the evenings behind us, and it says which those are.
         avg = budget["avg_per_past"]
-        c4 = st.container(width=170)
+        c4 = st.container(width=210)
         with c4:
             if avg is None:
                 st.metric("ממוצע הוצאות למשמר", "—")
