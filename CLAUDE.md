@@ -21,6 +21,8 @@ Without a venv, `Authlib`→`cryptography` fails on Debian/Ubuntu system Python 
 ```bash
 python3 -m py_compile app.py data_manager.py chat_agent.py speaker_search.py chat_panel.py archive.py   # the only static check
 MISHMAR_NO_CACHE=1 streamlit run app.py                                                                  # read cache off, for scripts that write around the seam
+python3 scripts/rerun_audit.py app.py                 # what every click costs; exit 1 on a write+st.rerun() double run
+python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules/streamlit-dom.md after a Streamlit upgrade
 ```
 
 There is no test suite and no live Supabase reachable from a sandbox. Verification runs on a local PostgreSQL 16 + a PostgREST-shaped shim + headless Chromium — described in `.claude/rules/database.md` §"Verifying changes" and `.claude/rules/ui.md` §"Verifying the UI", run end to end by the `deploy-check` agent. Without Streamlit secrets the app boots in name-only dev login, but storage still needs Supabase — there is no local storage mode.
@@ -43,7 +45,7 @@ Path-scoped rules load automatically when their files enter context:
 - `.claude/rules/chat-agent.md` — the dormant chat loop and the live scout: the Mishmar-scoping rule and the four cost ceilings that keep a turn flat.
 - **Performance is a rule, not a phase**: reads are cached by table and every write invalidates through `data_manager` (`_READS`/`_WRITES`); buttons use `on_click`, never `write(); st.rerun()`; the workfile body and the chat are fragments. Details in `database.md` and `ui.md`.
 
-**`system_rules.md` is the operating layer** — read it when acting as the programme's assistant rather than as a repo developer. `.claude/skills/` holds the programme's recurring workflows; `.claude/agents/` holds the specialized subagents (speaker-scout, topic-ideation, archive-diver, app-reviewer, weekly-brief, deploy-check, design-review).
+**`system_rules.md` is the operating layer** — read it when acting as the programme's assistant rather than as a repo developer. `.claude/skills/` holds the programme's recurring workflows; `.claude/agents/` holds the specialized subagents (speaker-scout, topic-ideation, archive-diver, app-reviewer, weekly-brief, deploy-check, design-review, rerun-audit).
 
 ## Repository structure
 

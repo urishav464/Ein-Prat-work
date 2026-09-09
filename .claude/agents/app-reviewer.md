@@ -96,6 +96,9 @@ ONLY the JSON in §6. The parent is paying for every token you send back.
 - The cache breakpoint stays after the stable prefix. No tool accepts a `mishmar_id` from the model.
 
 ### Hebrew UI
+- A diff that touches `RTL_CSS` is checked against `.claude/rules/streamlit-dom.md` (generated
+  from the installed bundle): a `data-testid` not in that list is a dead rule — the card
+  primitive was unstyled for a whole release this way.
 - `st.columns` mirrors under RTL; `st.dataframe` does not. Raw HTML goes through `_clean`.
 - `st.caption` renders `stCaptionContainer`, **not** `stMarkdownContainer` — a new RTL rule must
   list it or captions align left.

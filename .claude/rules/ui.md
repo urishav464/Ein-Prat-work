@@ -152,3 +152,32 @@ More probe traps that produced false test results here: **input placeholders nev
 - `.claude/agents/design-review.md` audits screens against this section by measuring: dead
   selectors against the installed bundle, WCAG contrast of the colours actually set, off-scale
   spacing, RTL misses, button noise. Read-only; JSON findings with a measured value each.
+
+## Editors are dialogs; every click has a known cost
+
+- **Task and slot editors are `@st.dialog`s** (`_task_edit_dialog`, `_lesson_edit_dialog`), opened
+  from ✏️ (and «📎 דף מקורות») with a plain `if` — opening a dialog is a rerun by nature. The
+  `editing_task` / `editing_lesson` session keys are gone; `st.rerun()` at the end of the dialog is
+  what closes it. Literal `session_state` keys: 14.
+- **`scripts/rerun_audit.py` is the click-cost contract**: one row per widget site — `callback`
+  (on_click/on_change), `fragment`, `page`, `nav` (body calls `_goto`/`logout`/opens a dialog),
+  `form-submit`, `rerun` (legitimate only after a submit, to close a dialog, or for nav/auth).
+  Exit 1 on a `page` site or a `DOUBLE RUN`. The `rerun-audit` agent runs it and, on request,
+  measures representative clicks on the harness. The search screen's «אמת» / «הוסף למאגר» are the
+  sanctioned `page` sites: the screen is not a fragment and each runs a long verify — noted, not
+  hidden.
+- **Dashboard ✓ was measured and left as a page rerun** (~400 ms, 2 queries): the pipeline's
+  «n באיחור» chips and the metrics depend on the same write, so a fragment would need a page-scope
+  rerun anyway — no gain to take.
+- **Focus is visible**: a 2px navy `outline` on `:focus-visible` for buttons, inputs, selects and
+  the nav card (`label:has(input:focus-visible)` — its radio input is hidden). `help=` renders a
+  tooltip, NOT an `aria-label`; Streamlit gives no way to name an icon button in Hebrew for a
+  screen reader — a known limitation, not something `help=` covers.
+- **`.claude/rules/streamlit-dom.md` is generated** (`scripts/streamlit_dom_context.py`) from the
+  installed bundle: every `data-testid` + the measured structural facts. Regenerate after any
+  Streamlit upgrade; `design-review` and `app-reviewer` read it instead of remembering.
+- Sanctioned off-scale values: the sidebar nav card padding (`0.6rem 0.9rem`) and the phone
+  button paddings (`.25rem .55rem`) are deliberate fine-tuning — an audit may list them, not fail
+  on them.
+- `[data-testid="stButtonGroup"]` (`segmented_control`, `st.pills`) labels through
+  `DynamicButtonLabel`, not markdown — it needs its own RTL rule (added), like `stCaptionContainer`.

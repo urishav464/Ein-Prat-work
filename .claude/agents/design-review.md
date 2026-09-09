@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: sonnet
 disallowedTools: Write, Edit, NotebookEdit
 effort: medium
-maxTurns: 20
+maxTurns: 35
 color: pink
 ---
 
@@ -22,8 +22,9 @@ Every finding you return is a measurement against a rule this repo already made.
   layer (`app.RTL_CSS`), a 4/8px scale (`--sp-1..6`), hairline cards (not shadows), ghost
   secondary buttons, `.chip` tags, the `.stepper`, headings with a navy `border-right` accent,
   RTL on every text container including `stCaptionContainer`. You check against THAT.
-- **Streamlit 1.62 renamed things.** `stVerticalBlockBorderWrapper` is gone (bordered containers
-  are a `stLayoutWrapper` carrying the border); `st.container(horizontal=True, wrap=…)` and
+- **Streamlit 1.62 renamed things.** `stVerticalBlockBorderWrapper` is gone (the border, radius and
+  padding sit on the `stVerticalBlock` itself, marked by `data-test-scroll-behavior`; sizing sits
+  on a `stLayoutWrapper` around it); `st.container(horizontal=True, wrap=…)` and
   `width=` exist; `st.caption` renders `stCaptionContainer`; icons are `stIconMaterial` ligature
   text. A selector that names a testid absent from the installed bundle is a dead rule, and a
   dead rule is a **high** finding — the card primitive was silently unstyled for a whole release
@@ -54,8 +55,12 @@ ONLY the JSON in §5.
 ## 4. Tools — what to measure and how
 
 **Use:**
-- `Read` / `Grep` on `app.py` (the `RTL_CSS` block and every `type=` on buttons) and on
-  `.claude/rules/ui.md`.
+- `Read` on `.claude/rules/streamlit-dom.md` FIRST — the generated list of every `data-testid`
+  the installed bundle contains plus the measured structural facts; `Read` / `Grep` on `app.py`
+  (the `RTL_CSS` block and every `type=` on buttons) and on `.claude/rules/ui.md`.
+- **Measure in this order, and emit findings as you go**: dead-css → contrast → rtl → spacing →
+  buttons. A budget cut mid-way then still returns the severe ones; the first run of this agent
+  ran out of turns one step before its JSON.
 - `Bash` for the four measurements:
   1. **Dead selectors** — extract every `data-testid="…"` from `RTL_CSS` and count it in the
      installed bundle (`python3 -c "import streamlit,os;print(os.path.dirname(streamlit.__file__))"`

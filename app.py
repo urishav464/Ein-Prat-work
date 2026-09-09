@@ -125,6 +125,9 @@ RTL_CSS = """
   .stButton button, .stFormSubmitButton button { direction: rtl; }
   [data-testid="stExpander"] summary { direction: rtl; text-align: right; }
   [data-testid="stProgress"] { direction: rtl; }
+  /* segmented_control and st.pills label through DynamicButtonLabel, not markdown —
+     the markdown RTL rule never reaches them (the stCaptionContainer lesson again) */
+  [data-testid="stButtonGroup"] { direction: rtl; justify-content: flex-start; }
   [data-testid="stChatInput"] textarea { direction: rtl; text-align: right; }
 
   /* ---- Sidebar: warm ground, and the nav radio restyled as cards.
@@ -232,6 +235,15 @@ RTL_CSS = """
   }
   [data-testid="stSidebar"] div[role="radiogroup"] > label > div > div > div:first-child {
       display: none;
+  }
+
+  /* ---- Keyboard: a ring you can see. Streamlit's own focus style is faint on
+     tertiary buttons and absent on the nav cards (their radio input is hidden). ---- */
+  button:focus-visible, input:focus-visible, textarea:focus-visible,
+  [data-baseweb="select"]:focus-within,
+  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:focus-visible) {
+      outline: 2px solid #1d3e7d !important;
+      outline-offset: 2px;
   }
 
   .side-avatar {
@@ -358,12 +370,12 @@ RTL_CSS = """
   .step-bar.done { background: #137333; }
   /* when each phase is recommended to close — the axis answers «by when», not
      just «where are we» */
-  .step-due { font-size: .66rem; opacity: .6; direction: ltr; }
+  .step-due { font-size: .66rem; color: #5c6577; direction: ltr; }   /* solid: opacity .6 measured 2.4:1 */
   .step-due.late { color: #b3261e; opacity: 1; font-weight: 700; }
   .stepper-mini .step { min-width: 46px; font-size: .62rem; }
   .stepper-mini .step .dot { width: 24px; height: 24px; font-size: .72rem;
                              border-width: 2px; }
-  .stepper-mini .step-bar { margin-top: 11px; height: 2px; }
+  .stepper-mini .step-bar { margin-top: 12px; height: 2px; }
   .stepper-mini .step-due { font-size: .6rem; }
 
   /* ---- Mobile: Streamlit stacks columns by itself below ~640px; these
@@ -433,8 +445,7 @@ def _init_session() -> None:
 def logout() -> None:
     """Clear the session. Under Google auth, also end the OIDC session."""
     for key in ("role", "user_name", "student_id", "search_result",
-                "verify_name", "verify_cache", "nav", "chat_open",
-                "chat_history", "chat_loaded_for", "chat_mishmar"):
+                "verify_name", "verify_cache", "nav"):
         st.session_state.pop(key, None)
     if auth_configured() and getattr(st.user, "is_logged_in", False):
         st.logout()
@@ -1850,6 +1861,11 @@ def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
 
 
+def _sync_tasks_clicked(mid: int) -> None:
+    res = dm.sync_lesson_tasks(mid)
+    st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}")
+
+
 def _room_changed(cid: int, key: str, mid: int) -> None:
     dm.set_candidate_room(cid, st.session_state[key] or None)
     dm.sync_lesson_tasks(mid)          # the day-of «סידור <חלל>» tasks follow the rooms
@@ -1967,10 +1983,12 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
             st.rerun()
 
 
-def _lesson_form(mid: int, l: dict) -> None:
-    """The slot's editor. Lives behind a session-state toggle, not an
-    expander — expanders remember their open state client-side, so the old
-    editor never collapsed after saving."""
+@st.dialog("עריכת מקטע", width="large")
+def _lesson_edit_dialog(mid: int, l: dict) -> None:
+    """The slot's editor as a modal. It used to unfold inline inside the card
+    (eleven fields and an uploader pushing the whole column down); a dialog
+    keeps the evening readable behind it and needs no session-state toggle —
+    `st.rerun()` at the end is what closes it."""
     with st.form(f"lesson-{l['id']}", border=False):
         c1, c2 = st.columns(2)
         title = c1.text_input("כותרת", value=l.get("title") or "")
@@ -2007,11 +2025,9 @@ def _lesson_form(mid: int, l: dict) -> None:
 
     if delete:
         res = dm.delete_lesson_with_tasks(mid, l["id"])
-        st.session_state["editing_lesson"] = None
         st.toast(f"המקטע נמחק · נמחקו איתו {res['tasks']} משימות פתוחות שלו")
         st.rerun()
     if cancel:
-        st.session_state["editing_lesson"] = None
         st.rerun()
     if saved:
         dm.upsert_lesson(mid, l["slot_order"], title=title,
@@ -2027,7 +2043,6 @@ def _lesson_form(mid: int, l: dict) -> None:
         if source or link.strip() != (l.get("source_url") or ""):
             dm.set_lesson_source(l["id"], source or link)
         dm.recompute_lesson_times(mid)
-        st.session_state["editing_lesson"] = None
         st.toast("המקטע נשמר"); st.rerun()
 
 
@@ -2083,7 +2098,6 @@ def _topic_and_structure(mid: int, tasks: list[dict],
     if candidates is None:
         candidates = dm.get_lesson_speakers(mid, lessons=lessons)
     linked = dm.get_tasks_for_lesson(tasks=tasks)
-    editing = st.session_state.get("editing_lesson")
     focus = st.session_state.pop("wf_focus_lesson", None)
 
     # A task that arrived through a «פתח» door resolves to ONE slot here: its
@@ -2101,7 +2115,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
         for l in lessons:
             if not l.get("is_break") and not l.get("speaker_name") \
                     and (l.get("lesson_role") or "") != "חבורות":
-                st.session_state["editing_lesson"] = editing = l["id"]
+                highlight = l["id"]        # the dialog is the pair's call; we only point
                 break
     if focus_task:
         where = "" if highlight else " — לא זוהה מקטע ספציפי, בחרו למטה"
@@ -2207,26 +2221,23 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             # candidate's name, and the task already exists from the sync.
             tc = st.container(horizontal=True, wrap=True, gap="small")
             if not is_chavurot:
-                tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
-                          help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור",
-                          on_click=_set_state, args=("editing_lesson", l["id"]))
-            tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע", type="tertiary",
-                      on_click=_toggle, args=("editing_lesson", l["id"]))
+                if tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
+                             help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור"):
+                    _lesson_edit_dialog(mid, l)
+            # opening a dialog IS a rerun, so a plain `if` is the honest form here
+            if tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע", type="tertiary"):
+                _lesson_edit_dialog(mid, l)
 
-            if editing == l["id"]:
-                _lesson_form(mid, l)
 
     ac = st.container(horizontal=True, wrap=True, gap="small")
     ac.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
     ac.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
     # For an evening built before the slots owned their tasks: fills in what is
     # missing and clears tasks whose slot is gone. Never touches a DONE row.
-    if ac.button("🔄 סנכרן משימות למקטעים",
-                 help="משלים לכל מקטע את המשימות שלו — סגירת מרצה, דף מקורות, "
-                      "ובחבורות גם מי מעביר וחלוקת החללים"):
-        res = dm.sync_lesson_tasks(mid)
-        st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}")
-        st.rerun()
+    ac.button("🔄 סנכרן משימות למקטעים",
+              help="משלים לכל מקטע את המשימות שלו — סגירת מרצה, דף מקורות, "
+                   "ובחבורות גם מי מעביר וחלוקת החללים",
+              on_click=_sync_tasks_clicked, args=(mid,))
 
 
 def _slot_label(l: dict, index: int) -> str:
@@ -2380,8 +2391,6 @@ def _reset_dialog(mid: int) -> None:
     ok = st.checkbox(f"אני מבין/ה — לאפס את משמר #{mid:02d}", key=f"rst-ok-{mid}")
     if st.button("🗑 אפס את המשמר", key=f"rst-{mid}", type="primary", disabled=not ok):
         res = dm.reset_mishmar(mid)
-        st.session_state["editing_lesson"] = None
-        st.session_state["editing_task"] = None
         st.toast(
             f"המשמר אופס · נמחקו {res['lessons']} מקטעים, {res['tasks']} משימות · "
             f"הוחזרו {res['tasks_restored']} משימות מקוריות")
@@ -2451,6 +2460,40 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
         _tasks_tab(mid, progress, lessons)
 
 
+@st.dialog("עריכת משימה")
+def _task_edit_dialog(t: dict, slots: list[dict]) -> None:
+    """The task editor as a modal — the inline form used to unfold inside the
+    card and push the whole column. `st.rerun()` closes it."""
+    with st.form(f"edit-{t['id']}", border=False):
+        desc = st.text_input("כותרת", value=t["task_description"])
+        details = st.text_area("תיאור", value=t.get("details") or "",
+                               height=68)
+        due = st.text_input("מומלץ עד (dd.mm.yyyy)",
+                            value=_fmt_date(t["due_date"]) if t.get("due_date") else "")
+        # Tying a task to a slot by hand — this is what turns the guess
+        # above into a fact. «לא שייך למקטע» is the honest default:
+        # כיבוד, קישוט and הזמנה belong to the evening, not to a slot.
+        choices = [None] + [l["id"] for l in slots]
+        labels = {l["id"]: _slot_label(l, i + 1)
+                  for i, l in enumerate(slots)}
+        new_slot = st.selectbox(
+            "שייך למקטע בערב", choices,
+            index=choices.index(t["lesson_id"])
+            if t.get("lesson_id") in choices else 0,
+            format_func=lambda i: labels.get(i, "— לא שייך למקטע —"),
+            key=f"edit-slot-{t['id']}") if slots else None
+        if st.form_submit_button("💾 שמור", type="primary"):
+            iso = None
+            d = _parse_date(due)
+            if d:
+                iso = d.isoformat()
+            dm.edit_task(t["id"], description=desc, details=details,
+                         due_date=iso if due.strip() else None)
+            if slots and new_slot != t.get("lesson_id"):
+                dm.link_task_to_lesson(t["id"], new_slot)
+            st.toast("נשמר"); st.rerun()
+
+
 def _wf_task_card(t: dict, mid: int, key_prefix: str,
                   lessons: Optional[list[dict]] = None) -> None:
     """A workfile task card: the task is the point, the controls are small.
@@ -2514,41 +2557,11 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         else:
             row.button("↩ החזר", key=f"{k}-re",
                       on_click=_set_status, args=(t["id"], "TO DO"))
-        row.button("✏️", key=f"{k}-ed", help="עריכה", type="tertiary",
-                  on_click=_toggle, args=("editing_task", t["id"]))
+        if row.button("✏️", key=f"{k}-ed", help="עריכה", type="tertiary"):
+            _task_edit_dialog(t, slots)
         row.button("🗑", key=f"{k}-rm", help="מחיקה", type="tertiary",
                   on_click=dm.delete_task, args=(t["id"],))
 
-        if st.session_state.get("editing_task") == t["id"]:
-            with st.form(f"edit-{k}", border=False):
-                desc = st.text_input("כותרת", value=t["task_description"])
-                details = st.text_area("תיאור", value=t.get("details") or "",
-                                       height=68)
-                due = st.text_input("מומלץ עד (dd.mm.yyyy)",
-                                    value=_fmt_date(t["due_date"]) if t.get("due_date") else "")
-                # Tying a task to a slot by hand — this is what turns the guess
-                # above into a fact. «לא שייך למקטע» is the honest default:
-                # כיבוד, קישוט and הזמנה belong to the evening, not to a slot.
-                choices = [None] + [l["id"] for l in slots]
-                labels = {l["id"]: _slot_label(l, i + 1)
-                          for i, l in enumerate(slots)}
-                new_slot = st.selectbox(
-                    "שייך למקטע בערב", choices,
-                    index=choices.index(t["lesson_id"])
-                    if t.get("lesson_id") in choices else 0,
-                    format_func=lambda i: labels.get(i, "— לא שייך למקטע —"),
-                    key=f"{k}-slot") if slots else None
-                if st.form_submit_button("💾 שמור", type="primary"):
-                    iso = None
-                    d = _parse_date(due)
-                    if d:
-                        iso = d.isoformat()
-                    dm.edit_task(t["id"], description=desc, details=details,
-                                 due_date=iso if due.strip() else None)
-                    if slots and new_slot != t.get("lesson_id"):
-                        dm.link_task_to_lesson(t["id"], new_slot)
-                    st.session_state["editing_task"] = None
-                    st.toast("נשמר"); st.rerun()
 
 
 def _wf_task_grid(items: list[dict], mid: int, prefix: str,
@@ -2825,9 +2838,9 @@ def show_sidebar() -> None:
         st.divider()
         st.caption('🕯️ שנה ב׳ · תשפ״ז · 5787')
         st.caption(f"גרסה: {build_stamp()}")
-        if st.button("התנתק", width="stretch"):
-            logout()
-            st.rerun()
+        # a callback: logout runs before the page renders, so one run draws
+        # the login screen — `if button: logout(); st.rerun()` drew it twice
+        st.button("התנתק", width="stretch", on_click=logout)
 
 
 def _route_main() -> None:
