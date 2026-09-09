@@ -41,7 +41,7 @@ paths:
 - **Full-width sidebar controls need `align-self: stretch` AND the element container**: the nav radio's `stElementContainer` is sized to its content (137px in a 239px block), and the label's inner wrappers are RTL flex rows that pack RIGHT — so `width: 100%` on the label and `text-align: center` on the `<p>` changed nothing. The rules that work: stretch `stElementContainer`/`stRadio`/`radiogroup`, and `justify-content: center` on the label's inner `div`s (verified: left gap == right gap on all four cards).
 - **`st.caption` renders `data-testid="stCaptionContainer"`, NOT `stMarkdownContainer`** (`StreamlitMarkdown.*.js`, chosen by the `isCaption` prop). It must be in the RTL selector list explicitly — until it was, no caption in the app was ever right-aligned.
 - `build_stamp()` shows the deployed short SHA + commit time in the sidebar — the answer to "did the deploy update?".
-- Card primitive = `st.container(border=True)` (styled white/rounded/shadow globally). Tags = `.chip .chip-{red,yellow,green,gray,gold,blue}`. Phases = `.stepper/.step/.step-bar`. Chat bubbles style `[data-testid="stChatMessage"]`; avatars hidden via `[data-testid^="stChatMessageAvatar"]`.
+- Card primitive = `st.container(border=True)`. **In Streamlit 1.62 the border lives on the `stVerticalBlock` itself** — `stVerticalBlockBorderWrapper` is gone from the bundle, and the white/rounded/hairline card rule was silently dead for a whole release because it still named it. **Audit every `data-testid` in `RTL_CSS` against `streamlit/static/static/js/*.js` after any Streamlit upgrade** (the `design-review` agent does exactly this; zero hits = dead rule). Tags = `.chip .chip-{red,yellow,green,gray,gold,blue}`. Phases = `.stepper/.step/.step-bar`. Chat bubbles style `[data-testid="stChatMessage"]`; avatars hidden via `[data-testid^="stChatMessageAvatar"]`.
 - The sidebar nav is `st.radio` restyled: the label IS the card; the radio mark is drawn twice in the DOM (hidden input wrapper `label > span:first-child` AND a 16px circle at `label > div > div > div:first-child`) — both must stay hidden.
 - No data dumps: prefer cards/grids/steppers over giant tables; long grids fold into expanders (open only when nothing urgent).
 
@@ -137,3 +137,18 @@ More probe traps that produced false test results here: **input placeholders nev
   column allows; in the 470px evening column that is usually one.
 - **Feedback stars + text are one flex row** (`fr.feedback` + `fr.text_input(width="stretch")`);
   two `st.columns` in the half-width panel overlapped.
+
+## Design pass (the Twitter-prompt comparison) — what was taken, what was not
+
+- **Taken**: metric tiles (`[data-testid="stMetric"]` styled with the card grammar); a reading
+  width (`stMainBlockContainer` max 1320px); solid muted ink `#5c6577` for `.card-meta`, `.step`
+  and captions instead of `opacity` (0.65 of the text colour on parchment measured 4.0:1, under
+  4.5:1); icon-only buttons (✏️ 🗑 ✕) are `type="tertiary"` — a box around a glyph was the loudest
+  thing on the workfile; one voice for «nothing yet» via `_empty(text, hint)` (dashed hairline,
+  muted), replacing the mix of `st.info` / `st.caption`.
+- **Not taken, by decision**: any palette change (navy/parchment is the brand), Inter/Geist
+  (Hebrew: Rubik/Assistant), dark mode (locked light), sticky headers, third-party component
+  libraries. A design finding that proposes any of these is out of scope.
+- `.claude/agents/design-review.md` audits screens against this section by measuring: dead
+  selectors against the installed bundle, WCAG contrast of the colours actually set, off-scale
+  spacing, RTL misses, button noise. Read-only; JSON findings with a measured value each.

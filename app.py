@@ -248,6 +248,9 @@ RTL_CSS = """
       --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
       --line: #e3ddcc;
   }
+  /* a reading width: wide mode on a 2560px screen stretched the dashboard
+     across the whole glass. 1320px keeps four cards and stops there. */
+  [data-testid="stMainBlockContainer"] { max-width: 1320px; }
   h1 { margin-bottom: var(--sp-2) !important; }
   h3, h4 { margin: var(--sp-5) 0 var(--sp-2) !important; }
   /* a quiet navy accent instead of an emoji per heading. A physical RIGHT
@@ -257,22 +260,26 @@ RTL_CSS = """
       border-right: 4px solid #1d3e7d;
       padding-right: var(--sp-2);
   }
-  [data-testid="stDivider"] hr, hr {
+  hr {
       border-color: var(--line) !important;
       opacity: .6;
       margin: var(--sp-4) 0 !important;
   }
-  [data-testid="stCaptionContainer"] { line-height: 1.5; }
+  [data-testid="stCaptionContainer"] { line-height: 1.5; color: #5c6577 !important; }
 
-  /* ---- Cards: depth from a hairline, not a shadow ---- */
-  [data-testid="stVerticalBlockBorderWrapper"] {
+  /* ---- Cards: depth from a hairline, not a shadow.
+     Streamlit 1.62 draws st.container(border=True) on the stVerticalBlock
+     ITSELF (1px at 20% text colour, 8px radius, 15px padding) — the old
+     `stVerticalBlockBorderWrapper` is gone from the bundle, and this rule was
+     dead for a whole release. A bordered block is the one that carries
+     data-test-scroll-behavior; plain blocks do not (measured: 38 vs 5). ---- */
+  [data-testid="stVerticalBlock"][data-test-scroll-behavior] {
       background: #ffffff;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
-  }
-  [data-testid="stVerticalBlockBorderWrapper"] > div > div[data-testid="stVerticalBlock"] {
+      border: 1px solid var(--line) !important;
+      border-radius: 12px !important;
+      padding: var(--sp-4) !important;
       gap: var(--sp-2);
+      box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
   }
 
   /* ---- Expanders: hairline, not a boxed box ---- */
@@ -294,9 +301,16 @@ RTL_CSS = """
       background: #f7f9fd;
   }
 
-  /* ---- Metrics: quieter numbers ---- */
-  [data-testid="stMetricValue"] { font-size: 1.45rem !important; font-weight: 700; }
-  [data-testid="stMetricLabel"] { opacity: .65; }
+  /* ---- Metrics: tiles, the same grammar as the cards ---- */
+  [data-testid="stMetric"] {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: var(--sp-3) var(--sp-4);
+      box-shadow: 0 1px 2px rgba(29, 62, 125, 0.05);
+  }
+  [data-testid="stMetricValue"] { font-size: 1.45rem !important; font-weight: 700; color: #1d3e7d; }
+  [data-testid="stMetricLabel"] { color: #5c6577; }
 
   /* ---- Chips ---- */
   .chip {
@@ -316,12 +330,16 @@ RTL_CSS = """
   .chip-blue   { background: #e7edf9; color: #1d3e7d; }   /* info */
 
   .task-desc { font-weight: 600; line-height: 1.45; margin-bottom: 4px; }
-  .card-meta { opacity: 0.65; font-size: 0.78rem; margin-top: 4px; }
+  .empty { color: #5c6577; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--line);
+           border-radius: 12px; margin: var(--sp-2) 0; }
+  /* solid muted ink, not opacity: .65 of the text colour on parchment was
+     4.0:1 — under the 4.5:1 body-text bar. #5c6577 is 5.1:1 on parchment. */
+  .card-meta { color: #5c6577; font-size: 0.78rem; margin-top: 4px; }
 
   /* ---- The phase stepper ---- */
   .stepper { display: flex; align-items: flex-start; margin: .5rem 0 .3rem; }
   .step { display: flex; flex-direction: column; align-items: center; gap: 3px;
-          flex: 0 0 auto; font-size: .7rem; color: #6a6455; min-width: 58px; }
+          flex: 0 0 auto; font-size: .7rem; color: #5c6577; min-width: 58px; }
   .step .dot {
       width: 34px; height: 34px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
@@ -849,7 +867,7 @@ def show_admin_dashboard() -> None:
                 f"{_fmt_nis(budget['nominal_per_mishmar'])}."
             )
         else:
-            st.info("עוד לא התקיים משמר — הטבלה תתמלא אחרי הערב הראשון.")
+            _empty("עוד לא התקיים משמר.", "הטבלה תתמלא אחרי הערב הראשון.")
 
     if auth_configured():
         with st.expander("🔗 שיוך חשבונות"):
@@ -972,6 +990,14 @@ def _fmt_date(value) -> str:
     """ISO out of Postgres, day.month.year in the UI — the repo's convention."""
     d = _parse_date(value)
     return f"{d.day}.{d.month}.{d.year}" if d else str(value or "")
+
+
+def _empty(text: str, hint: str = "") -> None:
+    """The app's one voice for «nothing here yet»: a quiet line, never a blue
+    info box shouting about an absence."""
+    st.markdown(f"<div class='empty'>{_clean(text)}"
+                + (f"<div class='card-meta'>{_clean(hint)}</div>" if hint else "")
+                + "</div>", unsafe_allow_html=True)
 
 
 def _chip(text: str, kind: str) -> str:
@@ -1223,7 +1249,7 @@ def show_student_view(student_name: str) -> None:
 
     mine = dm.get_mishmarim_for_student(student_id)
     if not mine:
-        st.info("עוד לא משובצים לך משמרים.")
+        _empty("עוד לא משובצים לך משמרים.")
         return
 
     all_tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_student(student_id)]
@@ -1755,7 +1781,7 @@ def show_speaker_index() -> None:
            if unclassified and not picked else "")
     )
     if not rows:
-        st.info("אין התאמות.")
+        _empty("אין התאמות.", "נסו תחום אחר, או חיפוש חופשי.")
         return
 
     seen: dict[str, int] = {}
@@ -1782,7 +1808,7 @@ LESSON_FORMATS = ["הרצאה", "חבורות", "דיבייט", "כתיבה", "�
 def _mishmar_picker(key: str) -> Optional[int]:
     mine = _my_mishmarim()
     if not mine:
-        st.info("לא משובצים לך משמרים.")
+        _empty("לא משובצים לך משמרים.")
         return None
     labels = {
         m["id"]: f"#{m['id']:02d} · {m['gregorian_date']} · {m.get('topic') or 'ללא נושא'}"
@@ -1856,7 +1882,7 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
             if cand.get("room") in dm.CHAVUROT_ROOMS else 0,
             format_func=lambda r: r or "— חלל —", label_visibility="collapsed",
             on_change=_room_changed, args=(cand["id"], rkey, mid))
-        top.button("🗑", key=f"rmch-{cand['id']}", help="הסרת המעביר",
+        top.button("🗑", key=f"rmch-{cand['id']}", help="הסרת המעביר", type="tertiary",
                    on_click=_remove_presenter, args=(cand["id"], mid))
         skey = f"csrc-{cand['id']}"
         st.text_input(
@@ -1866,7 +1892,7 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
             on_change=lambda cid=cand["id"], k=skey: dm.set_candidate_source(
                 cid, st.session_state[k]))
     if not cands:
-        st.caption("עוד לא נוספו מעבירים. כל מעביר מקבל חלל ודף מקורות משלו.")
+        _empty("עוד לא נוספו מעבירים.", "כל מעביר מקבל חלל ודף מקורות משלו.")
 
     with st.form(f"addch-{l['id']}", border=False):
         fr = st.container(horizontal=True, wrap=True, gap="small")
@@ -1919,7 +1945,7 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
         cr.button("✅ סגור מרצה", key=f"close-{cand['id']}", type="primary",
                   help="הופך למרצה של השיעור; שאר המועמדים יוסרו ומשימת סגירת המרצה נסגרת",
                   on_click=_close_candidate, args=(l["id"], cand["name"], mid))
-        cr.button("🗑", key=f"rmc-{cand['id']}",
+        cr.button("🗑", key=f"rmc-{cand['id']}", type="tertiary",
                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
     # The add form sits right under the list, as one flex row — the old three
@@ -2180,7 +2206,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
                           help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור",
                           on_click=_set_state, args=("editing_lesson", l["id"]))
-            tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע",
+            tc.button("✏️", key=f"ed-{l['id']}", help="עריכת המקטע", type="tertiary",
                       on_click=_toggle, args=("editing_lesson", l["id"]))
 
             if editing == l["id"]:
@@ -2243,10 +2269,10 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
                if it.get("detail") else "")
             + "</div>", unsafe_allow_html=True, width="stretch")
-        lr.button("🗑", key=f"lgx-{it['id']}",
+        lr.button("🗑", key=f"lgx-{it['id']}", type="tertiary",
                   on_click=dm.delete_logistics_item, args=(it["id"],))
     if not items:
-        st.caption("עוד לא נוספו שורות.")
+        _empty("עוד לא נוספו שורות.")
     with st.form(f"lgadd-{mid}-{kind}", border=False):
         fr = st.container(horizontal=True, wrap=True, gap="small")
         label = fr.text_input("פריט", key=f"lgl-{mid}-{kind}", width="stretch",
@@ -2286,7 +2312,7 @@ def _rooms_summary(mid: int, legacy: list[dict],
                 f"- **{_clean(room or 'טרם נקבע חלל')}** — {_clean(r['name'])}{mark}"
                 + (f" · [📎 דף מקורות]({r['source_url']})" if r.get("source_url") else ""))
     else:
-        st.caption("אין עדיין מעבירי חבורות. הוסיפו אותם במבנה הערב.")
+        _empty("אין עדיין מעבירי חבורות.", "הוסיפו אותם במבנה הערב.")
     st.button("↗ למבנה הערב", key=f"rooms-go-{mid}",
               on_click=_goto, args=(NAV_WORKFILE, mid, WF_STRUCTURE))
     if legacy:
@@ -2299,7 +2325,7 @@ def _rooms_summary(mid: int, legacy: list[dict],
                             + (f" <span class='card-meta'>{_clean(it['detail'])}</span>"
                                if it.get("detail") else ""),
                             unsafe_allow_html=True, width="stretch")
-                lr.button("🗑", key=f"lgold-{it['id']}",
+                lr.button("🗑", key=f"lgold-{it['id']}", type="tertiary",
                           on_click=dm.delete_logistics_item, args=(it["id"],))
 
 
@@ -2484,9 +2510,9 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         else:
             row.button("↩ החזר", key=f"{k}-re",
                       on_click=_set_status, args=(t["id"], "TO DO"))
-        row.button("✏️", key=f"{k}-ed", help="עריכה",
+        row.button("✏️", key=f"{k}-ed", help="עריכה", type="tertiary",
                   on_click=_toggle, args=("editing_task", t["id"]))
-        row.button("🗑", key=f"{k}-rm", help="מחיקה",
+        row.button("🗑", key=f"{k}-rm", help="מחיקה", type="tertiary",
                   on_click=dm.delete_task, args=(t["id"],))
 
         if st.session_state.get("editing_task") == t["id"]:
@@ -2601,7 +2627,7 @@ def _after_tab(mid: int) -> None:
                  if f.get("student_id") == st.session_state.student_id}
 
     if not lessons:
-        st.info("אין עדיין מבנה ערב — המשוב ייפתח כשיהיו מקטעים.")
+        _empty("אין עדיין מבנה ערב.", "המשוב ייפתח כשיהיו מקטעים.")
     else:
         with st.form(f"slot-feedback-{mid}"):
             entries = []
