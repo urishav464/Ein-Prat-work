@@ -154,12 +154,37 @@ More probe traps that produced false test results here: **input placeholders nev
   and a pair typed a name into the add form and pressed it. The add form is one flex row under the
   list (the old `st.columns` split truncated its submit to «+ מו…»). The חבורות add form takes a
   room (default בית מדרש), not a phone.
-- **A slot's open tasks are chips** (`st.container(border=True, width="content", key="ltc-…")`
-  inside a wrapping flex row, ✓ right after the text as an `ib-lt-` box, lateness as red text).
-  The keyed class AND the border/padding both sit on the inner `stVerticalBlock`, so the trim is
-  `[class*="st-key-ltc-"] { padding: 2px 8px }` on the block itself — the earlier `:has()` rule
-  on the `stLayoutWrapper` trimmed nothing and left every chip 63px tall. Measured: 32px tall,
-  two per row in the evening column at 1500.
+- **A slot's open tasks are full-width rows** (`st.container(border=True, key="lt-…")`, one per
+  task, text `width="stretch"` on the right, the `ib-lt-` ✓ box in the same left column on every
+  row, lateness as red ⏰ text). They were content-width chips first — by request — and read as
+  a staircase: different widths right-aligned, a ✓ on every step, long text pushing the box
+  around. Decided back to rows after seeing both. Measured: 42px tall, one shared left edge, the
+  ✓ at one x on every row.
+- **The slot footer is one height**: «📎 דף מקורות» carries an `ibw-` key («icon box, wide» —
+  2rem tall, hairline, a word inside) so it matches the 2rem ✏️ `ib-` box beside it; a 40px
+  button next to a 32px box read as two different apps.
+- **The candidate add form has two submits**: «➕ מועמד» adds to the list, «✅ סגור מרצה» adds AND
+  closes in one click — with a single option there was no door until the person had first been a
+  candidate. Each candidate row carries an editable phone field (`cph-…`, `on_change` →
+  `dm.set_candidate_phone`), which used to be a label once typed.
+- **Adds are callbacks, never `st.rerun()`**: both add forms (`_add_candidate_clicked`,
+  `_add_presenter_clicked`) and the two «➕ הוסף» slot buttons (`_add_slot_clicked`, which also
+  syncs the new slot's tasks) read their keyed inputs from `session_state`, write, and reset the
+  keys to `""` / `DEFAULT_ROOM` — a widget's key may be written inside a callback because no
+  widget has been drawn yet. Measured: 0 app reruns, the fragment alone, the boxes empty after.
+  The old `if form_submit_button(): write; st.rerun()` restarted the whole page and left the
+  previous name in the box.
+- **Deep links land where they point.** Streamlit keeps the scroll position across a rerun, so a
+  pipeline card pressed mid-dashboard opened the workfile mid-page. `_apply_goto` stages
+  `_scroll_req`; `_scroll_after_nav()` at the end of `main()` renders ONE 0-height
+  `components.html` on that landing run only — `scrollIntoView` on `.st-key-card-l-{id}` when
+  the workfile resolved a focused slot (`_scroll_target_lesson`), otherwise `stMain` to 0. No
+  query, no extra run; measured y=0 after the card click.
+- **The invitation is one image**: `_logistics_panel` has a keyed `st.file_uploader` in a form
+  whose submit `on_click` (`_upload_invitation_clicked`) reads the file from `session_state`,
+  uploads through `dm.upload_invitation` and stores the URL; `st.image` shows it with an
+  `ib-inv-` 🗑. The text area and link field are gone by request; `invitation_text` stays in the
+  schema, unwritten.
 - **Feedback stars + text are one flex row** (`fr.feedback` + `fr.text_input(width="stretch")`);
   two `st.columns` in the half-width panel overlapped.
 

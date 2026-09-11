@@ -107,17 +107,45 @@ def main():
     txt = txt.replace("שאר האחראים מסומנים בשמות placeholder (**חניך 1**–**חניך 10**) עד שיגיעו השמות האמיתיים — ראו \"שיבוץ החניכים\".",
                       "האחראים הם תשעת החניכים של השנה — השיבוץ נוצר על ידי `scripts/assign_trainees.py` ומוחל במסד דרך `migrations/2026-09-assign-trainees.sql`.")
     sched.write_text(txt, encoding="utf-8")
-    # ---- students_tasks.md: the seed's owners lines ----
+    # ---- students_tasks.md: the seed's owners lines AND its index table ----
+    # The first-run seed builds the student list from the index table's first
+    # column and the assignments from the «אחראים» lines; both must carry the
+    # real names, or a fresh database gets placeholders and no pairs.
     seed = ROOT / "students_tasks.md"
     t = seed.read_text(encoding="utf-8")
     cur = None
     out = []
+    in_index = False
+    index_done = False
     for line in t.splitlines(keepends=True):
         m = re.match(r"### משמר #(\d\d) ", line)
         if m:
             cur = int(m.group(1))
+        if cur is None and line.startswith("| חניך") and not index_done and not in_index:
+            # header row of the index table: emit the header + the nine rows
+            in_index = True
+            out.append("| חניך/ה | משמרים | סה״כ |\n|---|---|---|\n")
+            for i, n in by_id.items():
+                mine = [mid for mid in MISHMARIM if i in pairs[mid]]
+                cells = " · ".join(f"[#{mid:02d}](#משמר-{mid:02d})" for mid in mine)
+                out.append(f"| {n} | {cells} | {len(mine)} |\n")
+            continue
+        if in_index:
+            if line.startswith("|") and "**צוות**" not in line:
+                continue              # the old header separator / placeholder rows
+            if "**צוות**" in line:
+                out.append(line)
+                in_index = False
+                index_done = True
+                continue
+        if cur is None and line.startswith("> **שמות:**"):
+            line = ("> **שמות:** תשעת החניכים של השנה — השיבוץ נוצר על ידי "
+                    "`scripts/assign_trainees.py` ומוחל במסד דרך "
+                    "`migrations/2026-09-assign-trainees.sql`; הזריעה הראשונה קוראת "
+                    "את השמות מהטבלה שלמטה.\n")
         if cur and cur not in STAFF and "**אחראים:**" in line:
-            line = re.sub(r"\*\*אחראים:\*\* חניך \d+ \+ חניך \d+", f"**אחראים:** {owners(cur)}", line)
+            line = re.sub(r"\*\*אחראים:\*\* (?:חניך \d+|[^+·]+?) \+ (?:חניך \d+|[^·\n]+?)(?= ·|\n)",
+                          f"**אחראים:** {owners(cur)}", line)
         out.append(line)
     seed.write_text("".join(out), encoding="utf-8")
     # ---- students.md: rewritten table ----

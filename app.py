@@ -334,7 +334,7 @@ RTL_CSS = """
      an overdue card started 11px ABOVE the end of its `.card-meta` line and
      drew on top of it. Give back the space wherever the last child is not a
      paragraph; Streamlit's own text blocks keep the cancellation. */
-  [data-testid="stMarkdownContainer"]:has(> :last-child:not(p)) {
+  [data-testid="stMarkdownContainer"]:has(> div:last-child) {
       margin-bottom: 0 !important;
   }
   /* four metric tiles, one height: the tile carrying a delta chip is 24px
@@ -464,10 +464,16 @@ RTL_CSS = """
   [data-testid="stMetric"] { flex: 1 1 150px; }
   /* A slot's task chips: a bordered container's default padding is a card's;
      a chip wants a sliver, so two fit beside each other in a half-width column. */
-  [class*="st-key-ltc-"] { padding: 2px 8px !important; gap: 0 !important; }
-  [class*="st-key-ltc-"] [data-testid="stHorizontalBlock"] { gap: var(--sp-1); }
-  [class*="st-key-ltc-"] [data-testid="stMarkdownContainer"] p { margin: 0; font-size: .78rem; }
-  [class*="st-key-ltc-"] button { width: 1.6rem !important; min-width: 1.6rem; height: 1.6rem; min-height: 1.6rem; }
+  /* a slot's tasks: one full-width row each, the ✓ in one left column — the
+     content-width chips made a staircase of left edges with a ✓ on every step */
+  [class*="st-key-lt-"] { padding: 4px var(--sp-2) !important; gap: 0 !important; border-radius: 8px !important; }
+  [class*="st-key-lt-"] [data-testid="stMarkdownContainer"] p { margin: 0; font-size: .82rem; }
+  /* an icon box that carries a word: same 2rem height and hairline as `ib-` */
+  [class*="st-key-ibw-"] button {
+      height: 2rem; min-height: 2rem; padding: 0 var(--sp-2) !important; font-size: .85rem;
+      border: 1px solid var(--line); border-radius: 8px; background: #ffffff; color: #1d3e7d;
+  }
+  [class*="st-key-ibw-"] button:hover { border-color: #1d3e7d; background: #f7f9fd; }
   /* Only where several cards actually fit does a cap make sense: below this a
      lone card should use the whole column, not sit in a 340px stripe. */
   @media (min-width: 1101px) {
@@ -921,6 +927,13 @@ def show_admin_dashboard() -> None:
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
     owners = dm.get_owners_by_mishmar()
+    # Cards that silently show nobody are how a failed assignment migration
+    # would look. Name the file instead.
+    if not any(owners.get(m["id"]) for m in mishmarim
+               if m["id"] not in dm.STAFF_BUILT_MISHMARIM):
+        st.warning("אף משמר אינו משובץ לחניכים. אם הזריעה הראשונה קדמה לשמות "
+                   "האמיתיים, הריצו את `migrations/2026-09-assign-trainees.sql` "
+                   "ב-Supabase → SQL Editor.")
     # Two season-wide reads, shared with «מה דורש התערבות» below.
     all_lessons = dm.get_all_lessons()
     outreach = dm.get_all_outreach()
@@ -1074,6 +1087,11 @@ def _apply_goto() -> None:
         st.session_state["wf_panel_nonce"] = st.session_state.get("wf_panel_nonce", 0) + 1
     st.session_state["wf_focus_lesson"] = req.get("wf_focus_lesson")
     st.session_state["wf_focus_task"] = req.get("wf_focus_task")
+    # Streamlit keeps the scroll position across a rerun, so a deep link from
+    # the middle of the dashboard landed in the middle of the workfile. The
+    # landing run scrolls once — to the focused slot if there is one, else up.
+    st.session_state["_scroll_req"] = True
+    st.session_state.pop("_scroll_target_lesson", None)
 
 
 def _parse_date(value) -> Optional[_date_cls]:
@@ -1957,9 +1975,59 @@ def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
 
 
+def _add_candidate_clicked(lesson_id: int, mid: int, close: bool = False) -> None:
+    """on_click of the candidate form's submits. Reads the keyed inputs, writes,
+    and EMPTIES them — a form submit used to `st.rerun()` the whole app and
+    leave the previous name sitting in the box. With `close`, the person is
+    added and closed as the slot's speaker in one click: with a single option
+    there was no way to close without first adding and then closing."""
+    nk, pk = f"cn-{lesson_id}", f"cp-{lesson_id}"
+    name = (st.session_state.get(nk) or "").strip()
+    phone = (st.session_state.get(pk) or "").strip()
+    if not name:
+        return
+    dm.add_lesson_speaker(lesson_id, name, phone=phone,
+                          student_id=st.session_state.student_id)
+    st.session_state[nk] = ""
+    st.session_state[pk] = ""
+    if close:
+        _close_candidate(lesson_id, name, mid)
+    else:
+        st.toast(f"«{name}» נוסף כמועמד — וגם למאגר המשותף")
+
+
+def _phone_changed(cid: int, key: str) -> None:
+    dm.set_candidate_phone(cid, st.session_state.get(key))
+
+
+def _add_presenter_clicked(lesson_id: int, mid: int) -> None:
+    """on_click of the חבורות form's submit: write, sync the day-of tasks, and
+    reset the row to an empty name and the default room."""
+    nk, rk = f"chn-{lesson_id}", f"chr-{lesson_id}"
+    name = (st.session_state.get(nk) or "").strip()
+    room = st.session_state.get(rk) or dm.DEFAULT_ROOM
+    if not name:
+        return
+    dm.add_chavurot_presenter(lesson_id, name, room=room,
+                              student_id=st.session_state.student_id)
+    res = dm.sync_lesson_tasks(mid)
+    st.session_state[nk] = ""
+    st.session_state[rk] = dm.DEFAULT_ROOM
+    st.toast(f"«{name}» נוסף כמעביר חבורה — {room}"
+             + (" · נוספה משימת סידור" if res["created"] else ""))
+
+
+def _add_slot_clicked(mid: int, role: Optional[str] = None) -> None:
+    """A new slot is born with its tasks — a lesson gets «סגירת מרצה» and
+    «דף מקורות», a חבורות round gets presenters, sheets and rooms."""
+    dm.add_lesson_slot(mid, 60, role=role)
+    dm.sync_lesson_tasks(mid)
+
+
 def _sync_tasks_clicked(mid: int) -> None:
     res = dm.sync_lesson_tasks(mid)
-    st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}")
+    st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}"
+             + (f" · שויכו {res['adopted']}" if res.get("adopted") else ""))
 
 
 def _room_changed(cid: int, key: str, mid: int) -> None:
@@ -2010,19 +2078,16 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
     if not cands:
         _empty("עוד לא נוספו מעבירים.", "כל מעביר מקבל חלל ודף מקורות משלו.")
 
+    # The submit is a callback: the write lands before the fragment reruns,
+    # the boxes come back empty, and nothing restarts the whole page.
     with st.form(f"addch-{l['id']}", border=False):
         fr = st.container(horizontal=True, wrap=True, gap="small")
-        nm = fr.text_input("שם המעביר", key=f"chn-{l['id']}", width="stretch",
-                           label_visibility="collapsed", placeholder="שם המעביר")
-        room = fr.selectbox("חלל", dm.CHAVUROT_ROOMS, key=f"chr-{l['id']}", width=170,
-                            index=0, label_visibility="collapsed")
-        if fr.form_submit_button("➕ מעביר") and nm.strip():
-            dm.add_chavurot_presenter(l["id"], nm.strip(), room=room,
-                                      student_id=st.session_state.student_id)
-            res = dm.sync_lesson_tasks(mid)
-            st.toast(f"«{nm.strip()}» נוסף כמעביר חבורה — {room}"
-                     + (f" · נוספה משימת סידור" if res["created"] else ""))
-            st.rerun()
+        fr.text_input("שם המעביר", key=f"chn-{l['id']}", width="stretch",
+                      label_visibility="collapsed", placeholder="שם המעביר")
+        fr.selectbox("חלל", dm.CHAVUROT_ROOMS, key=f"chr-{l['id']}", width=170,
+                     index=0, label_visibility="collapsed")
+        fr.form_submit_button("➕ מעביר", on_click=_add_presenter_clicked,
+                              args=(l["id"], mid))
 
 
 def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
@@ -2045,10 +2110,12 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
     for cand in cands:
         cr = st.container(horizontal=True, wrap=True, gap="small",
                           vertical_alignment="center")
-        cr.markdown(f"{_clean(cand['name'])}"
-                    + (f" <span class='card-meta'>{_clean(cand['phone'])}</span>"
-                       if cand.get("phone") else ""),
-                    unsafe_allow_html=True, width="stretch")
+        cr.markdown(f"**{_clean(cand['name'])}**", unsafe_allow_html=True, width="stretch")
+        # the phone is a field, not a label — it was not editable once typed
+        pkey = f"cph-{cand['id']}"
+        cr.text_input("טלפון", key=pkey, value=cand.get("phone") or "", width=140,
+                      placeholder="טלפון", label_visibility="collapsed",
+                      on_change=_phone_changed, args=(cand["id"], pkey))
         cur = cand.get("status") or dm.SPEAKER_STATUSES[0]
         skey = f"cst-{cand['id']}"
         cr.selectbox(
@@ -2066,17 +2133,20 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
 
     # The add form sits right under the list, as one flex row — the old three
     # columns squeezed the submit into «+ מו…» and it looked like a text field.
+    # Two submits: «➕ מועמד» adds to the list, «✅ סגור מרצה» adds AND closes —
+    # the one-option case had no door until the person was first a candidate.
+    # Both are callbacks, so the fragment reruns once and the boxes empty.
     with st.form(f"addcand-{l['id']}", border=False):
         fr = st.container(horizontal=True, wrap=True, gap="small")
-        nm = fr.text_input("שם מרצה", key=f"cn-{l['id']}", width="stretch",
-                           label_visibility="collapsed", placeholder="שם מרצה אפשרי")
-        ph = fr.text_input("טלפון", key=f"cp-{l['id']}", width=150,
-                           label_visibility="collapsed", placeholder="טלפון (רשות)")
-        if fr.form_submit_button("➕ מועמד") and nm.strip():
-            dm.add_lesson_speaker(l["id"], nm.strip(), phone=ph,
-                                  student_id=st.session_state.student_id)
-            st.toast(f"«{nm.strip()}» נוסף כמועמד — וגם למאגר המשותף")
-            st.rerun()
+        fr.text_input("שם מרצה", key=f"cn-{l['id']}", width="stretch",
+                      label_visibility="collapsed", placeholder="שם מרצה אפשרי")
+        fr.text_input("טלפון", key=f"cp-{l['id']}", width=150,
+                      label_visibility="collapsed", placeholder="טלפון (רשות)")
+        fr.form_submit_button("➕ מועמד", on_click=_add_candidate_clicked,
+                              args=(l["id"], mid, False))
+        fr.form_submit_button("✅ סגור מרצה", type="primary",
+                              help="מוסיף את השם וסוגר אותו כמרצה השיעור בלחיצה אחת",
+                              on_click=_add_candidate_clicked, args=(l["id"], mid, True))
 
 
 @st.dialog("עריכת מקטע", width="large")
@@ -2139,6 +2209,9 @@ def _lesson_edit_dialog(mid: int, l: dict) -> None:
         if source or link.strip() != (l.get("source_url") or ""):
             dm.set_lesson_source(l["id"], source or link)
         dm.recompute_lesson_times(mid)
+        # a slot that became חבורות (or stopped being one) swaps its tasks now,
+        # not when someone remembers the manual sync
+        dm.sync_lesson_tasks(mid)
         st.toast("המקטע נשמר"); st.rerun()
 
 
@@ -2213,6 +2286,8 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                     and (l.get("lesson_role") or "") != "חבורות":
                 highlight = l["id"]        # the dialog is the pair's call; we only point
                 break
+    if highlight:
+        st.session_state["_scroll_target_lesson"] = highlight   # read by _scroll_after_nav
     if focus_task:
         where = "" if highlight else " — לא זוהה מקטע ספציפי, בחרו למטה"
         st.info(f"⤴ הגעתם מהמשימה «{_clean(focus_task['task_description'])}»{where}")
@@ -2289,35 +2364,36 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             # The tasks that belong to THIS slot, closable where the work is.
             # This is the half that was missing: the board could point at the
             # evening, and the evening could not point back.
-            # Small chips, several per row when the width allows, each with
-            # its ✓ right after the text — not a full-width line with the
-            # button orphaned at the far edge.
-            if open_here:
-                chips_row = st.container(horizontal=True, wrap=True, gap="small")
-                for t in open_here:
-                    with chips_row:
-                        with st.container(border=True, width="content", key=f"ltc-{t['id']}"):
-                            ch = st.container(horizontal=True, wrap=False, gap="small",
-                                              vertical_alignment="center")
-                            late = bool(t.get("overdue"))
-                            ch.markdown(
-                                f"<span class='card-meta' style='white-space:nowrap;"
-                                f"{'color:#b42318;font-weight:600' if late else ''}'>"
-                                + ("⏰ " if late else "")
-                                + f"{_clean(t['task_description'])}</span>",
-                                unsafe_allow_html=True, width="content")
-                            ch.button("✓", key=f"ib-lt-{t['id']}", help="סמן שבוצע",
-                                      on_click=_set_status,
-                                      args=(t["id"], "DONE", "בוצע 🎉"))
+            # One full-width row per task: text on the right, the ✓ box in
+            # the same left column on every row. Content-width chips made a
+            # staircase — different widths, right-aligned, a ✓ on each step —
+            # and long text pushed the box around.
+            for t in open_here:
+                with st.container(border=True, key=f"lt-{t['id']}"):
+                    ch = st.container(horizontal=True, wrap=False, gap="small",
+                                      vertical_alignment="center")
+                    late = bool(t.get("overdue"))
+                    ch.markdown(
+                        f"<span class='card-meta' style='"
+                        f"{'color:#b42318;font-weight:600' if late else ''}'>"
+                        + ("⏰ " if late else "")
+                        + f"{_clean(t['task_description'])}</span>",
+                        unsafe_allow_html=True, width="stretch")
+                    ch.button("✓", key=f"ib-lt-{t['id']}", help="סמן שבוצע",
+                              on_click=_set_status,
+                              args=(t["id"], "DONE", "בוצע 🎉"))
 
             # The slot's own controls. «דף מקורות» opens the EDITOR, where the
             # upload and the link field live — it used to create a task and
             # navigate back to this same panel, which read as a dead button.
             # No slot-level «סגירת מרצה» here: closing happens next to the
             # candidate's name, and the task already exists from the sync.
-            tc = st.container(horizontal=True, wrap=True, gap="small")
+            tc = st.container(horizontal=True, wrap=True, gap="small",
+                              vertical_alignment="center")
             if not is_chavurot:
-                if tc.button("📎 דף מקורות", key=f"src-open-{l['id']}",
+                # `ibw-`: the 2rem icon-box grammar with a word in it — beside
+                # the 2rem ✏️ box, a 40px button looked like a different app
+                if tc.button("📎 דף מקורות", key=f"ibw-src-{l['id']}",
                              help="פותח את עריכת המקטע — שם מעלים קובץ או מדביקים קישור"):
                     _lesson_edit_dialog(mid, l)
             # opening a dialog IS a rerun, so a plain `if` is the honest form here
@@ -2326,7 +2402,9 @@ def _topic_and_structure(mid: int, tasks: list[dict],
 
 
     ac = st.container(horizontal=True, wrap=True, gap="small")
-    ac.button("➕ הוסף מקטע", on_click=dm.add_lesson_slot, args=(mid, 60))
+    ac.button("➕ הוסף שיעור", on_click=_add_slot_clicked, args=(mid, None))
+    ac.button("➕ הוסף חבורות", help="סבב חבורות נוסף — מעבירים, חללים ודפי מקורות משלו",
+              on_click=_add_slot_clicked, args=(mid, "חבורות"))
     ac.button("➕ הוסף הפסקה", on_click=dm.add_break, args=(mid, 15))
     # For an evening built before the slots owned their tasks: fills in what is
     # missing and clears tasks whose slot is gone. Never touches a DONE row.
@@ -2440,6 +2518,21 @@ def _rooms_summary(mid: int, legacy: list[dict],
                           on_click=dm.delete_logistics_item, args=(it["id"],))
 
 
+def _upload_invitation_clicked(mid: int, key: str) -> None:
+    """on_click of the invitation form: the uploaded file is in session_state
+    under the uploader's key; upload it, store the URL, say what failed."""
+    up = st.session_state.get(key)
+    if up is None:
+        st.toast("בחרו קובץ תמונה קודם")
+        return
+    url, err = dm.upload_invitation(mid, up.name, up.getvalue())
+    if url:
+        dm.set_invitation(mid, url=url)
+        st.toast("ההזמנה הועלתה")
+    else:
+        st.toast(f"ההעלאה נכשלה — {err}")
+
+
 def _logistics_panel(mid: int, m: dict,
                      candidates: Optional[dict[int, list[dict]]] = None) -> None:
     """Everything the evening needs that is not a lesson: what to buy, which
@@ -2459,18 +2552,17 @@ def _logistics_panel(mid: int, m: dict,
     _rooms_summary(mid, items.get("חלל", []), candidates)
     st.divider()
     st.markdown("**✉️ ההזמנה למשמר**")
-    st.caption("הטקסט שנשלח בוואטסאפ, וקישור לפוסטר אם יש.")
-    with st.form(f"inv-{mid}", border=False):
-        text = st.text_area("נוסח ההזמנה", value=m.get("invitation_text") or "",
-                            height=120,
-                            placeholder="מי · מה · מתי · איפה — ולמה כדאי לבוא")
-        url = st.text_input("קישור לפוסטר", value=m.get("invitation_url") or "",
-                            placeholder="https://…")
-        if st.form_submit_button("💾 שמור הזמנה", type="primary"):
-            dm.set_invitation(mid, text=text, url=url)
-            st.toast("ההזמנה נשמרה"); st.rerun()
+    st.caption("ההזמנה היא תמונה אחת — הפוסטר שיוצא בוואטסאפ. מעלים אותה כאן.")
     if m.get("invitation_url"):
-        st.caption(f"📎 [הפוסטר]({m['invitation_url']})")
+        st.image(m["invitation_url"], width=320)
+        st.button("🗑", key=f"ib-inv-{mid}", help="הסרת ההזמנה",
+                  on_click=dm.set_invitation, args=(mid, None, ""))
+    ukey = f"invup-{mid}"
+    with st.form(f"inv-{mid}", border=False):
+        st.file_uploader("תמונת ההזמנה", key=ukey, type=["png", "jpg", "jpeg", "webp"],
+                         label_visibility="collapsed")
+        st.form_submit_button("⬆️ העלאת ההזמנה", type="primary",
+                              on_click=_upload_invitation_clicked, args=(mid, ukey))
 
 
 @st.dialog("⚠️ איפוס המשמר")
@@ -2939,6 +3031,26 @@ def show_sidebar() -> None:
         st.button("התנתק", width="stretch", on_click=logout)
 
 
+def _scroll_after_nav() -> None:
+    """One 0-height component on the run that lands a deep link — nothing on
+    any other run. The script runs in the component's iframe and reaches the
+    app through `window.parent`: to the focused slot card when the workfile
+    resolved one, otherwise to the top of the page."""
+    if not st.session_state.pop("_scroll_req", False):
+        return
+    target = st.session_state.pop("_scroll_target_lesson", None)
+    sel = f".st-key-card-l-{int(target)}" if target else ""
+    import streamlit.components.v1 as components
+    components.html(
+        "<script>setTimeout(function(){"
+        "var d=window.parent.document;"
+        f"var el={'d.querySelector(' + repr(sel) + ')' if sel else 'null'};"
+        "if(el){el.scrollIntoView({block:'start'});}"
+        "else{var m=d.querySelector('[data-testid=\"stMain\"]');"
+        "if(m){m.scrollTo(0,0);} window.parent.scrollTo(0,0);}"
+        "},60);</script>", height=0)
+
+
 def _route_main() -> None:
     nav = st.session_state.get("nav") or ""
     if nav == NAV_WORKFILE:
@@ -3009,6 +3121,7 @@ def main() -> None:
     # assistant is never more than one click away on any screen.
     if not CHAT_ENABLED:
         _route_main()
+        _scroll_after_nav()
         return
 
     chat_open = st.session_state.setdefault("chat_open", True)
@@ -3019,6 +3132,7 @@ def main() -> None:
 
     with main_col:
         _route_main()
+        _scroll_after_nav()
     with chat_col:
         if chat_open:
             from chat_panel import render_chat_panel

@@ -344,7 +344,11 @@ def display_name(row: dict) -> str:
 # Markdown parsing — seeding only
 # --------------------------------------------------------------------------
 
-_RE_INDEX_ROW = re.compile(r"^\|\s*(חניך\s*\d+)\s*\|(.+?)\|\s*\d+\s*\|\s*$")
+# Any name in the first cell — it used to accept only «חניך N», so once the
+# real names were written into the file a fresh seed found zero students
+# and zero assignments. The header, the separator and the bold «צוות» row
+# are skipped by the caller.
+_RE_INDEX_ROW = re.compile(r"^\|\s*([^|*]+?)\s*\|(.+?)\|\s*\d+\s*\|\s*$")
 _RE_MISHMAR_HEAD = re.compile(r"^###\s*משמר\s*#(\d+)\s*·\s*([^·]+?)\s*·\s*(.+?)\s*$")
 _RE_META = re.compile(r"^\*\*סוג:\*\*\s*(.+?)\s*·\s*\*\*אחראים:\*\*\s*(.+?)\s*$")
 _RE_WORKFILE = re.compile(r"\*\*קובץ עבודה:\*\*\s*`([^`]+)`")
@@ -368,9 +372,10 @@ def parse_tasks_md(path: str = TASKS_MD) -> dict:
 
     for line in lines:
         m = _RE_INDEX_ROW.match(line)
-        if m and "משמרים" not in m.group(1):
+        if m and current is None:
             name = re.sub(r"\s+", " ", m.group(1)).strip()
-            if name not in students:
+            if name and name not in ("חניך", "חניך/ה", "צוות") \
+                    and not set(name) <= set("-: ") and name not in students:
                 students.append(name)
             continue
 
@@ -397,9 +402,11 @@ def parse_tasks_md(path: str = TASKS_MD) -> dict:
                 owners_raw, _, note = owners_raw.partition("·")
                 current["note"] = note.strip().strip("*") or None
             for owner in owners_raw.split("+"):
-                owner = owner.strip()
-                if owner.startswith("חניך"):
-                    assignments.append((current["id"], re.sub(r"\s+", " ", owner)))
+                owner = re.sub(r"\s+", " ", owner.strip())
+                # a real name or a placeholder — anything but the staff marker;
+                # the seed keeps only owners it can resolve to a student row
+                if owner and owner != "צוות":
+                    assignments.append((current["id"], owner))
             continue
 
         m = _RE_WORKFILE.search(line)
@@ -1263,14 +1270,14 @@ def close_lesson_speaker(lesson_id: int, name: str,
     return {"closed": closed_name, "removed": removed}
 
 
-def upload_source_sheet(mishmar_id: int, lesson_id: int,
-                        filename: str, data: bytes) -> tuple[Optional[str], Optional[str]]:
-    """Upload a source sheet to Supabase Storage → `(public_url, error)`.
+def _storage_upload(path: str, data: bytes,
+                    content_type: str = "application/octet-stream") -> tuple[Optional[str], Optional[str]]:
+    """One file into the public `sources` bucket → `(public_url, error)`.
 
-    Creates the `sources` bucket on first use (service_role may). A failure
-    never blocks the pair — the UI falls back to a paste-a-link field — but it
-    now says WHAT failed: the old silent `None` turned a Storage
-    misconfiguration into a button that looked broken.
+    Creates the bucket on first use (service_role may). A failure never blocks
+    the pair — the UI falls back to a paste-a-link field — but it says WHAT
+    failed: a silent `None` once turned a Storage misconfiguration into a button
+    that looked broken.
     """
     try:
         storage = get_client().storage
@@ -1278,15 +1285,40 @@ def upload_source_sheet(mishmar_id: int, lesson_id: int,
             storage.create_bucket("sources", options={"public": True})
         except Exception:
             pass   # already exists, or creation denied — the upload will tell
-        safe = re.sub(r"[^\w.\-]+", "_", filename or "source")
-        path = f"mishmar-{int(mishmar_id):02d}/lesson-{int(lesson_id)}-{safe}"
         storage.from_("sources").upload(
-            path, data,
-            {"content-type": "application/octet-stream", "upsert": "true"})
+            path, data, {"content-type": content_type, "upsert": "true"})
         url = storage.from_("sources").get_public_url(path)
         return (str(url), None) if url else (None, "לא התקבל קישור ציבורי לקובץ")
     except Exception as exc:                      # noqa: BLE001 — reported, not swallowed
         return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _safe_filename(filename: Optional[str], default: str) -> str:
+    return re.sub(r"[^\w.\-]+", "_", filename or default)
+
+
+def upload_source_sheet(mishmar_id: int, lesson_id: int,
+                        filename: str, data: bytes) -> tuple[Optional[str], Optional[str]]:
+    """A slot's source sheet → `(public_url, error)`."""
+    safe = _safe_filename(filename, "source")
+    return _storage_upload(f"mishmar-{int(mishmar_id):02d}/lesson-{int(lesson_id)}-{safe}", data)
+
+
+_IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "webp": "image/webp", "gif": "image/gif"}
+
+
+def upload_invitation(mishmar_id: int, filename: str,
+                      data: bytes) -> tuple[Optional[str], Optional[str]]:
+    """The evening's invitation is ONE image — the poster that goes out on
+    WhatsApp — uploaded next to the source sheets and stored as
+    `mishmarim.invitation_url` by the caller. `(public_url, error)`."""
+    safe = _safe_filename(filename, "invitation")
+    ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
+    if ext not in _IMAGE_TYPES:
+        return None, "ההזמנה היא תמונה — PNG, JPG או WEBP"
+    return _storage_upload(f"mishmar-{int(mishmar_id):02d}/invitation-{safe}", data,
+                           _IMAGE_TYPES[ext])
 
 
 def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
@@ -1355,11 +1387,17 @@ def set_lesson_duration(mishmar_id: int, lesson_id: int, minutes: int) -> None:
     recompute_lesson_times(mishmar_id)
 
 
-def add_lesson_slot(mishmar_id: int, minutes: int = 60) -> None:
-    """Append an empty lesson slot at the end of the evening."""
+def add_lesson_slot(mishmar_id: int, minutes: int = 60,
+                    role: Optional[str] = None) -> None:
+    """Append an empty slot at the end of the evening. `role="חבורות"` makes it
+    a second round of חבורות — presenters, rooms and source sheets — instead
+    of a lesson; `is_chavurot` reads the role, so the UI follows."""
     order = len(get_lessons(mishmar_id)) + 1
-    _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": order,
-                          "duration_minutes": int(minutes)}).execute()
+    row: dict[str, Any] = {"mishmar_id": mishmar_id, "slot_order": order,
+                           "duration_minutes": int(minutes)}
+    if role:
+        row["lesson_role"] = role
+    _t("lessons").insert(row).execute()
     recompute_lesson_times(mishmar_id)
 
 
@@ -1565,13 +1603,21 @@ def _slot_tasks(lesson: dict, index: int,
     )
 
 
-def _slot_owned_texts(index: int) -> set[str]:
-    """Every description THIS module generates for a slot at `index`, in both
-    shapes. A task outside this set was written by a human and is never
-    touched — inside it, it is ours to retire when the slot changes shape."""
-    return {t for _, t in _CHAVUROT_SLOT_TASKS} | {
-        f"סגירת מרצה — שיעור {index}", f"דף מקורות — שיעור {index}"} | {
-        f"סידור {r}" for r in CHAVUROT_ROOMS}
+_RE_SLOT_TEXT = re.compile(r"^(?:סגירת מרצה|דף מקורות) — שיעור \d+$")
+
+
+def _is_slot_owned_text(text: Optional[str]) -> bool:
+    """Is this wording THIS module's — any slot, ANY index? A task outside the
+    set was written by a human and is never touched; inside it, it is ours to
+    retire or adopt when the evening changes shape.
+
+    It used to be index-bound («… שיעור i» for slot i only), so a task created
+    when its slot was #2 outlived a deletion before it, or the slot turning into
+    חבורות while the numbering shifted — «סגירת מרצה — שיעור 2» on the alumni
+    evening's חבורות round was exactly that."""
+    t = (text or "").strip()
+    return bool(_RE_SLOT_TEXT.match(t)) or t in {x for _, x in _CHAVUROT_SLOT_TASKS} \
+        or t in {f"סידור {r}" for r in CHAVUROT_ROOMS}
 
 
 def sync_lesson_tasks(mishmar_id: int) -> dict:
@@ -1604,7 +1650,19 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         if t.get("lesson_id") and t.get("status") != "DONE":
             open_by_lesson.setdefault(t["lesson_id"], []).append(t)
 
-    created = removed = 0
+    # Open tasks tied to NO slot but written in our wording — a slot deleted
+    # the bare way (ON DELETE SET NULL), or a sync from before the link
+    # existed. They used to be invisible here: the sync created a second copy
+    # beside them, and their «פתח» door guessed a slot from «שיעור 2» — on the
+    # alumni evening, the חבורות round. Now a slot that still expects the text
+    # ADOPTS the orphan (same row, lesson_id set), and the rest are retired.
+    orphans: dict[str, list[dict]] = {}
+    for t in tasks:
+        if not t.get("lesson_id") and t.get("status") != "DONE" \
+                and _is_slot_owned_text(t.get("task_description")):
+            orphans.setdefault(t["task_description"].strip(), []).append(t)
+
+    created = removed = adopted = 0
     for i, l in enumerate(lessons, 1):
         have = by_lesson.get(l["id"], set())
         owned = _slot_tasks(l, i, presenters.get(l["id"], []))
@@ -1612,16 +1670,27 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         for category, text in owned:
             if text in have:
                 continue
+            if orphans.get(text):
+                orphan = orphans[text].pop(0)
+                link_task_to_lesson(orphan["id"], l["id"])
+                adopted += 1
+                continue
             add_task(mishmar_id, text, category=category, lesson_id=l["id"])
             created += 1
-        # The slot changed shape — a lesson became חבורות, or stopped being
-        # one. Its old generated tasks now ask for work nobody will do; only
-        # OUR wording is retired, and only while still open.
-        stale = _slot_owned_texts(i) - expected
+        # The slot changed shape — a lesson became חבורות, stopped being one,
+        # or its number moved. Its old generated tasks now ask for work nobody
+        # will do; only OUR wording is retired, and only while still open.
         for t in open_by_lesson.get(l["id"], []):
-            if (t.get("task_description") or "").strip() in stale:
+            text = (t.get("task_description") or "").strip()
+            if text not in expected and _is_slot_owned_text(text):
                 _t("tasks").delete().eq("id", t["id"]).execute()
                 removed += 1
+
+    # Orphans nobody adopted: our wording, no slot that wants it.
+    for rest in orphans.values():
+        for t in rest:
+            _t("tasks").delete().eq("id", t["id"]).execute()
+            removed += 1
 
     # A task that names a slot which no longer exists, still open: the work it
     # asks for cannot be done. (`ON DELETE SET NULL` means only rows deleted
@@ -1632,7 +1701,7 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         if lid and lid not in live_ids and t.get("status") != "DONE":
             _t("tasks").delete().eq("id", t["id"]).execute()
             removed += 1
-    return {"created": created, "removed": removed}
+    return {"created": created, "removed": removed, "adopted": adopted}
 
 
 def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:
@@ -1666,6 +1735,23 @@ def set_candidate_room(candidate_id: int, room: Optional[str]) -> None:
     if room and room not in CHAVUROT_ROOMS:
         raise ValueError(f"room must be one of {CHAVUROT_ROOMS}, got {room!r}")
     _t("lesson_speakers").update({"room": room}).eq("id", candidate_id).execute()
+
+
+def set_candidate_phone(candidate_id: int, phone: Optional[str]) -> None:
+    """A candidate's phone, editable after the fact. The shared index learns it
+    too when its own contact is still empty — the rule add_lesson_speaker
+    already applies on the way in. Never overwrites a contact the index has."""
+    phone = (phone or "").strip() or None
+    row = _one(_t("lesson_speakers").update({"phone": phone})
+               .eq("id", candidate_id).execute())
+    if not phone or not row:
+        return
+    try:
+        existing = get_speaker_by_name(row.get("name") or "")
+        if existing and not (existing[0].get("contact") or "").strip("TBD "):
+            _t("speakers").update({"contact": phone}).eq("id", existing[0]["id"]).execute()
+    except AmbiguousSpeaker:
+        pass
 
 
 def set_candidate_source(candidate_id: int, url: Optional[str]) -> None:
@@ -2185,6 +2271,8 @@ _WRITES = {
     "set_candidate_room": ("lesson_speakers",),
     "add_chavurot_presenter": ("lesson_speakers", "speakers"),
     "set_candidate_source": ("lesson_speakers",),
+    "set_candidate_phone": ("lesson_speakers", "speakers"),
+    "upload_invitation": ("mishmarim",),
     "add_lesson_speaker": ("lesson_speakers", "speakers"),
     "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),
     "close_lesson_speaker": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),

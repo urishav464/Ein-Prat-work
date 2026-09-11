@@ -39,7 +39,7 @@ paths:
 - **`lessons` is deliberately not four rows** — `slot_order` is 1..N, `lesson_role` free text (the archive holds ceremonies and song circles).
 - **`budget_used` is a view**, never a stored column.
 - **Seeding does not archive `students_tasks.md`** — the checkout is rebuilt from git on every deploy, so an `app_meta` flag guards the seed instead of a rename.
-- **The real trainees arrive by migration, not by re-seed.** `scripts/assign_trainees.py` (seed 5787, deterministic) maps the nine names onto `students.id` 1–9, deletes the tenth placeholder, and redistributes the 19 trainee Mishmarim (#03–#21, 38 seats = 7×4 + 2×5) under asserted rules — two distinct trainees per evening, nobody on two consecutive evenings, all 19 pairs distinct. It writes `migrations/2026-09-assign-trainees.sql` (one transaction; `UPDATE students` ×9, `DELETE` id 10, `DELETE FROM assignments` for #03–#21, `INSERT … ON CONFLICT DO NOTHING` ×38 — idempotent) **and** rewrites the owners in `Mishmer-section/2026-27/schedule.md`, `students.md` and the «אחראים» lines of `students_tasks.md`, so the seed, the docs and the database agree. The SQL is run by a human in the Supabase SQL Editor; no schema-version bump, since no structure changes. Re-running the script with the same seed reproduces the same file.
+- **The real trainees arrive by migration, not by re-seed.** `scripts/assign_trainees.py` (seed 5787, deterministic) maps the nine names onto `students.id` 1–9, deletes the tenth placeholder, and redistributes the 19 trainee Mishmarim (#03–#21, 38 seats = 7×4 + 2×5) under asserted rules — two distinct trainees per evening, nobody on two consecutive evenings, all 19 pairs distinct. It writes `migrations/2026-09-assign-trainees.sql` (one transaction; `UPDATE students` ×9, `DELETE` id 10, `DELETE FROM assignments` for #03–#21, `INSERT … ON CONFLICT DO NOTHING` ×38 — idempotent) **and** rewrites the owners in `Mishmer-section/2026-27/schedule.md`, `students.md`, and in `students_tasks.md` BOTH the «אחראים» lines and the index table, so the seed, the docs and the database agree. The SQL is run by a human in the Supabase SQL Editor; no schema-version bump, since no structure changes. Re-running the script with the same seed reproduces the same file. **A fresh database needs no SQL**: `parse_tasks_md` takes any name from the index table's first cell and links an owner whenever it resolves to a student — it used to accept only `חניך N` in both places, so after the names were written in, a first-run seed produced ten placeholders and zero assignments (proven on a fresh PG16: nine students, 38 links, 2 per Mishmar; the migration on top changes nothing). The instructor dashboard warns, naming the file, when no trainee Mishmar has an owner.
 - **The evening timeline is derived, never hand-typed.** `lessons.start_time` is computed by `recompute_lesson_times()` from 20:00 plus cumulative `duration_minutes` (breaks are ordinary rows with `is_break`); every duration edit reflows the whole evening, so slots cannot overlap. `create_default_timeline()` builds the real skeleton — three 75-minute lessons, 30/30/15-minute breaks, an hour of חבורות ending 02:00 — with titles/roles/formats EMPTY by design, and both topic-close paths (form and chat tool) call it when the evening is empty.
 - **Candidate speakers** (`lesson_speakers`): `add_lesson_speaker()` also teaches the shared index the person exists (manual source, phone as contact, title auto-split); candidate statuses route through `record_outreach()`; `close_lesson_speaker()` implements «סגרתי את X» — X becomes `lessons.speaker_name` with one ✅ row, the other candidates are deleted, the journal logs the close. **Phones live only in `lesson_speakers.phone` and `speakers.contact` — never in chat context or the generator digest.**
 - The status ladder merged in v2: `⏳ ממתין לתשובה` folded into `📩 נשלחה פנייה` — constants AND idempotent UPDATEs in the schema file; do not reintroduce it.
@@ -87,6 +87,25 @@ panel instead of on a slot.
   shape (`_slot_owned_texts` — a hand-written task linked to the slot is never touched), and clears
   open tasks whose slot is gone. **DONE rows are never touched.** `create_default_timeline` calls
   it, so a new Mishmar is born synced; an existing one catches up from «🔄 סנכרן משימות למקטעים».
+- **Our wording is recognised by pattern, not by index, and orphans are adopted.**
+  `_is_slot_owned_text(text)` (`^(סגירת מרצה|דף מקורות) — שיעור \d+$`, the three חבורות texts,
+  `סידור <one of the four rooms>`) replaced `_slot_owned_texts(i)`, which retired only «… שיעור i»
+  for slot i — so a task born when its slot was #2 outlived a deletion before it or the slot
+  turning into חבורות while the numbering shifted («סגירת מרצה — שיעור 2» on the alumni evening's
+  חבורות round was exactly that). And a task with `lesson_id = NULL` in our wording (a slot deleted
+  the bare way, an older sync) was invisible to the sync: it created a second copy beside it, and
+  the orphan's «פתח» door guessed a slot from «שיעור 2» → `slots[1]` → the חבורות round. Now a slot
+  that still expects the text **adopts** the orphan (`link_task_to_lesson`, same row, `adopted`
+  counted in the result), and open orphans nobody expects are retired. Still: DONE never touched,
+  a human-written task never touched. Proven on the shim: role→חבורות, a number shift, an
+  adoptable orphan, a stray orphan, a DONE row and a human row — then idempotent. The slot editor's
+  save and both «➕ הוסף» buttons now call the sync themselves; a slot is born with its tasks.
+- **`add_lesson_slot(mishmar_id, minutes, role=None)`** — `role="חבורות"` is how a second round
+  of חבורות is added («➕ הוסף חבורות»); `is_chavurot` reads the role. `set_candidate_phone` edits
+  a candidate's phone after the fact and, like `add_lesson_speaker`, fills the index's contact
+  only when it is empty. `upload_invitation` puts the evening's one poster image next to the
+  source sheets (`mishmar-XX/invitation-<file>`, images only) and the caller stores the URL with
+  `set_invitation`; `_storage_upload` is the shared bucket helper.
 - **`delete_lesson_with_tasks(mishmar_id, lesson_id)`** is how a slot (or a break) is removed:
   its OPEN tasks go with it, DONE ones stay as history, and the clock reflows. Bare `delete_lesson`
   leaves both the later start times and the tasks stale.
