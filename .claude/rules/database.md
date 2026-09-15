@@ -87,9 +87,31 @@ panel instead of on a slot.
   shape (`_slot_owned_texts` — a hand-written task linked to the slot is never touched), and clears
   open tasks whose slot is gone. **DONE rows are never touched.** `create_default_timeline` calls
   it, so a new Mishmar is born synced; an existing one catches up from «🔄 סנכרן משימות למקטעים».
+- **Ownership is PROVENANCE, not wording: `tasks.generated` (schema 7).** `sync_lesson_tasks` is the
+  only writer of `generated = true` (`add_task(..., generated=True)`), and `_is_generated(task)` is
+  the only ownership test — every rename, retire, adopt and slot-delete goes through it. Before
+  schema 7 ownership was a text match against the module's own vocabulary, which meant a task a
+  trainee happened to word EXACTLY like a generated one could be silently retitled or deleted by
+  the reconciler. The vocabulary still exists in one place (`_CHAVUROT_SLOT_TASKS` + `_slot_tasks`)
+  and is repeated once in SQL — the **one-time** backfill in `supabase_schema.sql` that flags rows
+  created before the column, guarded by `app_meta.tasks_generated_backfilled` so a re-run of the
+  file can never flag a task written since. The seed's template rows (e.g. «סידור הבית מדרש») are
+  NOT generated: they belong to the evening, not to a slot. A database one version behind cannot
+  read the column — and cannot reach this code either, because the schema gate stops the app first.
+- **Deleting a slot deletes only what the slot generated.** `delete_lesson_with_tasks` removes the
+  slot's open GENERATED tasks; a task a human tied to that slot is left to the FK's
+  `ON DELETE SET NULL` and goes back to being an ordinary task of the evening. It used to delete
+  every open task on the slot, human ones included.
+- **A shape change RENAMES, it does not delete and recreate.** `_rename_key(text)` strips both the
+  round («— סבב ב׳») and the slot number («— שיעור 3»), so a row keeps its id, details, due date
+  and status when the evening gains a round or a deletion renumbers it; the two generated texts of
+  one slot never share a key, and a slot that changed KIND shares none, so it still retires. This
+  is the only thing that touches a DONE row, and only its label — without it a DONE
+  «דף מקורות — שיעור 3» sat forever beside a freshly created «— שיעור 2» for the same work.
 - **Our wording is recognised by pattern, not by index, and orphans are adopted.**
-  `_is_slot_owned_text(text)` (`^(סגירת מרצה|דף מקורות) — שיעור \d+$`, the three חבורות texts,
-  `סידור <one of the four rooms>`) replaced `_slot_owned_texts(i)`, which retired only «… שיעור i»
+  This was the schema-6 answer, now superseded by the flag above but still the reason the
+  reconciler is index-free: `_is_slot_owned_text` (`^(סגירת מרצה|דף מקורות) — שיעור \d+$`, the three
+  חבורות texts, `סידור <one of the four rooms>`) replaced `_slot_owned_texts(i)`, which retired only «… שיעור i»
   for slot i — so a task born when its slot was #2 outlived a deletion before it or the slot
   turning into חבורות while the numbering shifted («סגירת מרצה — שיעור 2» on the alumni evening's
   חבורות round was exactly that). And a task with `lesson_id = NULL` in our wording (a slot deleted

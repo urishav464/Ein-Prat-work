@@ -223,7 +223,7 @@ def _now_iso() -> str:
 # check a database one version behind looks perfectly healthy and then throws a
 # redacted APIError deep inside a screen — which is exactly how a missing
 # `logistics_items` blanked the whole workfile instead of saying «run the SQL».
-REQUIRED_SCHEMA_VERSION = 6
+REQUIRED_SCHEMA_VERSION = 7
 
 
 def _missing_relation(exc: Exception) -> bool:
@@ -763,11 +763,17 @@ def add_task(mishmar_id: int, task_description: str,
              student_id: Optional[int] = None, status: str = "TO DO",
              category: Optional[str] = None,
              lesson_id: Optional[int] = None,
-             details: Optional[str] = None) -> Optional[int]:
+             details: Optional[str] = None,
+             generated: bool = False) -> Optional[int]:
     """`lesson_id` ties the task to one slot of the evening. It is never
     guessed here — seeding inserts hundreds of rows and a lookup per row would
     be hundreds of queries. A caller that KNOWS the slot passes it; everyone
-    else leaves it NULL and the door falls back to suggest_lesson_for_task."""
+    else leaves it NULL and the door falls back to suggest_lesson_for_task.
+
+    `generated=True` is written by ONE caller — `sync_lesson_tasks` — and marks
+    the row as the reconciler's to rename, retire or adopt. Everything a human
+    or the chat writes stays False and is therefore untouchable. The seed's
+    template rows are NOT generated: they belong to the evening, not to a slot."""
     if status not in TASK_STATUSES:
         raise ValueError(f"status must be one of {TASK_STATUSES}, got {status!r}")
     category = category or classify_task(task_description)
@@ -776,7 +782,7 @@ def add_task(mishmar_id: int, task_description: str,
         "mishmar_id": mishmar_id, "student_id": student_id,
         "task_description": task_description, "status": status,
         "category": category, "lesson_id": lesson_id,
-        "details": details,
+        "details": details, "generated": generated,
         "due_date": compute_due_date(m["gregorian_date"], category) if m else None,
     }).execute()
     row = _one(resp)
@@ -1611,6 +1617,11 @@ CHAVUROT_ROOMS: tuple[str, ...] = (
 DEFAULT_ROOM = CHAVUROT_ROOMS[0]
 
 
+# The wording this module writes — and the ONE place it is enumerated in code.
+# `supabase_schema.sql` repeats the same set once, in the one-time backfill that
+# flags rows created before `tasks.generated` existed; the two must stay in step
+# if a text here ever changes. Nothing else matches on these strings: ownership
+# is the flag (`_is_generated`), never the words.
 _CHAVUROT_SLOT_TASKS: tuple[tuple[str, str], ...] = (
     ("תוכן",      "מי מעביר את התוכן — חבורות"),
     ("תוכן",      "דפי מקורות למעבירי החבורות"),
@@ -1662,8 +1673,24 @@ def _slot_tasks(lesson: dict, index: int,
     )
 
 
-_RE_SLOT_TEXT = re.compile(r"^(?:סגירת מרצה|דף מקורות) — שיעור \d+$")
 _RE_ROUND_SUFFIX = re.compile(r"\s+—\s+סבב\s+\S+$")
+
+
+_RE_SLOT_INDEX = re.compile(r"\s+—\s+שיעור\s+\d+$")
+
+
+def _rename_key(text: Optional[str]) -> str:
+    """What a generated task IS, independent of which round or which number it
+    currently carries: «דף מקורות — שיעור 3» and «דף מקורות — שיעור 2» are the
+    same job on the same slot after a deletion renumbered the evening, and so
+    are «… — חבורות» and «… — חבורות — סבב א׳».
+
+    Used only to pair an existing row with the wording its slot expects NOW.
+    The two generated texts of any one slot never share a key («סגירת מרצה» vs
+    «דף מקורות»), so a pairing is unambiguous; a slot that changed KIND (a
+    lesson became חבורות) shares no key at all, and its old tasks retire as
+    before."""
+    return _RE_SLOT_INDEX.sub("", _base_slot_text(text)).strip()
 
 
 def _base_slot_text(text: Optional[str]) -> str:
@@ -1673,19 +1700,21 @@ def _base_slot_text(text: Optional[str]) -> str:
     return _RE_ROUND_SUFFIX.sub("", (text or "").strip()).strip()
 
 
-def _is_slot_owned_text(text: Optional[str]) -> bool:
-    """Is this wording THIS module's — any slot, ANY index? A task outside the
-    set was written by a human and is never touched; inside it, it is ours to
-    retire or adopt when the evening changes shape.
+def _is_generated(task: dict) -> bool:
+    """Is this row THIS module's to rename, retire or adopt?
 
-    It used to be index-bound («… שיעור i» for slot i only), so a task created
-    when its slot was #2 outlived a deletion before it, or the slot turning into
-    חבורות while the numbering shifted — «סגירת מרצה — שיעור 2» on the alumni
-    evening's חבורות round was exactly that."""
-    t = (text or "").strip()
-    return bool(_RE_SLOT_TEXT.match(t)) \
-        or _base_slot_text(t) in {x for _, x in _CHAVUROT_SLOT_TASKS} \
-        or t in {f"סידור {r}" for r in CHAVUROT_ROOMS}
+    **Provenance, not wording.** `tasks.generated` (schema 7) is written true by
+    exactly one caller — `sync_lesson_tasks` — so a task a trainee wrote can
+    never be touched by the reconciler, not even if they happen to word it
+    EXACTLY like a generated one. Until schema 7 ownership was a text match
+    against the module's own vocabulary, and a coincidence of wording meant a
+    deleted task; the column's one-time backfill in `supabase_schema.sql` marks
+    the rows that were generated before the flag existed.
+
+    A missing key reads False — but it cannot happen in the app: the schema
+    gate refuses to run against a database older than `REQUIRED_SCHEMA_VERSION`,
+    which is what keeps a stale DB from looking like "nothing is ours"."""
+    return bool(task.get("generated"))
 
 
 def _slot_task_satisfied(lesson: dict, text: str,
@@ -1752,8 +1781,7 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
     # ADOPTS the orphan (same row, lesson_id set), and the rest are retired.
     orphans: dict[str, list[dict]] = {}
     for t in tasks:
-        if not t.get("lesson_id") and t.get("status") != "DONE" \
-                and _is_slot_owned_text(t.get("task_description")):
+        if not t.get("lesson_id") and t.get("status") != "DONE" and _is_generated(t):
             orphans.setdefault(t["task_description"].strip(), []).append(t)
 
     created = removed = adopted = completed = renamed = 0
@@ -1769,8 +1797,10 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         for _, text in owned:
             if text.startswith("סידור "):
                 rooms_taken.append(text[len("סידור "):])
-        # The evening gained or lost a round: «מי מעביר את התוכן — חבורות»
-        # becomes «… — סבב א׳» and back. Same work, same row — RENAMED before
+        # The evening changed shape under a slot: it gained or lost a round of
+        # חבורות («מי מעביר את התוכן — חבורות» ⇄ «… — סבב א׳»), or a deletion
+        # renumbered it («דף מקורות — שיעור 3» ⇄ «… — שיעור 2»).
+        # Same work, same row — RENAMED before
         # anything is created, so the task keeps its details, its due date and
         # its place on the board instead of being deleted and born again.
         #
@@ -1782,12 +1812,12 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         # this can never reach across to a different task.
         want_by_base = {}
         for _, text in owned:
-            want_by_base.setdefault(_base_slot_text(text), text)
+            want_by_base.setdefault(_rename_key(text), text)
         for t in rows_by_lesson.get(l["id"], []):
             text = (t.get("task_description") or "").strip()
-            if text in expected or not _is_slot_owned_text(text):
+            if text in expected or not _is_generated(t):
                 continue
-            target = want_by_base.get(_base_slot_text(text))
+            target = want_by_base.get(_rename_key(text))
             if target and target not in have:
                 edit_task(t["id"], description=target)
                 t["task_description"] = target      # the retire pass reads this row again
@@ -1812,14 +1842,14 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
                 adopted += 1
                 continue
             add_task(mishmar_id, text, category=category, lesson_id=l["id"],
-                     status="DONE" if done else "TO DO")
+                     status="DONE" if done else "TO DO", generated=True)
             created += 1
         # The slot changed shape — a lesson became חבורות, stopped being one,
         # or its number moved. Its old generated tasks now ask for work nobody
         # will do; only OUR wording is retired, and only while still open.
         for t in open_by_lesson.get(l["id"], []):
             text = (t.get("task_description") or "").strip()
-            if text not in expected and _is_slot_owned_text(text):
+            if text not in expected and _is_generated(t):
                 _t("tasks").delete().eq("id", t["id"]).execute()
                 removed += 1
 
@@ -1835,7 +1865,7 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
     # for slots removed some other way.)
     for t in tasks:
         lid = t.get("lesson_id")
-        if lid and lid not in live_ids and t.get("status") != "DONE":
+        if lid and lid not in live_ids and t.get("status") != "DONE" and _is_generated(t):
             _t("tasks").delete().eq("id", t["id"]).execute()
             removed += 1
     return {"created": created, "removed": removed, "adopted": adopted,
@@ -1843,14 +1873,18 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
 
 
 def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:
-    """Remove one row of the evening AND the open tasks that belonged to it.
+    """Remove one row of the evening AND the open tasks IT generated.
 
-    Tasks marked DONE stay: they record work that happened. The clock reflows,
-    so the slots after this one do not keep stale start times.
+    Tasks marked DONE stay: they record work that happened. A task a human tied
+    to this slot also stays — the FK's `ON DELETE SET NULL` unties it, and it
+    goes back to being an ordinary task of the evening. Deleting it with the
+    slot threw away work nobody asked to throw away. The clock reflows, so the
+    slots after this one do not keep stale start times.
     """
     _invalidate(("tasks",))
     tasks = [t for t in get_tasks_for_mishmar(mishmar_id)
-             if t.get("lesson_id") == lesson_id and t.get("status") != "DONE"]
+             if t.get("lesson_id") == lesson_id and t.get("status") != "DONE"
+             and _is_generated(t)]
     for t in tasks:
         _t("tasks").delete().eq("id", t["id"]).execute()
     _t("lessons").delete().eq("id", lesson_id).execute()

@@ -227,6 +227,34 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lesson_id bigint
     REFERENCES lessons(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_lesson ON tasks(lesson_id);
 
+-- מי כתב את המשימה — המערכת או אדם. `sync_lesson_tasks` מוחק, מנסח מחדש ומאמץ
+-- רק שורות שהוא עצמו יצר, ועד היום הוא זיהה אותן לפי הטקסט המדויק: משימה
+-- שחניך ניסח במקרה באותן מילים בדיוק הייתה נמחקת לו. הדגל מחליף את
+-- ההיוריסטיקה בעובדה — רק `sync_lesson_tasks` כותב אותו כ-true.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS generated boolean NOT NULL DEFAULT false;
+
+-- מילוי חד-פעמי למסד שנזרע לפני הדגל: השורות בניסוח של המערכת מסומנות לפי
+-- אותה התאמת טקסט, פעם אחת בחיים. מוגן במפתח ב-app_meta, כדי שהרצה חוזרת של
+-- הקובץ לא תסמן משימה שאדם כתב מאז באותן מילים.
+-- משימות התבנית («סידור הבית מדרש») אינן בסט: הן נזרעות מ-students_tasks.md
+-- ואינן שייכות לאף מקטע.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_meta WHERE key = 'tasks_generated_backfilled') THEN
+    UPDATE tasks SET generated = true
+     WHERE task_description ~ '^(סגירת מרצה|דף מקורות) — שיעור [0-9]+$'
+        OR regexp_replace(task_description, '\s+—\s+סבב\s+\S+$', '') IN
+           ('מי מעביר את התוכן — חבורות',
+            'דפי מקורות למעבירי החבורות',
+            'חלוקת חללים למעבירי החבורות')
+        OR task_description IN ('סידור בית מדרש', 'סידור כיתת בית מדרש',
+                                'סידור כיתת שבייד', 'סידור ספריית שבייד');
+    INSERT INTO app_meta (key, value)
+    VALUES ('tasks_generated_backfilled', now()::text)
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
 -- ההזמנה למשמר: הטקסט שנשלח בוואטסאפ, וקישור לפוסטר. חיים על המשמר עצמו,
 -- כי יש בדיוק אחת לכל ערב.
 ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS invitation_text text;
@@ -468,5 +496,5 @@ REVOKE ALL ON speaker_searches FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '6')
+VALUES ('schema_version', '7')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
