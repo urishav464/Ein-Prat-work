@@ -49,7 +49,9 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
 - **Slots own their tasks.** `lessons` is the evening's structure; `tasks.lesson_id` ties a task to
   the slot it is about; `sync_lesson_tasks()` is the single reconciler — it creates each slot's
   tasks, adopts orphans written in its own wording, retires its own wording when a slot changes
-  shape or number, and never touches a DONE row or a human-written one.
+  shape or number, renames a round's tasks when the evening gains or loses a second round of
+  חבורות (same rows, «— סבב א׳»), and never deletes a DONE row or touches a human-written one.
+  Everything about a round — presenters, sheets, rooms — is scoped to THAT round.
 - **Reads are cached per table and writes invalidate per table** (`_READS` / `_WRITES` at the foot
   of `data_manager.py`). A new write function missing from `_WRITES` leaves stale rows on screen
   for up to two minutes.

@@ -1617,21 +1617,45 @@ _CHAVUROT_SLOT_TASKS: tuple[tuple[str, str], ...] = (
     ("לוגיסטיקה", "חלוקת חללים למעבירי החבורות"),
 )
 
+# An evening can hold more than one round of חבורות — the alumni evening held
+# two, and #01 does too. Everything about a round is a fact about THAT round:
+# its presenters, its source sheets, its rooms. When there is more than one,
+# the wording says which — the same «— סבב א׳» the seeded task list already
+# uses, so `_round_number` reads it back.
+_ROUND_ORDINALS: tuple[str, ...] = ("א׳", "ב׳", "ג׳", "ד׳")
+
+
+def round_suffix(round_index: int, round_total: int) -> str:
+    """«— סבב ב׳» for the second of two rounds; nothing at all for the only
+    round of an ordinary evening, which must keep reading «חבורות»."""
+    if round_total < 2 or not 1 <= round_index <= len(_ROUND_ORDINALS):
+        return ""
+    return f" — סבב {_ROUND_ORDINALS[round_index - 1]}"
+
 
 def _slot_tasks(lesson: dict, index: int,
-                presenters: Optional[list[dict]] = None) -> tuple[tuple[str, str], ...]:
+                presenters: Optional[list[dict]] = None,
+                round_index: int = 1, round_total: int = 1,
+                rooms_taken: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
     """The tasks a slot OWNS — (category, description). A חבורות slot is a
     different animal: several presenters, a source sheet each, and rooms to
     split between them. With two or more presenters, each room other than the
-    בית מדרש needs setting up on the night — one «סידור <חלל>» per distinct room."""
+    בית מדרש needs setting up on the night — one «סידור <חלל>» per distinct room.
+
+    `rooms_taken` are the rooms an EARLIER round already claimed: a room is
+    arranged once for the evening, not once per round that sits in it, so the
+    first round to use it owns the day-of task."""
     if _is_chavurot(lesson):
+        suffix = round_suffix(round_index, round_total)
         rooms: list[str] = []
         if presenters and len(presenters) >= 2:
             for c in presenters:
                 r = c.get("room")
-                if r and r != DEFAULT_ROOM and r in CHAVUROT_ROOMS and r not in rooms:
+                if r and r != DEFAULT_ROOM and r in CHAVUROT_ROOMS \
+                        and r not in rooms and r not in rooms_taken:
                     rooms.append(r)
-        return _CHAVUROT_SLOT_TASKS + tuple(("יום המשמר", f"סידור {r}") for r in rooms)
+        return tuple((cat, text + suffix) for cat, text in _CHAVUROT_SLOT_TASKS) \
+            + tuple(("יום המשמר", f"סידור {r}") for r in rooms)
     return (
         ("מרצים", f"סגירת מרצה — שיעור {index}"),
         ("תוכן",  f"דף מקורות — שיעור {index}"),
@@ -1639,6 +1663,14 @@ def _slot_tasks(lesson: dict, index: int,
 
 
 _RE_SLOT_TEXT = re.compile(r"^(?:סגירת מרצה|דף מקורות) — שיעור \d+$")
+_RE_ROUND_SUFFIX = re.compile(r"\s+—\s+סבב\s+\S+$")
+
+
+def _base_slot_text(text: Optional[str]) -> str:
+    """The wording without its round suffix — «מי מעביר את התוכן — חבורות»
+    whether the evening has one round or three. Ownership and satisfaction are
+    decided on the base; only the visible text carries the round."""
+    return _RE_ROUND_SUFFIX.sub("", (text or "").strip()).strip()
 
 
 def _is_slot_owned_text(text: Optional[str]) -> bool:
@@ -1651,7 +1683,8 @@ def _is_slot_owned_text(text: Optional[str]) -> bool:
     חבורות while the numbering shifted — «סגירת מרצה — שיעור 2» on the alumni
     evening's חבורות round was exactly that."""
     t = (text or "").strip()
-    return bool(_RE_SLOT_TEXT.match(t)) or t in {x for _, x in _CHAVUROT_SLOT_TASKS} \
+    return bool(_RE_SLOT_TEXT.match(t)) \
+        or _base_slot_text(t) in {x for _, x in _CHAVUROT_SLOT_TASKS} \
         or t in {f"סידור {r}" for r in CHAVUROT_ROOMS}
 
 
@@ -1663,7 +1696,7 @@ def _slot_task_satisfied(lesson: dict, text: str,
     with a sheet / a room satisfies the other two חבורות tasks. Derived, not
     ticked — the pair closed the speaker and the task stayed open, three
     separate times."""
-    t = (text or "").strip()
+    t = _base_slot_text(text)          # «… — סבב ב׳» asks the same question
     ps = presenters or []
     if t.startswith("סגירת מרצה"):
         return bool((lesson.get("speaker_name") or "").strip())
@@ -1704,9 +1737,12 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
                 (t.get("task_description") or "").strip())
 
     open_by_lesson: dict[int, list[dict]] = {}
+    rows_by_lesson: dict[int, list[dict]] = {}
     for t in tasks:
-        if t.get("lesson_id") and t.get("status") != "DONE":
-            open_by_lesson.setdefault(t["lesson_id"], []).append(t)
+        if t.get("lesson_id"):
+            rows_by_lesson.setdefault(t["lesson_id"], []).append(t)
+            if t.get("status") != "DONE":
+                open_by_lesson.setdefault(t["lesson_id"], []).append(t)
 
     # Open tasks tied to NO slot but written in our wording — a slot deleted
     # the bare way (ON DELETE SET NULL), or a sync from before the link
@@ -1720,12 +1756,44 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
                 and _is_slot_owned_text(t.get("task_description")):
             orphans.setdefault(t["task_description"].strip(), []).append(t)
 
-    created = removed = adopted = completed = 0
+    created = removed = adopted = completed = renamed = 0
+    rounds = [l["id"] for l in lessons if _is_chavurot(l)]
+    rooms_taken: list[str] = []
     for i, l in enumerate(lessons, 1):
         have = by_lesson.get(l["id"], set())
         ps = presenters.get(l["id"], [])
-        owned = _slot_tasks(l, i, ps)
+        owned = _slot_tasks(l, i, ps,
+                            round_index=rounds.index(l["id"]) + 1 if l["id"] in rounds else 1,
+                            round_total=len(rounds), rooms_taken=tuple(rooms_taken))
         expected = {text for _, text in owned}
+        for _, text in owned:
+            if text.startswith("סידור "):
+                rooms_taken.append(text[len("סידור "):])
+        # The evening gained or lost a round: «מי מעביר את התוכן — חבורות»
+        # becomes «… — סבב א׳» and back. Same work, same row — RENAMED before
+        # anything is created, so the task keeps its details, its due date and
+        # its place on the board instead of being deleted and born again.
+        #
+        # This is the ONE thing that touches a DONE row, and only its label:
+        # a round closed while the evening had two, then the second round went
+        # away — leaving a DONE «… — סבב א׳» that no longer matched anything,
+        # and a fresh bare copy of the same finished work beside it. Nothing is
+        # deleted here and no status changes; the base wording must match, so
+        # this can never reach across to a different task.
+        want_by_base = {}
+        for _, text in owned:
+            want_by_base.setdefault(_base_slot_text(text), text)
+        for t in rows_by_lesson.get(l["id"], []):
+            text = (t.get("task_description") or "").strip()
+            if text in expected or not _is_slot_owned_text(text):
+                continue
+            target = want_by_base.get(_base_slot_text(text))
+            if target and target not in have:
+                edit_task(t["id"], description=target)
+                t["task_description"] = target      # the retire pass reads this row again
+                have.discard(text)
+                have.add(target)
+                renamed += 1
         for category, text in owned:
             done = _slot_task_satisfied(l, text, ps)
             if text in have:
@@ -1771,7 +1839,7 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
             _t("tasks").delete().eq("id", t["id"]).execute()
             removed += 1
     return {"created": created, "removed": removed, "adopted": adopted,
-            "completed": completed}
+            "completed": completed, "renamed": renamed}
 
 
 def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:

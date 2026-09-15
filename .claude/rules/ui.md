@@ -58,6 +58,13 @@ never by eye.
 - The sidebar nav is `st.radio` restyled: the label IS the card; the radio mark is drawn twice in the DOM (hidden input wrapper `label > span:first-child` AND a 16px circle at `label > div > div > div:first-child`) — both must stay hidden.
 - No data dumps: prefer cards/grids/steppers over giant tables; long grids fold into expanders (open only when nothing urgent).
 
+## One naming for the evening's slots (`_slot_names`)
+
+- Three screens used to name the slots themselves, and each got it wrong differently. `_slot_names(lessons)` is now the only namer: the structure panel's head, the feedback form and the rooms panel all read it.
+- **`dm.is_chavurot` — role OR format OR title.** The feedback form asked `lesson_role == "חבורות"`, so a round the pair marked in the FORMAT field was listed as «שיעור 2» (`#01`, reported live).
+- **Names must be UNIQUE.** `feedback.lesson_title` is the key behind «one submission per slot per trainee», so when #01's two rounds both read «חבורות», rating the first silently locked the second. A round says which round it is when the evening holds several (`dm.round_suffix`), and two slots the pair gave the same title get their start time appended.
+- **The lesson numbering counts every non-break slot**, exactly as `dm._slot_tasks` numbers «סגירת מרצה — שיעור N». If one of them ever changes, both must.
+
 ## Reruns and cost
 
 - **Streamlit reruns the whole script on every interaction.** Anything expensive or side-effecting sits behind an explicit button and is cached in `session_state` — calling it at render time re-fires it on every unrelated click (this shipped a live bug: `verify_speaker` firing per rerun).

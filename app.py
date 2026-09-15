@@ -2177,7 +2177,8 @@ def _add_slot_clicked(mid: int, role: Optional[str] = None) -> None:
 def _sync_tasks_clicked(mid: int) -> None:
     res = dm.sync_lesson_tasks(mid)
     st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}"
-             + (f" · שויכו {res['adopted']}" if res.get("adopted") else ""))
+             + (f" · שויכו {res['adopted']}" if res.get("adopted") else "")
+             + (f" · עודכן ניסוח ב-{res['renamed']}" if res.get("renamed") else ""))
 
 
 def _room_changed(cid: int, key: str, mid: int) -> None:
@@ -2429,7 +2430,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
     if focus == "first_open_speaker":
         for l in lessons:
             if not l.get("is_break") and not l.get("speaker_name") \
-                    and (l.get("lesson_role") or "") != "חבורות":
+                    and not dm.is_chavurot(l):
                 highlight = l["id"]        # the dialog is the pair's call; we only point
                 break
     if highlight:
@@ -2438,6 +2439,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
         where = "" if highlight else " — לא זוהה מקטע ספציפי, בחרו למטה"
         st.info(f"⤴ הגעתם מהמשימה «{_clean(focus_task['task_description'])}»{where}")
 
+    slot_names = _slot_names(lessons)
     lesson_no = 0
     for l in lessons:
         if l.get("is_break"):
@@ -2468,9 +2470,9 @@ def _topic_and_structure(mid: int, tasks: list[dict],
         is_chavurot = dm.is_chavurot(l)
         my_tasks = linked.get(l["id"], [])
         with st.container(border=True, key=f"card-l-{l['id']}"):
-            head = _clean(l.get("title") or "") or f"שיעור {lesson_no} — ללא כותרת"
-            if is_chavurot and not l.get("title"):
-                head = "חבורות"
+            head = _clean(slot_names.get(l["id"], f"שיעור {lesson_no}"))
+            if not (l.get("title") or "").strip() and not is_chavurot:
+                head += " — ללא כותרת"
             chips = []
             if l.get("lesson_role"):
                 chips.append(_chip(l["lesson_role"], "gold"))
@@ -2560,10 +2562,45 @@ def _topic_and_structure(mid: int, tasks: list[dict],
               on_click=_sync_tasks_clicked, args=(mid,))
 
 
+def _slot_names(lessons: list[dict]) -> dict[int, str]:
+    """Every slot of the evening by name — ONE naming, shared by the structure
+    panel, the feedback form and the rooms panel.
+
+    Two rules the screens used to get wrong on their own:
+    · a round of חבורות is recognised by `dm.is_chavurot` (role OR format OR
+      title). The feedback form asked `lesson_role == "חבורות"`, so a round the
+      pair marked in the FORMAT field was listed as «שיעור 2».
+    · names must be UNIQUE. `feedback.lesson_title` is the key for «one
+      submission per slot per trainee», so when #01's two rounds both read
+      «חבורות», feedback on the first silently blocked the second. A round in
+      an evening that holds several says which one it is.
+
+    The lesson numbering counts every non-break slot, exactly as
+    `dm._slot_tasks` numbers «סגירת מרצה — שיעור N» — the two must agree."""
+    slots = [l for l in lessons if not l.get("is_break")]
+    rounds = [l["id"] for l in slots if dm.is_chavurot(l)]
+    names: dict[int, str] = {}
+    for i, l in enumerate(slots, 1):
+        title = (l.get("title") or "").strip()
+        if dm.is_chavurot(l):
+            names[l["id"]] = (title or "חבורות") + dm.round_suffix(
+                rounds.index(l["id"]) + 1, len(rounds))
+        else:
+            names[l["id"]] = title or f"שיעור {i}"
+    # two slots the pair gave the same title: the time tells them apart
+    seen: dict[str, int] = {}
+    for name in names.values():
+        seen[name] = seen.get(name, 0) + 1
+    for l in slots:
+        if seen.get(names[l["id"]], 0) > 1 and l.get("start_time"):
+            names[l["id"]] += f" ({l['start_time']})"
+    return names
+
+
 def _slot_label(l: dict, index: int) -> str:
     """How a slot is named in a task's «שייך למקטע» line."""
     title = (l.get("title") or "").strip()
-    if not title and (l.get("lesson_role") or "") == "חבורות":
+    if not title and dm.is_chavurot(l):
         title = "חבורות"
     return f"{l.get('start_time') or '--:--'} · {title or f'מקטע {index}'}"
 
@@ -2628,23 +2665,35 @@ def _rooms_summary(mid: int, legacy: list[dict],
     two places and neither knew about the other. The presenters own it now;
     this panel only shows it, and offers the door to where it is edited."""
     st.markdown("**🚪 חלוקת החללים לחבורות**")
-    st.caption("נגזר ממעבירי החבורות במבנה הערב — כל מעביר וחלל אחד.")
+    st.caption("נגזר ממעבירי החבורות במבנה הערב — כל מעביר וחלל אחד, בתוך הסבב שלו.")
     all_lessons = dm.get_lessons(mid)
-    lessons = [l for l in all_lessons if not l.get("is_break") and dm.is_chavurot(l)]
+    rounds = [l for l in all_lessons if not l.get("is_break") and dm.is_chavurot(l)]
     # The candidates come from the caller, which already loaded them for the
     # structure panel: fetching again with a different argument list would miss
     # that memo and cost a second query for rows we are already holding.
     if candidates is None:
         candidates = dm.get_lesson_speakers(mid, lessons=all_lessons) if all_lessons else {}
-    rows = [r for l in lessons for r in candidates.get(l["id"], [])]
-    if rows:
-        used = [r.get("room") for r in rows if r.get("room")]
-        for r in rows:
-            room = r.get("room")
-            mark = " ⚠️ אותו חלל לשניים" if room and used.count(room) > 1 else ""
-            st.markdown(
-                f"- **{_clean(room or 'טרם נקבע חלל')}** — {_clean(r['name'])}{mark}"
-                + (f" · [📎 דף מקורות]({r['source_url']})" if r.get("source_url") else ""))
+    names = _slot_names(all_lessons)
+    if any(candidates.get(l["id"]) for l in rounds):
+        for l in rounds:
+            rows = candidates.get(l["id"], [])
+            # A room is taken FOR A ROUND. The count used to run over every
+            # presenter of the evening, so #01's two rounds — an hour apart —
+            # flagged each other: «אותו חלל לשניים» on eight rows at once.
+            used = [r.get("room") for r in rows if r.get("room")]
+            if len(rounds) > 1:
+                st.markdown(f"<div class='card-meta'>🕘 {_clean(_slot_times(l))} · "
+                            f"<b>{_clean(names.get(l['id'], 'חבורות'))}</b></div>",
+                            unsafe_allow_html=True)
+            if not rows:
+                st.caption("— אין עדיין מעבירים בסבב הזה —")
+                continue
+            for r in rows:
+                room = r.get("room")
+                mark = " ⚠️ אותו חלל לשניים בסבב הזה" if room and used.count(room) > 1 else ""
+                st.markdown(
+                    f"- **{_clean(room or 'טרם נקבע חלל')}** — {_clean(r['name'])}{mark}"
+                    + (f" · [📎 דף מקורות]({r['source_url']})" if r.get("source_url") else ""))
     else:
         _empty("אין עדיין מעבירי חבורות.", "הוסיפו אותם במבנה הערב.")
     st.button("↗ למבנה הערב", key=f"rooms-go-{mid}",
@@ -3007,10 +3056,12 @@ def _after_tab(mid: int) -> None:
     else:
         with st.form(f"slot-feedback-{mid}"):
             entries = []
-            for i, l in enumerate(lessons, 1):
-                name = l.get("title") or (
-                    "חבורות" if (l.get("lesson_role") or "") == "חבורות"
-                    else f"שיעור {i}")
+            fb_names = _slot_names(lessons)
+            for l in lessons:
+                # one naming for the whole app — and a UNIQUE one: two rounds of
+                # חבורות both called «חבורות» made the second unratable, because
+                # `my_titles` is keyed by this very string
+                name = fb_names.get(l["id"], "מקטע")
                 st.markdown(
                     f"**{_clean(name)}**"
                     + (f" · 🎤 {_clean(l['speaker_name'])}" if l.get("speaker_name") else "")

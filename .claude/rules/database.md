@@ -105,6 +105,21 @@ panel instead of on a slot.
   sorted next to the old 5, mid-evening. `get_lessons` orders by `slot_order` then `id`; the
   recompute closes gaps (1..N) in the same pass that reflows the clock. `upsert_lesson` keys on
   `slot_order`, which is why callers must read fresh rows after any structural change.
+- **An evening can hold more than one round of חבורות, and every round is its own.**
+  `#01` and the alumni evening both do. `round_suffix(i, total)` appends «— סבב א׳ / ב׳ / ג׳ / ד׳»
+  to the three חבורות texts **only when `total ≥ 2`** — a single round must keep reading
+  «מי מעביר את התוכן — חבורות», and `_round_number` reads the suffix back, so
+  `suggest_lesson_for_task` aims «פתח» at the right round. Ownership and satisfaction are decided
+  on `_base_slot_text(text)` (the wording minus its suffix), so one rule covers both shapes.
+  · **Rooms belong to a round**, not to the evening: the same room at 20:00 and at 21:15 is not a
+  clash. · **A room is ARRANGED once**: the day-of «סידור <חלל>» goes to the first round that uses
+  it (`rooms_taken` accumulates down the evening), because the tables are moved once for the night.
+  · **Shape changes RENAME, never delete-and-recreate.** A round gained a sibling → its three rows
+  keep their ids, details, due dates and status, and only their label moves (`renamed` in the
+  result); the sibling goes away → they move back. This is the **one** thing that touches a DONE
+  row, and it touches only its text: without it a DONE «… — סבב א׳» sat beside a freshly created
+  bare copy of the same finished work. The base wording must match, so a rename can never reach
+  across to a different task.
 - **A slot's tasks complete themselves.** `_slot_task_satisfied(lesson, text, presenters)`: a
   closed `speaker_name` satisfies «סגירת מרצה», a `source_url` on the slot «דף מקורות», one
   presenter «מי מעביר», every presenter with a room / a sheet the other two. `sync_lesson_tasks`
@@ -146,7 +161,8 @@ panel instead of on a slot.
   other room they chose yields a slot-owned «סידור <חלל>» (`יום המשמר`), created and retired by
   `sync_lesson_tasks` — which now reads the presenters in one query and is called by the UI after
   every room change, presenter add (`add_chavurot_presenter`) and presenter delete. One presenter →
-  nothing extra. Closing a candidate (`_close_candidate` in `app.py`) also marks the slot's open
+  nothing extra. Across ROUNDS the room is deduped (see the round rule above), and both the
+  presenter list and the logistics panel count a room's users **within its own round**. Closing a candidate (`_close_candidate` in `app.py`) also marks the slot's open
   «סגירת מרצה» task DONE, found by `lesson_id`.
 - **Every sort/slice on a date column wraps it in `str()`** — `due_date` too: the shim returns a
   `date` where PostgREST returns text, and a task without a due date (the `or "9999"` fallback)
