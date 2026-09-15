@@ -1176,10 +1176,15 @@ def recompute_lesson_times(mishmar_id: int, first_start: str = EVENING_START) ->
     except ValueError:
         h, m = 20, 0
     minutes = h * 60 + m
-    for r in rows:
+    for i, r in enumerate(rows, 1):
         stamp = f"{(minutes // 60) % 24:02d}:{minutes % 60:02d}"
+        fields: dict[str, Any] = {}
         if r.get("start_time") != stamp:
-            _t("lessons").update({"start_time": stamp}).eq("id", r["id"]).execute()
+            fields["start_time"] = stamp
+        if int(r.get("slot_order") or 0) != i:
+            fields["slot_order"] = i        # close the gap a deletion left
+        if fields:
+            _t("lessons").update(fields).eq("id", r["id"]).execute()
         dur = r.get("duration_minutes") or (
             BREAK_DEFAULT_MINUTES if r.get("is_break") else LESSON_DEFAULT_MINUTES)
         minutes += int(dur)
@@ -1334,7 +1339,7 @@ def get_all_lessons() -> list[dict]:
 
 def get_lessons(mishmar_id: int) -> list[dict]:
     return _rows(_t("lessons").select("*").eq("mishmar_id", mishmar_id)
-                 .order("slot_order").execute())
+                 .order("slot_order").order("id").execute())
 
 
 def upsert_lesson(mishmar_id: int, slot_order: int, title: Optional[str] = None,
@@ -1387,12 +1392,20 @@ def set_lesson_duration(mishmar_id: int, lesson_id: int, minutes: int) -> None:
     recompute_lesson_times(mishmar_id)
 
 
+def _next_slot_order(mishmar_id: int) -> int:
+    """One past the LAST slot. `len(rows) + 1` collided after a deletion: with
+    orders 1,2,4,5 it produced 5 again, and the new break sorted next to the
+    old 5 — mid-evening instead of at the end."""
+    rows = get_lessons(mishmar_id)
+    return (max(int(r.get("slot_order") or 0) for r in rows) + 1) if rows else 1
+
+
 def add_lesson_slot(mishmar_id: int, minutes: int = 60,
                     role: Optional[str] = None) -> None:
     """Append an empty slot at the end of the evening. `role="חבורות"` makes it
     a second round of חבורות — presenters, rooms and source sheets — instead
     of a lesson; `is_chavurot` reads the role, so the UI follows."""
-    order = len(get_lessons(mishmar_id)) + 1
+    order = _next_slot_order(mishmar_id)
     row: dict[str, Any] = {"mishmar_id": mishmar_id, "slot_order": order,
                            "duration_minutes": int(minutes)}
     if role:
@@ -1402,7 +1415,7 @@ def add_lesson_slot(mishmar_id: int, minutes: int = 60,
 
 
 def add_break(mishmar_id: int, minutes: int = 15) -> None:
-    order = len(get_lessons(mishmar_id)) + 1
+    order = _next_slot_order(mishmar_id)
     _t("lessons").insert({"mishmar_id": mishmar_id, "slot_order": order,
                           "is_break": True, "duration_minutes": int(minutes)}).execute()
     recompute_lesson_times(mishmar_id)
@@ -1620,6 +1633,29 @@ def _is_slot_owned_text(text: Optional[str]) -> bool:
         or t in {f"סידור {r}" for r in CHAVUROT_ROOMS}
 
 
+def _slot_task_satisfied(lesson: dict, text: str,
+                         presenters: Optional[list[dict]]) -> bool:
+    """Is the work this slot-owned task asks for already visible on the slot?
+    A closed speaker satisfies «סגירת מרצה»; a source sheet on the slot
+    satisfies «דף מקורות»; one presenter satisfies «מי מעביר»; every presenter
+    with a sheet / a room satisfies the other two חבורות tasks. Derived, not
+    ticked — the pair closed the speaker and the task stayed open, three
+    separate times."""
+    t = (text or "").strip()
+    ps = presenters or []
+    if t.startswith("סגירת מרצה"):
+        return bool((lesson.get("speaker_name") or "").strip())
+    if t.startswith("דף מקורות — שיעור"):
+        return bool((lesson.get("source_url") or "").strip())
+    if t == "מי מעביר את התוכן — חבורות":
+        return bool(ps)
+    if t == "דפי מקורות למעבירי החבורות":
+        return bool(ps) and all((p.get("source_url") or "").strip() for p in ps)
+    if t == "חלוקת חללים למעבירי החבורות":
+        return bool(ps) and all((p.get("room") or "").strip() for p in ps)
+    return False
+
+
 def sync_lesson_tasks(mishmar_id: int) -> dict:
     """Make the task board match the evening's structure.
 
@@ -1662,20 +1698,31 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
                 and _is_slot_owned_text(t.get("task_description")):
             orphans.setdefault(t["task_description"].strip(), []).append(t)
 
-    created = removed = adopted = 0
+    created = removed = adopted = completed = 0
     for i, l in enumerate(lessons, 1):
         have = by_lesson.get(l["id"], set())
-        owned = _slot_tasks(l, i, presenters.get(l["id"], []))
+        ps = presenters.get(l["id"], [])
+        owned = _slot_tasks(l, i, ps)
         expected = {text for _, text in owned}
         for category, text in owned:
+            done = _slot_task_satisfied(l, text, ps)
             if text in have:
+                # the slot already shows the work — an open task for it is stale
+                for t in open_by_lesson.get(l["id"], []):
+                    if done and (t.get("task_description") or "").strip() == text:
+                        update_task_status(t["id"], "DONE")
+                        completed += 1
                 continue
             if orphans.get(text):
                 orphan = orphans[text].pop(0)
                 link_task_to_lesson(orphan["id"], l["id"])
+                if done:
+                    update_task_status(orphan["id"], "DONE")
+                    completed += 1
                 adopted += 1
                 continue
-            add_task(mishmar_id, text, category=category, lesson_id=l["id"])
+            add_task(mishmar_id, text, category=category, lesson_id=l["id"],
+                     status="DONE" if done else "TO DO")
             created += 1
         # The slot changed shape — a lesson became חבורות, stopped being one,
         # or its number moved. Its old generated tasks now ask for work nobody
@@ -1701,7 +1748,8 @@ def sync_lesson_tasks(mishmar_id: int) -> dict:
         if lid and lid not in live_ids and t.get("status") != "DONE":
             _t("tasks").delete().eq("id", t["id"]).execute()
             removed += 1
-    return {"created": created, "removed": removed, "adopted": adopted}
+    return {"created": created, "removed": removed, "adopted": adopted,
+            "completed": completed}
 
 
 def delete_lesson_with_tasks(mishmar_id: int, lesson_id: int) -> dict:
@@ -1758,6 +1806,53 @@ def set_candidate_source(candidate_id: int, url: Optional[str]) -> None:
     """A presenter's own source sheet — one per חבורה, not one per evening."""
     _t("lesson_speakers").update(
         {"source_url": (url or "").strip() or None}).eq("id", candidate_id).execute()
+
+
+def roster_placeholders() -> list[dict]:
+    """Student rows still named «חניך N» — the sign that this database was
+    seeded before the real names landed in students_tasks.md."""
+    return [s for s in get_students()
+            if s.get("role") == "student" and (s.get("name") or "").startswith("חניך")]
+
+
+def apply_trainee_roster() -> dict:
+    """Bring `students` and `assignments` in line with students_tasks.md —
+    the same mapping the SQL migration applies, done by the app under the
+    instructor's confirmation for a database seeded with placeholders.
+
+    Names go onto ids 1..N in the index table's order; placeholder rows past
+    N are deleted (assignments cascade, other student_id refs go NULL); the
+    trainee Mishmarim's pairs are replaced from the «אחראים» lines. Idempotent:
+    a second run changes nothing. Staff-built evenings are never touched."""
+    parsed = parse_tasks_md(TASKS_MD)
+    names = parsed["students"]
+    if not names:
+        return {"error": "students_tasks.md carries no trainee names"}
+    _invalidate(("students", "assignments"))
+    existing = [s for s in get_students() if s.get("role") == "student"]
+    by_id = {int(s["id"]): s for s in existing}
+    renamed = created = deleted = 0
+    for i, n in enumerate(names, 1):
+        if i in by_id:
+            if by_id[i].get("name") != n:
+                _t("students").update({"name": n}).eq("id", i).execute()
+                renamed += 1
+        else:
+            _t("students").insert({"id": i, "name": n, "role": "student"}).execute()
+            created += 1
+    for s in existing:
+        if int(s["id"]) > len(names) and (s.get("name") or "").startswith("חניך"):
+            _t("students").delete().eq("id", int(s["id"])).execute()
+            deleted += 1
+    name_to_id = {n: i for i, n in enumerate(names, 1)}
+    links = sorted({(mid, name_to_id[nm]) for mid, nm in parsed["assignments"]
+                    if nm in name_to_id and mid not in STAFF_BUILT_MISHMARIM})
+    for mid in sorted({mid for mid, _ in links}):
+        _t("assignments").delete().eq("mishmar_id", mid).execute()
+    if links:
+        _t("assignments").insert([{"mishmar_id": m, "student_id": s} for m, s in links]).execute()
+    return {"names": len(names), "renamed": renamed, "created": created,
+            "deleted": deleted, "assignments": len(links)}
 
 
 def reset_mishmar(mishmar_id: int) -> dict:
@@ -2292,7 +2387,7 @@ _WRITES = {
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),
     # a reset touches nearly every table — «not sure» is the honest answer
-    "reset_mishmar": _ALL,
+    "reset_mishmar": _ALL, "apply_trainee_roster": _ALL,
     "backfill_task_metadata": _ALL, "seed_from_markdown": _ALL,
 }
 

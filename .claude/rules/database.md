@@ -100,6 +100,26 @@ panel instead of on a slot.
   a human-written task never touched. Proven on the shim: role→חבורות, a number shift, an
   adoptable orphan, a stray orphan, a DONE row and a human row — then idempotent. The slot editor's
   save and both «➕ הוסף» buttons now call the sync themselves; a slot is born with its tasks.
+- **A new row goes LAST: `_next_slot_order` = max + 1, and `recompute_lesson_times` renumbers.**
+  `len(rows) + 1` collided after a deletion — orders 1,2,4,5 produced 5 again, and the new break
+  sorted next to the old 5, mid-evening. `get_lessons` orders by `slot_order` then `id`; the
+  recompute closes gaps (1..N) in the same pass that reflows the clock. `upsert_lesson` keys on
+  `slot_order`, which is why callers must read fresh rows after any structural change.
+- **A slot's tasks complete themselves.** `_slot_task_satisfied(lesson, text, presenters)`: a
+  closed `speaker_name` satisfies «סגירת מרצה», a `source_url` on the slot «דף מקורות», one
+  presenter «מי מעביר», every presenter with a room / a sheet the other two. `sync_lesson_tasks`
+  marks an open owned task DONE when its slot already shows the work, creates a satisfied task as
+  DONE (the case that bit: the task was created by a later sync, after the speaker had been
+  closed), and reports `completed`. It is called after every write that can satisfy one —
+  `_close_candidate`, `_source_changed`, the slot editor's save, presenter add/room change.
+  Never the reverse: a reopened speaker does not reopen a DONE task.
+- **The roster can be applied from the app.** `roster_placeholders()` lists student rows still
+  named «חניך N»; `apply_trainee_roster()` brings `students` + `assignments` in line with
+  `students_tasks.md` — names onto ids 1..N in index order, placeholder rows past N deleted
+  (assignments cascade, other `student_id` refs go NULL), the trainee Mishmarim's pairs replaced,
+  staff evenings untouched. Idempotent; identical result to the SQL migration (proven on a
+  ten-placeholder copy). The instructor runs it from the dashboard behind a two-step dialog — the
+  only way a human fixes data without an SQL editor, and still a human's click.
 - **`add_lesson_slot(mishmar_id, minutes, role=None)`** — `role="חבורות"` is how a second round
   of חבורות is added («➕ הוסף חבורות»); `is_chavurot` reads the role. `set_candidate_phone` edits
   a candidate's phone after the fact and, like `add_lesson_speaker`, fills the index's contact

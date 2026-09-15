@@ -360,12 +360,17 @@ RTL_CSS = """
   [class*="st-key-ib-"] button {
       width: 2rem !important; min-width: 2rem; height: 2rem; min-height: 2rem;
       padding: 0 !important; border: 1px solid var(--line); border-radius: 8px;
-      background: #ffffff; color: #1d3e7d; line-height: 1;
+      background: #ffffff; color: #1d3e7d; line-height: 1; overflow: visible;
   }
+  /* the glyph sits in a <p> with the body line-height; inside a 2rem box that
+     overflowed and the emoji was clipped top and bottom */
+  [class*="st-key-ib-"] button p { margin: 0; line-height: 1; font-size: 1rem; }
   [class*="st-key-ib-"] button:hover { border-color: #1d3e7d; background: #f7f9fd; }
   [class*="st-key-ib-dn-"] button, [class*="st-key-ib-lt-"] button { border-color: #1d3e7d; }
   /* card titles that are buttons: the label sits at the right edge, with the
      chips and the axis under it — a centred title read as "shifted" */
+  /* the label is a <p> with the body weight — bold on the button alone did nothing */
+  [class*="st-key-pc-"] button p, [class*="st-key-mc-"] button p { font-weight: 700; }
   [class*="st-key-pc-"] button, [class*="st-key-mc-"] button {
       justify-content: flex-end; text-align: right; padding-inline: 0;
   }
@@ -927,13 +932,24 @@ def show_admin_dashboard() -> None:
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
     owners = dm.get_owners_by_mishmar()
-    # Cards that silently show nobody are how a failed assignment migration
-    # would look. Name the file instead.
-    if not any(owners.get(m["id"]) for m in mishmarim
-               if m["id"] not in dm.STAFF_BUILT_MISHMARIM):
-        st.warning("אף משמר אינו משובץ לחניכים. אם הזריעה הראשונה קדמה לשמות "
-                   "האמיתיים, הריצו את `migrations/2026-09-assign-trainees.sql` "
-                   "ב-Supabase → SQL Editor.")
+    # A database seeded before the real names landed still says «חניך N» on
+    # every card. The SQL migration was the first answer; the second is this
+    # button, which applies the same mapping from the Markdown under the
+    # instructor's confirmation — the only way a human can fix data here
+    # without an SQL editor.
+    placeholders = dm.roster_placeholders()
+    unowned = not any(owners.get(m["id"]) for m in mishmarim
+                      if m["id"] not in dm.STAFF_BUILT_MISHMARIM)
+    if placeholders or unowned:
+        with st.container(border=True, key="card-roster"):
+            st.markdown("**👥 שמות החניכים והשיבוץ עוד לא הוחלו במסד.**")
+            st.caption(
+                (f"{len(placeholders)} שורות עדיין נקראות «חניך N». " if placeholders else
+                 "אף משמר אינו משובץ לחניכים. ")
+                + "הלחיצה מחליפה את השמות ואת זוגות #03–#21 לפי `students_tasks.md` — "
+                  "אותו שינוי שעושה `migrations/2026-09-assign-trainees.sql`, בלי SQL Editor.")
+            if st.button("👥 החל את השמות והשיבוץ מהקובץ", key="roster-open", type="primary"):
+                _roster_dialog()
     # Two season-wide reads, shared with «מה דורש התערבות» below.
     all_lessons = dm.get_all_lessons()
     outreach = dm.get_all_outreach()
@@ -1050,6 +1066,22 @@ def _goto(nav: str, mishmar_id: Optional[int] = None,
     # scope="app": a door pressed inside a fragment must restart the whole
     # page, not just the fragment it was pressed in.
     st.rerun(scope="app")
+
+
+def _goto_local(section: Optional[str] = None, lesson_focus=None,
+                task_focus: Optional[int] = None) -> None:
+    """A door from the workfile's task board into the SAME evening: no page
+    restart. The panels and the focus live in session state that the fragment
+    reads, so setting them and rerunning the fragment is the whole trip —
+    `_goto` restarted the app for a click that never left the screen."""
+    if section is not None:
+        st.session_state["wf_panel"] = section
+        st.session_state["wf_panel_nonce"] = st.session_state.get("wf_panel_nonce", 0) + 1
+    st.session_state["wf_focus_lesson"] = lesson_focus
+    st.session_state["wf_focus_task"] = task_focus
+    st.session_state["_scroll_req"] = True
+    st.session_state.pop("_scroll_target_lesson", None)
+    st.rerun(scope="fragment")
 
 
 def _set_status(task_id: int, status: str, toast: Optional[str] = None) -> None:
@@ -1962,16 +1994,12 @@ def _slot_times(l: dict) -> str:
 def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
     res = dm.close_lesson_speaker(lesson_id, name, mishmar_id=mid,
                                   student_id=st.session_state.student_id)
-    # The slot's own «סגירת מרצה» task is what this click means — close it too,
-    # found by lesson_id (no guessing), open ones only.
-    closed_tasks = 0
-    for t in dm.get_tasks_for_mishmar(mid):
-        if (t.get("lesson_id") == lesson_id and t.get("category") == "מרצים"
-                and t.get("status") != "DONE"):
-            dm.update_task_status(t["id"], "DONE")
-            closed_tasks += 1
+    # The slot's own «סגירת מרצה» task is what this click means. The sync
+    # derives completion from the slot's state, so it closes here AND catches
+    # a task the sync created after the speaker was already closed.
+    sync = dm.sync_lesson_tasks(mid)
     st.toast(f"«{res['closed']}» נסגר לשיעור"
-             + (" · משימת סגירת המרצה סומנה כבוצעה" if closed_tasks else "")
+             + (" · משימת סגירת המרצה סומנה כבוצעה" if sync.get("completed") else "")
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
 
 
@@ -2035,6 +2063,11 @@ def _room_changed(cid: int, key: str, mid: int) -> None:
     dm.sync_lesson_tasks(mid)          # the day-of «סידור <חלל>» tasks follow the rooms
 
 
+def _source_changed(cid: int, key: str, mid: int) -> None:
+    dm.set_candidate_source(cid, st.session_state.get(key))
+    dm.sync_lesson_tasks(mid)          # «דפי מקורות למעבירי החבורות» completes itself
+
+
 def _remove_presenter(cid: int, mid: int) -> None:
     dm.delete_lesson_candidate(cid)
     dm.sync_lesson_tasks(mid)
@@ -2073,8 +2106,7 @@ def _chavurot_rows(mid: int, l: dict, cands: list[dict]) -> None:
             "דף מקורות", key=skey, value=cand.get("source_url") or "",
             placeholder="📎 קישור לדף המקורות של החבורה הזו (Drive וכו׳)",
             label_visibility="collapsed",
-            on_change=lambda cid=cand["id"], k=skey: dm.set_candidate_source(
-                cid, st.session_state[k]))
+            on_change=_source_changed, args=(cand["id"], skey, mid))
     if not cands:
         _empty("עוד לא נוספו מעבירים.", "כל מעביר מקבל חלל ודף מקורות משלו.")
 
@@ -2565,6 +2597,29 @@ def _logistics_panel(mid: int, m: dict,
                               on_click=_upload_invitation_clicked, args=(mid, ukey))
 
 
+@st.dialog("👥 שמות החניכים והשיבוץ")
+def _roster_dialog() -> None:
+    """Apply students_tasks.md to `students` + `assignments`. Two steps, like
+    the reset: it renames rows, deletes placeholder rows past the roster, and
+    replaces the pairs of every trainee Mishmar. Idempotent, so a second run
+    is harmless — but it is still the instructor's call, not the app's."""
+    st.markdown(
+        "מעדכן את שמות החניכים לפי טבלת האינדקס ב-`students_tasks.md`, מוחק שורות "
+        "placeholder שנותרו מעבר לרשימה («חניך 10»), ומשבץ מחדש את משמרים #03–#21 "
+        "לפי שורות «אחראים». **משמרי הצוות (#01–#02) לא נוגעים.** "
+        "משימות, מרצים ומבנה הערבים נשארים כפי שהם."
+    )
+    ok = st.checkbox("אני מבין/ה — להחיל את השמות והשיבוץ", key="roster-ok")
+    if st.button("👥 החל", key="roster-apply", type="primary", disabled=not ok):
+        res = dm.apply_trainee_roster()
+        if res.get("error"):
+            st.error(res["error"])
+            return
+        st.toast(f"{res['names']} שמות · שונו {res['renamed']} · נוספו {res['created']} · "
+                 f"נמחקו {res['deleted']} · {res['assignments']} שיבוצים")
+        st.rerun()   # closes the dialog; the cards read the new names
+
+
 @st.dialog("⚠️ איפוס המשמר")
 def _reset_dialog(mid: int) -> None:
     """Start the evening over. A modal, deliberately two steps and deliberately
@@ -2733,13 +2788,14 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         if t["status"] != "DONE":
             if not no_door and row.button("פתח ↗", key=f"{k}-go",
                                           help="למקום שבו סוגרים את זה"):
+                # same evening, same screen: a fragment rerun, not a page restart
                 if t.get("category") == "אחרי":
-                    _goto(NAV_WORKFILE, mid, WF_AFTER)
+                    _goto_local(WF_AFTER)
                 elif slot or t.get("category") in ("מרצים", "תוכן", "נושא"):
                     # the evening builder resolves the exact slot from the task
-                    _goto(NAV_WORKFILE, mid, WF_STRUCTURE, task_focus=t["id"])
+                    _goto_local(WF_STRUCTURE, task_focus=t["id"])
                 else:
-                    _goto(NAV_WORKFILE, mid, WF_LOGISTICS)
+                    _goto_local(WF_LOGISTICS)
             row.button("✓", key=f"ib-dn-{k}", help="סמן שבוצע",
                       on_click=_set_status, args=(t["id"], "DONE", "בוצע 🎉"))
         else:
@@ -2980,6 +3036,10 @@ def _workfile_body(mid: int) -> None:
 
     st.divider()
     _workfile_columns(mid, tasks, progress)
+    # a door pressed on this screen reruns only this fragment, so the landing
+    # scroll has to be issued from inside it; on a full run main() finds the
+    # request already consumed and does nothing
+    _scroll_after_nav()
 
 
 

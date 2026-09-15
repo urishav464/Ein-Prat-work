@@ -59,8 +59,9 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   evening panels are wrapped in `_safe()` so one broken panel cannot blank a column.
 - **The season's data starts as Markdown.** `students_tasks.md` seeds a first run against an empty
   Supabase — the nine trainees from its index table, the 21 evenings, their tasks — and
-  `app_meta.seeded` guards it forever after. `migrations/2026-09-assign-trainees.sql` exists only
-  for a database seeded *before* the real names landed in that file;
+  `app_meta.seeded` guards it forever after. A database seeded *before* the real names landed
+  in that file is fixed from the instructor's dashboard (`dm.apply_trainee_roster`, behind a
+  two-step dialog) or with `migrations/2026-09-assign-trainees.sql` — same mapping;
   `scripts/assign_trainees.py` regenerates the SQL and the Markdown together.
 
 ## Where the detailed knowledge lives

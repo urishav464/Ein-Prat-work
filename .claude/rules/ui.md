@@ -174,6 +174,18 @@ More probe traps that produced false test results here: **input placeholders nev
   widget has been drawn yet. Measured: 0 app reruns, the fragment alone, the boxes empty after.
   The old `if form_submit_button(): write; st.rerun()` restarted the whole page and left the
   previous name in the box.
+- **A door that stays on the screen stays in the fragment.** `_goto_local(section, …)` is what
+  the workfile's task cards use: it sets `wf_panel` (+ nonce), the focus keys and `_scroll_req`,
+  then `st.rerun(scope="fragment")` — the app used to restart for «פתח ↗» on a task of the very
+  evening on screen. `_scroll_after_nav()` is therefore also called at the END of
+  `_workfile_body`: on a fragment rerun `main()` does not run, so the landing scroll must be
+  issued from inside the fragment; on a full run `main()`'s call finds the request consumed.
+  Measured: 0 app reruns for «פתח ↗» and for 🗑 on a task card, the highlighted slot at the top.
+- **Icon-box glyphs**: the emoji sits in a `<p>` with the body line-height; inside a 2rem box it
+  overflowed and was clipped top and bottom. `[class*="st-key-ib-"] button p { margin: 0;
+  line-height: 1 }` plus `overflow: visible` on the button — measured 19×20 inside 32×32.
+- **Pipeline titles are bold through the `<p>`**: `font-weight` on the button did nothing, the
+  label is a paragraph with the body weight — `[class*="st-key-pc-"] button p { font-weight: 700 }`.
 - **Deep links land where they point.** Streamlit keeps the scroll position across a rerun, so a
   pipeline card pressed mid-dashboard opened the workfile mid-page. `_apply_goto` stages
   `_scroll_req`; `_scroll_after_nav()` at the end of `main()` renders ONE 0-height
