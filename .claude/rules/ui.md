@@ -71,7 +71,9 @@ never by eye.
 - **Three screens are fragments**: `_workfile_body`, `_dashboard_body`, `_student_body` — everything
   under the screen's title. A widget inside one reruns that body only: no login gate, no CSS, no
   sidebar. A door to another screen (`_goto`) restarts the app on purpose (`scope="app"`).
-- **A form submits through `on_click`, never `if submit: write(); st.rerun()`.** `st.rerun()` with no
+- **Every form submits through `on_click`, never `if submit: write(); st.rerun()`.** Seven of them,
+  «שיוך חשבונות» included — inside a fragment even `st.rerun(scope="fragment")` after a submit is a
+  needless SECOND run of the whole body. `st.rerun()` with no
   scope inside a fragment is a WHOLE-APP run — six forms did exactly that (add task, close/update
   topic, add logistics row, feedback, budget). The callback reads the inputs by key from
   `session_state` and writes; the one fragment run that follows already shows the result.
@@ -274,7 +276,9 @@ More probe traps that produced false test results here: **input placeholders nev
   through `on_click=_save_task_edit` — it never leaves the workfile fragment (measured: 0 app runs
   for open, save, close). The popover's key and every input key carry a nonce (`edit-nonce-{tid}`)
   the save bumps, so the run after the save draws a fresh, CLOSED editor with the new values;
-  without the nonce the popover stays open and the keyed inputs keep the old text. The trigger
+  without the nonce the popover stays open and the keyed inputs keep the old text. The save also
+  pops the previous nonce's four input keys, so editing a task repeatedly does not accumulate dead
+  `session_state` entries for the life of the browser session. The trigger
   keeps the `ib-` icon-box grammar (its chevron is hidden by CSS); `stPopoverBody` is portaled and
   as narrow as its trigger, hence `min-width: min(24rem, 92vw)`. A `None` option in a selectbox
   shows the widget's `placeholder`, not `format_func(None)` — set both.

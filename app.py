@@ -1026,16 +1026,13 @@ def _dashboard_body() -> None:
             )
             with st.form("emails"):
                 students = [x for x in dm.get_students() if x["role"] == "student"]
-                entered = {}
                 for stu in students:
-                    entered[stu["id"]] = st.text_input(
-                        stu["name"], value=stu.get("email") or "",
-                        key=f"em-{stu['id']}", placeholder="name@gmail.com")
-                if st.form_submit_button("שמור שיוכים"):
-                    n = 0
-                    for sid, addr in entered.items():
-                        dm.set_student_email(sid, addr); n += 1
-                    st.toast(f"נשמרו {n} שיוכים"); st.rerun(scope="fragment")
+                    st.text_input(stu["name"], value=stu.get("email") or "",
+                                  key=f"em-{stu['id']}", placeholder="name@gmail.com")
+                # the seventh form: it wrote and then reran the fragment, which
+                # is one needless second run of the whole dashboard body
+                st.form_submit_button("שמור שיוכים", on_click=_save_emails_clicked,
+                                      args=([x["id"] for x in students],))
 
 
 # --------------------------------------------------------------------------
@@ -1133,8 +1130,22 @@ def _save_task_edit(t: dict, nonce: int, has_slots: bool) -> None:
         new_slot = st.session_state.get(f"edit-slot-{tid}-{nonce}")
         if new_slot != t.get("lesson_id"):
             dm.link_task_to_lesson(tid, new_slot)
+    # the popover reopens under nonce+1, so THIS nonce's widget keys are dead
+    # weight in session_state — one set per save, for the browser session
+    for k in (f"edit-desc-{tid}-{nonce}", f"edit-details-{tid}-{nonce}",
+              f"edit-due-{tid}-{nonce}", f"edit-slot-{tid}-{nonce}"):
+        st.session_state.pop(k, None)
     st.session_state[f"edit-nonce-{tid}"] = nonce + 1
     st.toast("נשמר")
+
+
+def _save_emails_clicked(student_ids: list[int]) -> None:
+    """on_click of «שמור שיוכים»: the writes land before the fragment run that
+    follows the submit, which already shows them."""
+    n = 0
+    for sid in student_ids:
+        dm.set_student_email(sid, st.session_state.get(f"em-{sid}", "")); n += 1
+    st.toast(f"נשמרו {n} שיוכים")
 
 
 def _close_topic_clicked(mid: int) -> None:
