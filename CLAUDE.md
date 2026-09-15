@@ -55,8 +55,10 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   for up to two minutes.
 - **Navigation is staged; panels are isolated.** `_goto()` parks a deep link under one session key
   and `_apply_goto()` lands it at the top of `main()` before any widget exists — writing a widget's
-  key after that widget was drawn raises. The workfile body is a `@st.fragment`, and the three
-  evening panels are wrapped in `_safe()` so one broken panel cannot blank a column.
+  key after that widget was drawn raises. The workfile body, the dashboard body and the trainee
+  home are `@st.fragment`s (a task click reruns the body, not the app; closing a `st.dialog` is a
+  whole-app run, so the task editor is a popover), and the three evening panels are wrapped in
+  `_safe()` so one broken panel cannot blank a column.
 - **The season's data starts as Markdown.** `students_tasks.md` seeds a first run against an empty
   Supabase — the nine trainees from its index table, the 21 evenings, their tasks — and
   `app_meta.seeded` guards it forever after. A database seeded *before* the real names landed

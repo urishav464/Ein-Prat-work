@@ -367,6 +367,12 @@ RTL_CSS = """
   [class*="st-key-ib-"] button p { margin: 0; line-height: 1; font-size: 1rem; }
   [class*="st-key-ib-"] button:hover { border-color: #1d3e7d; background: #f7f9fd; }
   [class*="st-key-ib-dn-"] button, [class*="st-key-ib-lt-"] button { border-color: #1d3e7d; }
+  /* the task editor is a popover under its ✏️: the trigger is the same 2rem
+     box, minus the chevron every popover button carries; the body (portaled
+     to <body>) would otherwise be as narrow as that box */
+  [class*="st-key-ib-"] [data-testid="stPopoverButton"] [data-testid="stIconMaterial"],
+  [class*="st-key-ib-"] [data-testid="stPopoverButton"] svg { display: none; }
+  [data-testid="stPopoverBody"] { min-width: min(24rem, 92vw); }
   /* card titles that are buttons: the label sits at the right edge, with the
      chips and the axis under it — a centred title read as "shifted" */
   /* the label is a <p> with the body weight — bold on the button alone did nothing */
@@ -830,7 +836,14 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
 def show_admin_dashboard() -> None:
     st.title("לוח הבקרה")
     st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
+    _dashboard_body()
 
+
+@st.fragment
+def _dashboard_body() -> None:
+    """Everything under the title, as ONE fragment — the workfile's grammar:
+    ✓ / ▶ on an overdue card rerun this body, not the login gate, the CSS and
+    the sidebar. A door (`_goto`) still restarts the app, on purpose."""
     mishmarim = dm.get_all_mishmarim()
     budget = dm.get_budget_summary()
     if not mishmarim:
@@ -1022,7 +1035,7 @@ def show_admin_dashboard() -> None:
                     n = 0
                     for sid, addr in entered.items():
                         dm.set_student_email(sid, addr); n += 1
-                    st.toast(f"נשמרו {n} שיוכים"); st.rerun()
+                    st.toast(f"נשמרו {n} שיוכים"); st.rerun(scope="fragment")
 
 
 # --------------------------------------------------------------------------
@@ -1091,6 +1104,108 @@ def _set_status(task_id: int, status: str, toast: Optional[str] = None) -> None:
     dm.update_task_status(task_id, status)
     if toast:
         st.toast(toast)
+
+
+def _add_task_clicked(mid: int) -> None:
+    """on_click of «➕ הוסף משימה»: the write happens before the ONE fragment
+    run that follows the submit, which already shows the new card — the form
+    used to write, then `st.rerun()` the whole app."""
+    desc = (st.session_state.get(f"newtask-{mid}") or "").strip()
+    if not desc:
+        return
+    cat = st.session_state.get(f"newtask-cat-{mid}")
+    dm.add_task(mid, desc, category=None if cat in (None, "(אוטומטי)") else cat)
+    st.toast("נוספה משימה — שובצה לשלב לפי הקטגוריה")
+
+
+def _save_task_edit(t: dict, nonce: int, has_slots: bool) -> None:
+    """on_click of the task editor's «💾 שמור». Bumping the nonce gives the
+    popover a new key on the run that follows, i.e. a fresh, CLOSED editor —
+    a dialog here needed `st.rerun()`, a whole-app run, just to close."""
+    tid = t["id"]
+    due = (st.session_state.get(f"edit-due-{tid}-{nonce}") or "").strip()
+    d = _parse_date(due)
+    dm.edit_task(tid,
+                 description=st.session_state.get(f"edit-desc-{tid}-{nonce}"),
+                 details=st.session_state.get(f"edit-details-{tid}-{nonce}"),
+                 due_date=(d.isoformat() if d else None) if due else None)
+    if has_slots:
+        new_slot = st.session_state.get(f"edit-slot-{tid}-{nonce}")
+        if new_slot != t.get("lesson_id"):
+            dm.link_task_to_lesson(tid, new_slot)
+    st.session_state[f"edit-nonce-{tid}"] = nonce + 1
+    st.toast("נשמר")
+
+
+def _close_topic_clicked(mid: int) -> None:
+    """on_click of «🎯 סגור את הנושא»: topic, its tasks and the default
+    timeline in one callback, one fragment run after."""
+    new_topic = (st.session_state.get(f"topic-new-{mid}") or "").strip()
+    if not new_topic:
+        return
+    dm.set_mishmar_topic(mid, new_topic)
+    for t in dm.get_tasks_for_mishmar(mid):
+        if t.get("category") == "נושא" and t["status"] != "DONE":
+            dm.update_task_status(t["id"], "DONE")
+    # The structure appears the moment the topic closes.
+    created = dm.create_default_timeline(mid)
+    st.toast(f"הנושא נסגר! נבנה שלד ערב של {created} משבצות מ-20:00")
+
+
+def _update_topic_clicked(mid: int) -> None:
+    new_topic = (st.session_state.get(f"topic-edit-{mid}") or "").strip()
+    if new_topic:
+        dm.set_mishmar_topic(mid, new_topic)
+        st.toast("הנושא עודכן")
+
+
+def _add_logistics_clicked(mid: int, kind: str, with_detail: bool) -> None:
+    label = (st.session_state.get(f"lgl-{mid}-{kind}") or "").strip()
+    if label:
+        detail = st.session_state.get(f"lgd-{mid}-{kind}", "") if with_detail else ""
+        dm.add_logistics_item(mid, kind, label, detail)
+
+
+def _save_feedback_clicked(mid: int, entries: list[tuple], my_titles: set,
+                           feedback_task_ids: list[int]) -> None:
+    """on_click of «💾 שמור משוב על הערב». `entries` is (lesson_id, name,
+    speaker_name) per slot; the stars and the words are read by key."""
+    n = 0
+    for lid, name, speaker_name in entries:
+        stars = st.session_state.get(f"fb-r-{lid}")
+        if name in my_titles or stars is None:
+            continue   # one submission per slot per trainee; unrated = skipped
+        dm.add_feedback(
+            mid, rating=stars + 1, lesson_id=lid, lesson_title=name,   # 0-based → 1–5
+            speaker_name=speaker_name,
+            student_id=st.session_state.student_id,
+            what_worked=(st.session_state.get(f"fb-w-{lid}") or None))
+        n += 1
+    if n == 0:
+        st.toast("לא סומנו כוכבים — לא נשמר משוב")
+        return
+    # feedback submitted => the trainee's feedback task closes
+    for tid in feedback_task_ids:
+        dm.update_task_status(tid, "DONE")
+    st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
+
+
+def _save_budget_clicked(mid: int, speakers: list[str]) -> None:
+    n = 0
+    for i, name in enumerate(speakers):
+        dm.add_budget_entry(mid, "מרצה", actual_cost=st.session_state.get(f"pay-{mid}-{i}", 0.0),
+                            description=name); n += 1
+    extra_name = (st.session_state.get(f"bud-extra-name-{mid}") or "").strip()
+    if extra_name:
+        dm.add_budget_entry(mid, "מרצה", actual_cost=st.session_state.get(f"bud-extra-amt-{mid}", 0.0),
+                            description=extra_name); n += 1
+    refreshments = st.session_state.get(f"bud-refr-{mid}", 0.0)
+    if refreshments:
+        dm.add_budget_entry(mid, "כיבוד", actual_cost=refreshments, description="כיבוד"); n += 1
+    other = st.session_state.get(f"bud-other-{mid}", 0.0)
+    if other:
+        dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
+    st.toast(f"נשמרו {n} שורות תקציב")
 
 
 def _toggle(key: str, value) -> None:
@@ -1402,9 +1517,16 @@ def _mini_mishmar_card(m: dict, progress: dict,
 
 
 def show_student_view(student_name: str) -> None:
-    student_id = st.session_state.student_id
     st.title(f"שלום, {student_name}")
+    _student_body(st.session_state.student_id)
 
+
+@st.fragment
+def _student_body(student_id: int) -> None:
+    """The trainee's home under the greeting, as ONE fragment: ✓ / ▶ / ↩ on a
+    task card used to restart the whole app for a status flip on the same
+    screen. The hero, its stepper and the cards all read the same task list,
+    so one fragment run keeps them in step."""
     mine = dm.get_mishmarim_for_student(student_id)
     if not mine:
         _empty("עוד לא משובצים לך משמרים.")
@@ -2261,26 +2383,18 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 "אין רעיון? בדקו בארכיון אם היה משמר דומה, ודברו עם המדריך."
             )
             with st.form(f"topic-{mid}"):
-                new_topic = st.text_input(
-                    "שם הנושא",
+                st.text_input(
+                    "שם הנושא", key=f"topic-new-{mid}",
                     placeholder="למשל: כרוניקה של שינוי — האם אדם יכול לשכתב את העבר?")
-                if st.form_submit_button("🎯 סגור את הנושא", type="primary") and new_topic.strip():
-                    dm.set_mishmar_topic(mid, new_topic.strip())
-                    for t in dm.get_tasks_for_mishmar(mid):
-                        if t.get("category") == "נושא" and t["status"] != "DONE":
-                            dm.update_task_status(t["id"], "DONE")
-                    # The structure appears the moment the topic closes.
-                    created = dm.create_default_timeline(mid)
-                    st.toast(f"הנושא נסגר! נבנה שלד ערב של {created} משבצות מ-20:00")
-                    st.rerun()
+                st.form_submit_button("🎯 סגור את הנושא", type="primary",
+                                      on_click=_close_topic_clicked, args=(mid,))
         return   # no timeline before a topic — one step at a time
     else:
         with st.expander(f"🎯 הנושא: {m['topic']} — לעריכה"):
             with st.form(f"topic-{mid}"):
-                new_topic = st.text_input("שם הנושא", value=m["topic"])
-                if st.form_submit_button("עדכן נושא") and new_topic.strip():
-                    dm.set_mishmar_topic(mid, new_topic.strip())
-                    st.toast("הנושא עודכן"); st.rerun()
+                st.text_input("שם הנושא", value=m["topic"], key=f"topic-edit-{mid}")
+                st.form_submit_button("עדכן נושא", on_click=_update_topic_clicked,
+                                      args=(mid,))
 
     # --- the evening as a duration-driven timeline ---
     st.markdown("#### מבנה הערב")
@@ -2494,17 +2608,16 @@ def _logistics_list(mid: int, kind: str, items: list[dict],
                   on_click=dm.delete_logistics_item, args=(it["id"],))
     if not items:
         _empty("עוד לא נוספו שורות.")
-    with st.form(f"lgadd-{mid}-{kind}", border=False):
+    with st.form(f"lgadd-{mid}-{kind}", border=False, clear_on_submit=True):
         fr = st.container(horizontal=True, wrap=True, gap="small")
-        label = fr.text_input("פריט", key=f"lgl-{mid}-{kind}", width="stretch",
-                              label_visibility="collapsed", placeholder=placeholder)
-        detail = fr.text_input("פירוט", key=f"lgd-{mid}-{kind}", width=180,
-                               label_visibility="collapsed",
-                               placeholder=detail_placeholder or "פירוט (רשות)") \
-            if with_detail else ""
-        if fr.form_submit_button("➕ הוסף") and label.strip():
-            dm.add_logistics_item(mid, kind, label.strip(), detail)
-            st.rerun()
+        fr.text_input("פריט", key=f"lgl-{mid}-{kind}", width="stretch",
+                      label_visibility="collapsed", placeholder=placeholder)
+        if with_detail:
+            fr.text_input("פירוט", key=f"lgd-{mid}-{kind}", width=180,
+                          label_visibility="collapsed",
+                          placeholder=detail_placeholder or "פירוט (רשות)")
+        fr.form_submit_button("➕ הוסף", on_click=_add_logistics_clicked,
+                              args=(mid, kind, with_detail))
 
 
 def _rooms_summary(mid: int, legacy: list[dict],
@@ -2703,38 +2816,40 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
         _tasks_tab(mid, progress, lessons)
 
 
-@st.dialog("עריכת משימה")
-def _task_edit_dialog(t: dict, slots: list[dict]) -> None:
-    """The task editor as a modal — the inline form used to unfold inside the
-    card and push the whole column. `st.rerun()` closes it."""
-    with st.form(f"edit-{t['id']}", border=False):
-        desc = st.text_input("כותרת", value=t["task_description"])
-        details = st.text_area("תיאור", value=t.get("details") or "",
-                               height=68)
-        due = st.text_input("מומלץ עד (dd.mm.yyyy)",
-                            value=_fmt_date(t["due_date"]) if t.get("due_date") else "")
-        # Tying a task to a slot by hand — this is what turns the guess
-        # above into a fact. «לא שייך למקטע» is the honest default:
-        # כיבוד, קישוט and הזמנה belong to the evening, not to a slot.
-        choices = [None] + [l["id"] for l in slots]
-        labels = {l["id"]: _slot_label(l, i + 1)
-                  for i, l in enumerate(slots)}
-        new_slot = st.selectbox(
-            "שייך למקטע בערב", choices,
-            index=choices.index(t["lesson_id"])
-            if t.get("lesson_id") in choices else 0,
-            format_func=lambda i: labels.get(i, "— לא שייך למקטע —"),
-            key=f"edit-slot-{t['id']}") if slots else None
-        if st.form_submit_button("💾 שמור", type="primary"):
-            iso = None
-            d = _parse_date(due)
-            if d:
-                iso = d.isoformat()
-            dm.edit_task(t["id"], description=desc, details=details,
-                         due_date=iso if due.strip() else None)
-            if slots and new_slot != t.get("lesson_id"):
-                dm.link_task_to_lesson(t["id"], new_slot)
-            st.toast("נשמר"); st.rerun()
+def _task_editor(row, t: dict, slots: list[dict], k: str) -> None:
+    """The task editor as a popover under the card's ✏️. It was a `st.dialog`
+    — which closes only through `st.rerun()`, a whole-app run for a title
+    edit — and before that an inline form that pushed the column. A popover
+    opens and saves INSIDE the workfile fragment; its key carries a nonce
+    the save bumps, so the run after the save draws a fresh, closed editor."""
+    tid = t["id"]
+    nonce = st.session_state.get(f"edit-nonce-{tid}", 0)
+    with row.popover("✏️", key=f"ib-ed-{k}-{nonce}", help="עריכה"):
+        with st.form(f"edit-{tid}-{nonce}", border=False):
+            st.text_input("כותרת", value=t["task_description"],
+                          key=f"edit-desc-{tid}-{nonce}")
+            st.text_area("תיאור", value=t.get("details") or "", height=68,
+                         key=f"edit-details-{tid}-{nonce}")
+            st.text_input("מומלץ עד (dd.mm.yyyy)",
+                          value=_fmt_date(t["due_date"]) if t.get("due_date") else "",
+                          key=f"edit-due-{tid}-{nonce}")
+            # Tying a task to a slot by hand — this is what turns the guess
+            # above into a fact. «לא שייך למקטע» is the honest default:
+            # כיבוד, קישוט and הזמנה belong to the evening, not to a slot.
+            if slots:
+                choices = [None] + [l["id"] for l in slots]
+                labels = {l["id"]: _slot_label(l, i + 1)
+                          for i, l in enumerate(slots)}
+                st.selectbox(
+                    "שייך למקטע בערב", choices,
+                    index=choices.index(t["lesson_id"])
+                    if t.get("lesson_id") in choices else 0,
+                    format_func=lambda i: labels.get(i, "— לא שייך למקטע —"),
+                    placeholder="— לא שייך למקטע —",   # a None option shows the placeholder, not format_func
+                    key=f"edit-slot-{tid}-{nonce}")
+            st.form_submit_button("💾 שמור", type="primary",
+                                  on_click=_save_task_edit,
+                                  args=(t, nonce, bool(slots)))
 
 
 def _wf_task_card(t: dict, mid: int, key_prefix: str,
@@ -2801,8 +2916,7 @@ def _wf_task_card(t: dict, mid: int, key_prefix: str,
         else:
             row.button("↩ החזר", key=f"{k}-re",
                       on_click=_set_status, args=(t["id"], "TO DO"))
-        if row.button("✏️", key=f"ib-ed-{k}", help="עריכה"):
-            _task_edit_dialog(t, slots)
+        _task_editor(row, t, slots, k)
         row.button("🗑", key=f"ib-rm-{k}", help="מחיקה",
                   on_click=dm.delete_task, args=(t["id"],))
 
@@ -2857,14 +2971,15 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
             _wf_task_grid(sorted(day_of, key=by_due), mid, f"wf{mid}-day", lessons)
 
     st.divider()
-    with st.form(f"addtask-{mid}"):
+    # the write is the submit's callback: the one fragment run that follows
+    # shows the card and empties the field — `write(); st.rerun()` restarted
+    # the whole app for it
+    with st.form(f"addtask-{mid}", clear_on_submit=True):
         c1, c2 = st.columns([3, 1])
-        desc = c1.text_input("משימה חדשה")
-        cat = c2.selectbox("קטגוריה", ["(אוטומטי)"] + list(dm.TASK_CATEGORIES))
-        if st.form_submit_button("➕ הוסף משימה") and desc.strip():
-            dm.add_task(mid, desc.strip(),
-                        category=None if cat == "(אוטומטי)" else cat)
-            st.toast("נוספה משימה — שובצה לשלב לפי הקטגוריה"); st.rerun()
+        c1.text_input("משימה חדשה", key=f"newtask-{mid}")
+        c2.selectbox("קטגוריה", ["(אוטומטי)"] + list(dm.TASK_CATEGORIES),
+                     key=f"newtask-cat-{mid}")
+        st.form_submit_button("➕ הוסף משימה", on_click=_add_task_clicked, args=(mid,))
 
     if done:
         with st.expander(f"✅ בוצעו ({len(done)})"):
@@ -2905,32 +3020,17 @@ def _after_tab(mid: int) -> None:
                 # the rest — two columns in a half-width panel overlapped
                 fr = st.container(horizontal=True, wrap=True, gap="small",
                                   vertical_alignment="center")
-                stars = fr.feedback("stars", key=f"fb-r-{l['id']}")
-                rating = None if stars is None else stars + 1   # 0-based → 1–5
-                words = fr.text_input("התייחסות", key=f"fb-w-{l['id']}", width="stretch",
-                                      label_visibility="collapsed",
-                                      placeholder="התייחסות — מה עבד, מה פחות")
-                entries.append((l, name, rating, words))
-            if st.form_submit_button("💾 שמור משוב על הערב", type="primary"):
-                n = 0
-                for l, name, rating, words in entries:
-                    if name in my_titles or rating is None:
-                        continue   # one submission per slot per trainee; unrated = skipped
-                    dm.add_feedback(
-                        mid, rating=rating, lesson_id=l["id"], lesson_title=name,
-                        speaker_name=l.get("speaker_name"),
-                        student_id=st.session_state.student_id,
-                        what_worked=(words or None))
-                    n += 1
-                if n == 0:
-                    st.toast("לא סומנו כוכבים — לא נשמר משוב")
-                else:
-                    # feedback submitted => the trainee's feedback task closes
-                    for t in tasks:
-                        if "משוב" in t["task_description"] and t["status"] != "DONE":
-                            dm.update_task_status(t["id"], "DONE")
-                    st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
-                    st.rerun()
+                fr.feedback("stars", key=f"fb-r-{l['id']}")
+                fr.text_input("התייחסות", key=f"fb-w-{l['id']}", width="stretch",
+                              label_visibility="collapsed",
+                              placeholder="התייחסות — מה עבד, מה פחות")
+                entries.append((l["id"], name, l.get("speaker_name")))
+            st.form_submit_button(
+                "💾 שמור משוב על הערב", type="primary",
+                on_click=_save_feedback_clicked,
+                args=(mid, entries, my_titles,
+                      [t["id"] for t in tasks
+                       if "משוב" in t["task_description"] and t["status"] != "DONE"]))
 
     if existing:
         with st.expander(f"משוב שנרשם ({len(existing)})"):
@@ -2955,28 +3055,19 @@ def _after_tab(mid: int) -> None:
         )
         with st.form(f"budget-{mid}"):
             st.markdown("**מרצים שהגיעו ומה שולם להם** *(0 = הגיע בהתנדבות)*")
-            paid = {}
             for i, name in enumerate(speakers):
-                paid[name] = st.number_input(f"{name} (₪)", min_value=0.0, step=50.0,
-                                             key=f"pay-{mid}-{i}")
+                st.number_input(f"{name} (₪)", min_value=0.0, step=50.0,
+                                key=f"pay-{mid}-{i}")
             if not speakers:
                 st.caption("לא רשומים מרצים במבנה הערב.")
-            extra_name = st.text_input("מרצה נוסף שלא מופיע למעלה")
-            extra_amt = st.number_input("תשלום למרצה הנוסף (₪)", min_value=0.0, step=50.0)
-            refreshments = st.number_input("כיבוד (₪)", min_value=0.0, step=10.0)
-            other = st.number_input("הוצאות אחרות (₪)", min_value=0.0, step=10.0)
-            if st.form_submit_button("שמור סיכום תקציב"):
-                n = 0
-                for name, amt in paid.items():
-                    dm.add_budget_entry(mid, "מרצה", actual_cost=amt, description=name); n += 1
-                if extra_name.strip():
-                    dm.add_budget_entry(mid, "מרצה", actual_cost=extra_amt,
-                                        description=extra_name.strip()); n += 1
-                if refreshments:
-                    dm.add_budget_entry(mid, "כיבוד", actual_cost=refreshments, description="כיבוד"); n += 1
-                if other:
-                    dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
-                st.toast(f"נשמרו {n} שורות תקציב"); st.rerun()
+            st.text_input("מרצה נוסף שלא מופיע למעלה", key=f"bud-extra-name-{mid}")
+            st.number_input("תשלום למרצה הנוסף (₪)", min_value=0.0, step=50.0,
+                            key=f"bud-extra-amt-{mid}")
+            st.number_input("כיבוד (₪)", min_value=0.0, step=10.0, key=f"bud-refr-{mid}")
+            st.number_input("הוצאות אחרות (₪)", min_value=0.0, step=10.0,
+                            key=f"bud-other-{mid}")
+            st.form_submit_button("שמור סיכום תקציב", on_click=_save_budget_clicked,
+                                  args=(mid, speakers))
         spent = (m or {}).get("budget_used") or 0
         st.metric("סה״כ הוצאות למשמר הזה", _fmt_nis(spent))
         if spent > dm.PER_MISHMAR_BUDGET_NIS:

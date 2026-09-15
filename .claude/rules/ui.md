@@ -61,6 +61,14 @@ never by eye.
 ## Reruns and cost
 
 - **Streamlit reruns the whole script on every interaction.** Anything expensive or side-effecting sits behind an explicit button and is cached in `session_state` — calling it at render time re-fires it on every unrelated click (this shipped a live bug: `verify_speaker` firing per rerun).
+- **Three screens are fragments**: `_workfile_body`, `_dashboard_body`, `_student_body` — everything
+  under the screen's title. A widget inside one reruns that body only: no login gate, no CSS, no
+  sidebar. A door to another screen (`_goto`) restarts the app on purpose (`scope="app"`).
+- **A form submits through `on_click`, never `if submit: write(); st.rerun()`.** `st.rerun()` with no
+  scope inside a fragment is a WHOLE-APP run — six forms did exactly that (add task, close/update
+  topic, add logistics row, feedback, budget). The callback reads the inputs by key from
+  `session_state` and writes; the one fragment run that follows already shows the result.
+  `clear_on_submit=True` empties the field; the callback still sees the submitted values.
 - **List views load their rows in one or two queries and group in Python.** A query per row was 47 HTTPS round-trips per rerun on the speaker index — the whole reason it felt slow. See `dm.get_all_tasks()`, `dm.get_all_outreach()`.
 - The chat's live history holds API content *blocks*; a renderer that only displays `str` silently drops every assistant reply — use `_message_text()`.
 
@@ -249,12 +257,20 @@ More probe traps that produced false test results here: **input placeholders nev
   selectors against the installed bundle, WCAG contrast of the colours actually set, off-scale
   spacing, RTL misses, button noise. Read-only; JSON findings with a measured value each.
 
-## Editors are dialogs; every click has a known cost
+## Editors: a popover for the task, a dialog for the slot; every click has a known cost
 
-- **Task and slot editors are `@st.dialog`s** (`_task_edit_dialog`, `_lesson_edit_dialog`), opened
-  from ✏️ (and «📎 דף מקורות») with a plain `if` — opening a dialog is a rerun by nature. The
-  `editing_task` / `editing_lesson` session keys are gone; `st.rerun()` at the end of the dialog is
-  what closes it. Literal `session_state` keys: 14.
+- **Closing a `st.dialog` IS `st.rerun()` — a whole-app run.** A dialog is its own fragment;
+  `st.rerun(scope="fragment")` inside it reruns the dialog and leaves it open, and nothing reruns
+  the enclosing fragment. So a dialog is worth it only when the close can afford a page restart:
+  the slot editor (`_lesson_edit_dialog`, eleven fields), the roster apply, the reset.
+- **The task editor is a `st.popover`** (`_task_editor`), opened from the card's ✏️ and saved
+  through `on_click=_save_task_edit` — it never leaves the workfile fragment (measured: 0 app runs
+  for open, save, close). The popover's key and every input key carry a nonce (`edit-nonce-{tid}`)
+  the save bumps, so the run after the save draws a fresh, CLOSED editor with the new values;
+  without the nonce the popover stays open and the keyed inputs keep the old text. The trigger
+  keeps the `ib-` icon-box grammar (its chevron is hidden by CSS); `stPopoverBody` is portaled and
+  as narrow as its trigger, hence `min-width: min(24rem, 92vw)`. A `None` option in a selectbox
+  shows the widget's `placeholder`, not `format_func(None)` — set both.
 - **`scripts/rerun_audit.py` is the click-cost contract**: one row per widget site — `callback`
   (on_click/on_change), `fragment`, `page`, `nav` (body calls `_goto`/`logout`/opens a dialog),
   `form-submit`, `rerun` (legitimate only after a submit, to close a dialog, or for nav/auth).
@@ -262,9 +278,10 @@ More probe traps that produced false test results here: **input placeholders nev
   measures representative clicks on the harness. The search screen's «אמת» / «הוסף למאגר» are the
   sanctioned `page` sites: the screen is not a fragment and each runs a long verify — noted, not
   hidden.
-- **Dashboard ✓ was measured and left as a page rerun** (~400 ms, 2 queries): the pipeline's
-  «n באיחור» chips and the metrics depend on the same write, so a fragment would need a page-scope
-  rerun anyway — no gain to take.
+- **Dashboard ✓ / ▶ and the trainee home's ✓ / ▶ / ↩ are fragment runs** (`_dashboard_body`,
+  `_student_body`): the pipeline chips, the metrics and the hero's stepper read the same task list
+  as the cards, and they all sit inside the same fragment, so one body run keeps them in step.
+  Measured after the change: every task action on all three screens = 0 app runs, 2–4 queries.
 - **Focus is visible**: a 2px navy `outline` on `:focus-visible` for buttons, inputs, selects and
   the nav card (`label:has(input:focus-visible)` — its radio input is hidden). `help=` renders a
   tooltip, NOT an `aria-label`; Streamlit gives no way to name an icon button in Hebrew for a

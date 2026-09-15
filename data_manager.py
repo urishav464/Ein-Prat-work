@@ -1299,14 +1299,35 @@ def _storage_upload(path: str, data: bytes,
 
 
 def _safe_filename(filename: Optional[str], default: str) -> str:
-    return re.sub(r"[^\w.\-]+", "_", filename or default)
+    """A Storage object key must be ASCII — Supabase answers `InvalidKey` to a
+    Hebrew file name, and every sheet a pair uploads is named in Hebrew
+    («הסוד_על_המקורות.pdf» was the first to fail). `\w` matches Hebrew, so
+    the stem is rebuilt from ASCII letters, digits, `_` and `-` only; a stem
+    that was ALL Hebrew becomes `default`, and the extension survives on its
+    own so the invitation's image check still sees it."""
+    name = (filename or default).strip()
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    stem = re.sub(r"[^A-Za-z0-9_\-]+", "_", stem)
+    stem = re.sub(r"[_\-]{2,}", "_", stem).strip("_-") or default
+    ext = re.sub(r"[^A-Za-z0-9]+", "", ext).lower()
+    return f"{stem}.{ext}" if ext else stem
+
+
+def _content_tag(data: bytes) -> str:
+    """Eight hex chars of the content, in the key: a re-upload of a slot's
+    sheet gets a NEW public URL, so the browser and Supabase's CDN cannot
+    keep serving the old file under the old one for an hour."""
+    return hashlib.sha1(data).hexdigest()[:8]
 
 
 def upload_source_sheet(mishmar_id: int, lesson_id: int,
                         filename: str, data: bytes) -> tuple[Optional[str], Optional[str]]:
     """A slot's source sheet → `(public_url, error)`."""
     safe = _safe_filename(filename, "source")
-    return _storage_upload(f"mishmar-{int(mishmar_id):02d}/lesson-{int(lesson_id)}-{safe}", data)
+    return _storage_upload(
+        f"mishmar-{int(mishmar_id):02d}/lesson-{int(lesson_id)}-{_content_tag(data)}-{safe}", data)
 
 
 _IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -1322,8 +1343,9 @@ def upload_invitation(mishmar_id: int, filename: str,
     ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
     if ext not in _IMAGE_TYPES:
         return None, "ההזמנה היא תמונה — PNG, JPG או WEBP"
-    return _storage_upload(f"mishmar-{int(mishmar_id):02d}/invitation-{safe}", data,
-                           _IMAGE_TYPES[ext])
+    return _storage_upload(
+        f"mishmar-{int(mishmar_id):02d}/invitation-{_content_tag(data)}-{safe}", data,
+        _IMAGE_TYPES[ext])
 
 
 def set_lesson_source(lesson_id: int, url: Optional[str]) -> None:
@@ -2311,7 +2333,9 @@ CACHE_TTL_SECONDS = 120
 # A write that is not sure (seeding, the migration backfill) clears everything.
 _READS = {
     "get_all_mishmarim":        ("mishmarim", "budget"),
-    "get_mishmar":              ("mishmarim",),
+    # get_mishmar also reads v_mishmar_budget: registered as mishmarim-only,
+    # «סיכום תקציב» showed ₪0 for two minutes after its own save
+    "get_mishmar":              ("mishmarim", "budget"),
     "get_students":             ("students",),
     "get_student":              ("students",),
     "get_student_by_email":     ("students",),
