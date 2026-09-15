@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """הפקת קובץ עבודה לשבת מסוימת.
 
-    python3 tools/new_shabbat.py 2026-09-11
-    python3 tools/new_shabbat.py 2026-09-11 --from shabbatot/2026-09-04.xlsx
+    python3 tools/new_shabbat.py 2026-09-18
+    python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx
 
 ברירת המחדל: עותק של shabbat-planner.xlsx. עם --from מתחילים מקובץ של שבת קודמת —
 כך עריכות שנעשו במשימות, במתכונים ובקייטרינג עוברות הלאה; רק השמות, הקבוצות
@@ -72,8 +72,9 @@ def reset_people(wb):
         clear(ws, r, bw.G_MEMBERS)
     ws = wb[bw.SH_STUDENTS]
     for r in range(bw.STUDENT_FIRST_ROW, ws.max_row + 1):
-        for col in (bw.S_AVAILABLE, bw.S_GROUP, bw.S_NOTE):
+        for col in (bw.S_AVAILABLE, bw.S_GROUPS, bw.S_NOTE):
             clear(ws, r, col)
+    # «היסטוריה» לא מתאפסת — זה הזיכרון של המערכת
 
 
 def main():

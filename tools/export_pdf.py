@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""הפקת לו"ז הצל ודפי השישי לקבוצות כ-PDF/PNG מתוך קובץ השבת.
+"""הפקת לו"ז הצל ופלייר לכל קבוצת עבודה כ-PDF/PNG מתוך קובץ השבת.
 
     python3 tools/export_pdf.py 2026-09-11
     python3 tools/export_pdf.py 2026-09-11 --only shadow
@@ -85,22 +85,30 @@ def read_workbook(path):
         task = cell(ws, r, bw.T_TASK)
         if not task:
             continue
-        tasks.append({"row": r, "day": cell(ws, r, bw.T_DAY) or "", "hour": as_time(cell(ws, r, bw.T_HOUR)),
-                      "group": cell(ws, r, bw.T_GROUP), "task": task,
+        tasks.append({"row": r, "stage": cell(ws, r, bw.T_STAGE) or "", "day": cell(ws, r, bw.T_DAY) or "",
+                      "hour": as_time(cell(ws, r, bw.T_HOUR)), "group": cell(ws, r, bw.T_GROUP), "task": task,
                       "people": cell(ws, r, bw.T_PEOPLE), "names": split_names(cell(ws, r, bw.T_NAMES)),
-                      "anchor": cell(ws, r, bw.T_ANCHOR), "note": cell(ws, r, bw.T_NOTE)})
+                      "recipe": cell(ws, r, bw.T_RECIPE), "anchor": cell(ws, r, bw.T_ANCHOR),
+                      "note": cell(ws, r, bw.T_NOTE)})
 
     groups = []
     ws = wb[bw.SH_GROUPS]
     for r in range(bw.GROUP_FIRST_ROW, ws.max_row + 1):
         name = cell(ws, r, bw.G_NAME)
         if name:
-            groups.append({"name": name, "parent": cell(ws, r, bw.G_PARENT), "leader": cell(ws, r, bw.G_LEADER),
-                           "members": split_names(cell(ws, r, bw.G_MEMBERS)),
-                           "label": name.split(" · ")[-1] if " · " in name else name})
+            groups.append({"name": name, "stage": cell(ws, r, bw.G_STAGE) or "", "leader": cell(ws, r, bw.G_LEADER),
+                           "members": split_names(cell(ws, r, bw.G_MEMBERS))})
+
+    recipes = {}
+    ws = wb[bw.SH_RECIPES]
+    for r in range(3, ws.max_row + 1):
+        dish = cell(ws, r, 2)
+        if dish:
+            recipes[dish] = {"kind": cell(ws, r, 1), "dish": dish, "qty": cell(ws, r, 3),
+                             "ingredients": cell(ws, r, 4), "steps": cell(ws, r, 5), "note": cell(ws, r, 6)}
 
     return {"date": shabbat_date, "parasha": parasha, "candle": candle, "havdalah": havdalah,
-            "events": events, "tasks": tasks, "groups": groups}
+            "events": events, "tasks": tasks, "groups": groups, "recipes": recipes}
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +184,73 @@ td.lines{text-align:center}
 .line.all .names{font-style:italic}
 """
 
-FRIDAY_CSS = """
+FLYER_CSS = """
 h1{font-size:26pt}
+.stage{text-align:center;font-family:'Rubik',sans-serif;font-size:12pt;color:#5A6572;margin-top:1mm}
 .lead{text-align:center;font-size:12pt;margin-top:3mm}
 .members{margin:5mm auto 0;text-align:center;font-size:12pt;line-height:1.8;max-width:170mm}
 .members b{display:block;font-family:'Rubik',sans-serif;font-size:10pt;color:#5A6572}
 th.hour,td.hour{width:20mm;text-align:center;font-family:'Rubik',sans-serif;font-weight:700;font-size:12pt}
+td.day{font-size:9pt;color:#5A6572;display:block}
 td.task{font-size:12pt}
 th.names,td.names{width:60mm;font-size:11pt}
 .empty{margin-top:8mm;text-align:center;color:#8A94A0;font-size:12pt}
+.recipe{margin-top:7mm;border:1px solid #1F2430;padding:4mm 5mm;page-break-inside:avoid}
+.recipe h2{font-family:'Rubik',sans-serif;font-size:15pt;display:flex;justify-content:space-between;align-items:baseline}
+.recipe h2 span{font-size:10.5pt;font-weight:400;color:#5A6572;font-family:'Heebo',sans-serif}
+.recipe .cols{display:flex;gap:6mm;margin-top:2.5mm}
+.recipe .col{flex:1}
+.recipe .col.ing{flex:0 0 62mm}
+.recipe h3{font-family:'Rubik',sans-serif;font-size:10.5pt;color:#5A6572;margin-bottom:1mm}
+.recipe p{font-size:10.5pt;line-height:1.5;white-space:pre-line}
+.recipe .note{margin-top:2mm;font-size:9.5pt;color:#5A6572}
 """
+
+
+def recipe_html(recipe):
+    return ('<div class="recipe"><h2>{dish}{qty}</h2><div class="cols">'
+            '<div class="col ing"><h3>מרכיבים</h3><p>{ing}</p></div>'
+            '<div class="col"><h3>הכנה</h3><p>{steps}</p></div></div>{note}</div>').format(
+        dish=esc(recipe["dish"]),
+        qty='<span>כמות: {}</span>'.format(esc(recipe["qty"])) if recipe["qty"] else "",
+        ing=esc(recipe["ingredients"]) or "—", steps=esc(recipe["steps"]) or "—",
+        note='<div class="note">{}</div>'.format(esc(recipe["note"])) if recipe["note"] else "")
+
+
+def flyer_html(group, tasks, data):
+    """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומתכון לכל מנה שמופיעה במשימותיה."""
+    rows, last_day = [], None
+    ordered = sorted(tasks, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
+                                           t["hour"] or datetime.min.time(), t["row"]))
+    multi_day = len({t["day"] for t in ordered}) > 1
+    for t in ordered:
+        names = ", ".join(t["names"]) or ("כולם" if t["people"] is None else "")
+        day = ""
+        if multi_day and t["day"] != last_day:
+            day, last_day = '<span class="day">{}</span>'.format(esc(t["day"])), t["day"]
+        rows.append('<tr><td class="hour">{day}{hour}</td><td class="task">{task}</td>'
+                    '<td class="names">{names}</td></tr>'.format(
+                        day=day, hour=esc(hhmm(t["hour"])) or "—", task=esc(t["task"]), names=esc(names)))
+    table = ('<table><thead><tr><th class="hour">שעה</th><th>משימה</th><th class="names">מי</th></tr></thead>'
+             '<tbody>{}</tbody></table>'.format("".join(rows))) if rows else \
+        '<div class="empty">אין עדיין משימות לקבוצה</div>'
+    dishes = []
+    for t in ordered:
+        if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
+            dishes.append(t["recipe"])
+    recipes = "".join(recipe_html(data["recipes"][d]) for d in dishes)
+    return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<style>{fonts}{base}{css}</style></head><body><div class="sheet">
+<h1>{title}</h1><div class="stage">{stage}</div><div class="when">{when}</div>
+{lead}
+<div class="members"><b>חברי הקבוצה · {n}</b>{members}</div>
+{table}{recipes}
+<footer>מדרשת עין פרת</footer>
+</div></body></html>""".format(
+        fonts=font_face_css(), base=BASE_CSS, css=FLYER_CSS, title=esc(group["name"]),
+        stage=esc(group["stage"]), when=esc(when_line(data)),
+        lead='<div class="lead">מוביל/ה: <b>{}</b></div>'.format(esc(group["leader"])) if group["leader"] else "",
+        n=len(group["members"]), members=esc(", ".join(group["members"])) or "—", table=table, recipes=recipes)
 
 
 # ---------------------------------------------------------------------------
@@ -288,32 +353,6 @@ def shadow_html(data, fit=1.0, measure=False):
 
 
 # ---------------------------------------------------------------------------
-# דף שישי לקבוצה
-# ---------------------------------------------------------------------------
-def friday_html(group, tasks, data):
-    title = "{} · {}".format(group["parent"], group["label"]) if group["parent"] else group["name"]
-    rows = []
-    for t in sorted(tasks, key=lambda t: (t["hour"] is None, t["hour"] or datetime.min.time(), t["row"])):
-        names = ", ".join(t["names"]) or ("כולם" if t["people"] is None else "")
-        rows.append('<tr><td class="hour">{}</td><td class="task">{}</td><td class="names">{}</td></tr>'.format(
-            esc(hhmm(t["hour"])) or "—", esc(t["task"]), esc(names)))
-    table = ('<table><thead><tr><th class="hour">שעה</th><th>משימה</th><th class="names">מי</th></tr></thead>'
-             '<tbody>{}</tbody></table>'.format("".join(rows))) if rows else \
-        '<div class="empty">אין משימות ליום שישי</div>'
-    return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
-<style>{fonts}{base}{css}</style></head><body><div class="sheet">
-<h1>{title}</h1><div class="when">יום שישי · {when}</div>
-{lead}
-<div class="members"><b>חברי הקבוצה · {n}</b>{members}</div>
-{table}
-<footer>מדרשת עין פרת · הכנות שישי</footer>
-</div></body></html>""".format(
-        fonts=font_face_css(), base=BASE_CSS, css=FRIDAY_CSS, title=esc(title), when=esc(when_line(data)),
-        lead='<div class="lead">מוביל/ה: <b>{}</b></div>'.format(esc(group["leader"])) if group["leader"] else "",
-        n=len(group["members"]), members=esc(", ".join(group["members"])) or "—", table=table)
-
-
-# ---------------------------------------------------------------------------
 # רינדור ב-Chromium
 # ---------------------------------------------------------------------------
 def chrome_binary():
@@ -365,9 +404,9 @@ def pdf_pages(path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="הפקת לו\"ז צל ודפי שישי")
+    ap = argparse.ArgumentParser(description="הפקת לו\"ז צל ופליירים")
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-11")
-    ap.add_argument("--only", choices=["friday", "shadow"], help="להפיק רק חלק")
+    ap.add_argument("--only", choices=["flyers", "shadow"], help="להפיק רק חלק")
     ap.add_argument("--no-png", action="store_true", help="בלי תמונות PNG")
     args = ap.parse_args()
 
@@ -384,15 +423,12 @@ def main():
     made = []
     if args.only != "shadow":
         for group in data["groups"]:
-            friday = [t for t in data["tasks"] if t["group"] == group["name"] and t["day"] == "שישי"]
-            if not friday:
-                continue
-            title = "{} · {}".format(group["parent"], group["label"]) if group["parent"] else group["name"]
-            pdf = out_dir / "{}.pdf".format(title)
-            png = None if args.no_png else out_dir / "{}.png".format(title)
-            render(friday_html(group, friday, data), pdf, png)
+            tasks = [t for t in data["tasks"] if t["group"] == group["name"]]
+            pdf = out_dir / "{}.pdf".format(group["name"])
+            png = None if args.no_png else out_dir / "{}.png".format(group["name"])
+            render(flyer_html(group, tasks, data), pdf, png)
             made += [x for x in (pdf, png) if x]
-    if args.only != "friday":
+    if args.only != "flyers":
         pdf = out_dir / "לוז צל.pdf"
         png = None if args.no_png else out_dir / "לוז צל.png"
         fit = measure_fit(shadow_html(data, measure=True))

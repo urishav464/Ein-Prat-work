@@ -7,7 +7,7 @@
 משתמש רק בנוסחאות בסיסיות שעובדות גם שם. השימוש השוטף לא דורש את הסקריפט —
 מריצים אותו מחדש רק כשמשנים את מבנה הגיליון.
 
-שמונה גיליונות: הוראות · לוז · משימות · קבוצות · חניכים · מתכונים · קייטרינג · זמנים.
+תשעה גיליונות: לוח בקרה · לוז · משימות · קבוצות · חניכים · היסטוריה · מתכונים · קייטרינג · זמנים.
 """
 import csv
 from datetime import datetime, time
@@ -23,8 +23,9 @@ DATA = ROOT / "data"
 OUT = ROOT / "shabbat-planner.xlsx"
 
 # --- שמות גיליונות (בלי גרשיים — בטוח לנוסחאות ולשיטס) ------------------------
-SH_HELP, SH_SCHED, SH_TASKS, SH_GROUPS = "הוראות", "לוז", "משימות", "קבוצות"
-SH_STUDENTS, SH_RECIPES, SH_CATERING, SH_ZMAN = "חניכים", "מתכונים", "קייטרינג", "זמנים"
+SH_DASH, SH_SCHED, SH_TASKS, SH_GROUPS = "לוח בקרה", "לוז", "משימות", "קבוצות"
+SH_STUDENTS, SH_HISTORY = "חניכים", "היסטוריה"
+SH_RECIPES, SH_CATERING, SH_ZMAN = "מתכונים", "קייטרינג", "זמנים"
 
 # --- כתובות קבועות שסקריפטים אחרים מסתמכים עליהן ------------------------------
 SCHED_DATE = "B3"          # תאריך השבת (קלט)
@@ -40,26 +41,34 @@ GROUP_FIRST_ROW = 3
 GROUP_ROWS = 30
 STUDENT_FIRST_ROW = 3
 STUDENT_ROWS = 130
+HISTORY_FIRST_ROW = 3
+HISTORY_ROWS = 3000
 RECIPE_ROWS = 80
 CATERING_ROWS = 50
 
 # עמודות בגיליון «משימות»
-T_DAY, T_HOUR, T_GROUP, T_TASK, T_PEOPLE, T_NAMES, T_ANCHOR, T_NOTE = range(1, 9)
+(T_STAGE, T_DAY, T_HOUR, T_GROUP, T_TASK, T_PEOPLE, T_NAMES,
+ T_RECIPE, T_POINTS, T_ANCHOR, T_NOTE) = range(1, 12)
 # עמודות בגיליון «קבוצות»
-G_NAME, G_PARENT, G_LEADER, G_MEMBERS, G_SIZE, G_COUNT = range(1, 7)
+G_NAME, G_STAGE, G_LEADER, G_MEMBERS, G_SIZE, G_COUNT = range(1, 7)
 # עמודות בגיליון «חניכים»
-S_NAME, S_PROGRAM, S_AVAILABLE, S_GROUP, S_NOTE = range(1, 6)
+(S_NAME, S_PROGRAM, S_AVAILABLE, S_GROUPS, S_TASKS, S_POINTS,
+ S_TOTAL, S_NOTE) = range(1, 9)
+# עמודות בגיליון «היסטוריה»
+H_DATE, H_NAME, H_STAGE, H_GROUP, H_TASK, H_POINTS = range(1, 7)
 # עמודות בגיליון «לוז»
-L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST = range(1, 7)
+L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST, L_TASKS = range(1, 8)
 
+STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת"]
 DAYS = "שישי,שבת,מוצאי שבת"
 RECIPE_KINDS = "עוגות,סלטים,מטבוחה,ארוחת צהריים שישי"
 MEALS = "ארוחת ערב,קידוש,ארוחת צהריים,סעודה שלישית"
 
 # --- צבעים ------------------------------------------------------------------
 INK, MUTED, LINE, BAND = "1F2430", "6B7280", "C9CFD8", "EDF1F6"
-ACCENT, INPUT_BG, CALC_BG = "2E5C8A", "FFF9E3", "EEF3F8"
-TAB_INPUT, TAB_OUTPUT, TAB_REF = "E8A33D", "2E5C8A", "9AA5B1"
+ACCENT, INPUT_BG, CALC_BG, SCRIPT_BG = "2E5C8A", "FFF9E3", "EEF3F8", "E3F4F1"
+TAB_INPUT, TAB_SCRIPT, TAB_REF = "E8A33D", "3BA48C", "9AA5B1"
+LEGEND = "צהוב = ממלאים · טורקיז = הסקריפט כותב · אפור = מחושב"
 DAY_FILLS = {"שישי": "E8F0F8", "שבת": "F3EDE3", "מוצאי שבת": "EDEAF5"}
 FONT = "Arial"
 
@@ -205,46 +214,124 @@ def suggestion_formula(row):
 
 
 # ---------------------------------------------------------------------------
-# גיליון: הוראות
+# עוזרי טווחים (בנוסחאות)
 # ---------------------------------------------------------------------------
-HELP_LINES = [
-    ("מה עושים כל שבוע", None),
-    ("1", "«לוז» — בוחרים תאריך. השעות בעמודה «הצעה» מתעדכנות לבד; עמודת «שעה» היא מה שנשלח בפועל — עורכים בה חופשי."),
-    ("2", "«משימות» — לכל משימה: יום, שעה, קבוצה, כמה אנשים, ומי. עמודת «שמות» מתמלאת ע\"י tools/assign_groups.py ואפשר לתקן ידנית."),
-    ("3", "«קבוצות» ו«חניכים» — מי בכל קבוצה השבת. גודל הקבוצה נגזר מהמשימות (השיא של אנשים בו-זמנית)."),
-    ("4", "«מתכונים» ו«קייטרינג» — מה מכינים ומה מגיע מבחוץ לכל ארוחה. למילוי חופשי."),
-    ("5", "מייצאים: python3 tools/export_pdf.py <תאריך> — לו\"ז צל (PDF) ודף שישי לכל קבוצה (PDF + PNG)."),
-    ("", None),
-    ("טיפים", None),
-    ("•", "עוגן = האירוע בלו\"ז שלידו המשימה מופיעה בלו\"ז הצל. הרשימה הנגללת נלקחת מעמודת «אירוע» ב«לוז»."),
-    ("•", "משימה בלי שעה = כולם בקבוצה עושים אותה (למשל ניקיון בסיום). משימה בלי קבוצה — מופיעה בלו\"ז הצל בלי שמות."),
-    ("•", "שינית שם קבוצה? עדכן גם ב«משימות». שינית שם אירוע ב«לוז»? עדכן את העוגן במשימות שלו."),
-    ("•", "ערכת בגוגל שיטס? הורד כ-xlsx אל shabbatot/<תאריך>.xlsx והרץ את הייצוא שוב — הוא קורא רק את התאים הסטטיים."),
+def col_letter(n):
+    return chr(64 + n)
+
+
+def rng(sheet, col, first, count):
+    return "{}${c}${a}:${c}${b}".format(q(sheet), c=col_letter(col), a=first, b=first + count - 1)
+
+
+T = lambda col: rng(SH_TASKS, col, TASK_FIRST_ROW, TASK_ROWS)
+S = lambda col: rng(SH_STUDENTS, col, STUDENT_FIRST_ROW, STUDENT_ROWS)
+G = lambda col: rng(SH_GROUPS, col, GROUP_FIRST_ROW, GROUP_ROWS)
+H = lambda col: rng(SH_HISTORY, col, HISTORY_FIRST_ROW, HISTORY_ROWS)
+L = lambda col: rng(SH_SCHED, col, SCHED_FIRST_ROW, SCHED_ROWS)
+
+
+def calc_cell(ws, row, col, formula, center=True, bold=False, size=11, fmt=None, bg=CALC_BG):
+    c = data_cell(ws, row, col, formula, editable=False, center=center, bold=bold, size=size, fmt=fmt)
+    c.fill = fill(bg)
+    return c
+
+
+# ---------------------------------------------------------------------------
+# גיליון: לוח בקרה — דף הפתיחה
+# ---------------------------------------------------------------------------
+STEPS = [
+    ("1", "«לוז» — בוחרים תאריך, מתקנים שעות ומקומות. «הצעה» מתעדכנת לבד; «שעה» היא מה שנשלח."),
+    ("2", "«משימות» — לכל משימה: שלב, יום, שעה, קבוצה, כמה אנשים, מתכון (לצוות הכנה), ניקוד ועוגן בלו\"ז."),
+    ("3", "python3 tools/assign_groups.py <תאריך> — ממלא «שמות», «קבוצות», «חניכים» ו«היסטוריה»."),
+    ("4", "python3 tools/export_pdf.py <תאריך> — לו\"ז צל + פלייר לכל קבוצת עבודה. ערכת בשיטס? הורד כ-xlsx והרץ שוב."),
+]
+
+STATUS = [
+    ("נוכחים השבת", '=COUNTIF({c},"כן")+COUNTIF({c},"לא")', "מתוך רשימת הנוכחות"),
+    ("זמינים לתורנות", '=COUNTIF({c},"כן")', ""),
+    ("בתורנות", '=COUNTA({g})', "חניכים עם קבוצה אחת לפחות"),
+    ("זמינים בלי תורנות", '=COUNTIFS({c},"כן",{g},"")', ""),
+    ("משימות", '=COUNTA({t})', ""),
+    ("משימות בלי שמות", '=COUNTA({t})-COUNTA({n})', "להריץ שיבוץ, או להשלים ידנית"),
+    ("משימות בלי עוגן", '=COUNTA({t})-COUNTA({a})', "לא יופיעו ליד אירוע בלו\"ז הצל"),
+    ("קבוצות עבודה", '=COUNTA({gr})', "פלייר לכל אחת"),
 ]
 
 
-def build_help(wb):
-    ws = wb.create_sheet(SH_HELP)
+def build_dashboard(wb):
+    ws = wb.create_sheet(SH_DASH)
     page(ws, tab=TAB_REF)
-    widths(ws, {"A": 4, "B": 110})
-    title_row(ws, 1, "הכנת שבת — מדרשת עין פרת", span="A:B", size=20)
-    row = 3
-    for key, text in HELP_LINES:
-        if text is None:
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-            c = ws.cell(row=row, column=1, value=key)
-            c.font = f(13, bold=True, color=ACCENT)
-            c.alignment = align()
-            ws.row_dimensions[row].height = 26
-        else:
-            k = ws.cell(row=row, column=1, value=key)
-            k.font = f(11, bold=True, color=ACCENT)
-            k.alignment = align(h="center", v="top")
-            t = ws.cell(row=row, column=2, value=text)
-            t.font = f(11)
-            t.alignment = align(v="top", wrap=True)
-            ws.row_dimensions[row].height = 30
-        row += 1
+    widths(ws, {"A": 26, "B": 14, "C": 44, "D": 4, "E": 70})
+    title_row(ws, 1, "הכנת שבת — מדרשת עין פרת", span="A:E", size=20)
+    sub = ws.cell(row=2, column=1, value=LEGEND)
+    sub.font = f(10, color=MUTED, italic=True)
+    sub.alignment = align()
+    ws.merge_cells("A2:E2")
+
+    z = q(SH_SCHED)
+    for r, label, formula, fmt in (
+            (4, "שבת", "=IF({z}{d}=\"\",\"— בחר תאריך ב«לוז» —\",{z}{d})".format(z=z, d=SCHED_DATE), "dd/mm/yyyy"),
+            (5, "כניסת שבת", "={z}{c}".format(z=z, c=SCHED_CANDLE), "hh:mm"),
+            (6, "צאת שבת", "={z}{h}".format(z=z, h=SCHED_HAVDALAH), "hh:mm")):
+        lab = ws.cell(row=r, column=1, value=label)
+        lab.font = f(11, bold=True)
+        lab.alignment = align()
+        lab.fill = fill(BAND)
+        lab.border = box()
+        calc_cell(ws, r, 2, formula, bold=True, size=12, fmt=fmt)
+        ws.row_dimensions[r].height = 22
+
+    header_row(ws, 8, ["מצב ההכנה", "", "הערה"])
+    ws.merge_cells("A8:B8")
+    refs = {"c": S(S_AVAILABLE), "g": S(S_GROUPS), "t": T(T_TASK), "n": T(T_NAMES),
+            "a": T(T_ANCHOR), "gr": G(G_NAME)}
+    for i, (label, formula, note) in enumerate(STATUS):
+        r = 9 + i
+        lab = ws.cell(row=r, column=1, value=label)
+        lab.font = f(11, bold=True)
+        lab.alignment = align()
+        lab.fill = fill(BAND)
+        lab.border = box()
+        calc_cell(ws, r, 2, formula.format(**refs), bold=True, size=12)
+        n = ws.cell(row=r, column=3, value=note or None)
+        n.font = f(10, color=MUTED, italic=True)
+        n.alignment = align()
+        n.border = box()
+        ws.row_dimensions[r].height = 22
+
+    head = ws.cell(row=4, column=5, value="סדר העבודה")
+    head.font = f(13, bold=True, color=ACCENT)
+    head.alignment = align()
+    for i, (key, text) in enumerate(STEPS):
+        r = 5 + i
+        k = ws.cell(row=r, column=4, value=key)
+        k.font = f(11, bold=True, color=ACCENT)
+        k.alignment = align(h="center", v="top")
+        t = ws.cell(row=r, column=5, value=text)
+        t.font = f(11)
+        t.alignment = align(v="top", wrap=True)
+        ws.row_dimensions[r].height = max(ws.row_dimensions[r].height or 0, 34)
+
+    tips = [
+        "שלבים: הכנות שישי (בוקר) · תורנות שישי (צהריים–אחה\"צ) · תורנות שבת (ערב ושבת). חניך יכול להיות בקבוצה אחת בכל שלב.",
+        "גודל קבוצה = שיא האנשים שנדרשים בו-זמנית במשימות שלה. משימה בלי שעה = כל הקבוצה. משימה בלי קבוצה = בלו\"ז הצל בלי שמות.",
+        "עוגן = האירוע בלו\"ז שלידו המשימה מופיעה בלו\"ז הצל. הרשימה הנגללת נלקחת מעמודת «אירוע» ב«לוז».",
+        "«ניקוד» במשימה (1 רגיל, 2 קשה, 3 קשה מאוד) נצבר ל«חניכים» ול«היסטוריה» — מי שצבר פחות משובץ קודם.",
+        "מתכון על הפלייר: ב«משימות» בוחרים מנה בעמודת «מתכון», והמתכון מ«מתכונים» מודפס בפלייר של הקבוצה.",
+    ]
+    head = ws.cell(row=11, column=5, value="איך זה עובד")
+    head.font = f(13, bold=True, color=ACCENT)
+    head.alignment = align()
+    for i, text in enumerate(tips):
+        r = 12 + i
+        k = ws.cell(row=r, column=4, value="•")
+        k.font = f(11, bold=True, color=ACCENT)
+        k.alignment = align(h="center", v="top")
+        t = ws.cell(row=r, column=5, value=text)
+        t.font = f(11)
+        t.alignment = align(v="top", wrap=True)
+        ws.row_dimensions[r].height = max(ws.row_dimensions[r].height or 0, 34)
     return ws
 
 
@@ -254,8 +341,8 @@ def build_help(wb):
 def build_schedule(wb):
     ws = wb.create_sheet(SH_SCHED)
     page(ws, tab=TAB_INPUT)
-    widths(ws, {"A": 12, "B": 11, "C": 30, "D": 18, "E": 34, "F": 11})
-    title_row(ws, 1, "לו\"ז השבת", span="A:F", size=20)
+    widths(ws, {"A": 12, "B": 11, "C": 30, "D": 18, "E": 32, "F": 11, "G": 10})
+    title_row(ws, 1, "לו\"ז השבת", span="A:G", size=20)
 
     z = q(SH_ZMAN)
     labels = {(3, 1): "תאריך השבת", (3, 3): "פרשה", (4, 1): "כניסת שבת", (4, 3): "צאת שבת"}
@@ -265,11 +352,9 @@ def build_schedule(wb):
         lab.alignment = align()
         lab.fill = fill(BAND)
         lab.border = box()
-    date_cell = data_cell(ws, 3, 2, center=True, fmt="dd/mm/yyyy", size=12, bold=True)
+    data_cell(ws, 3, 2, center=True, fmt="dd/mm/yyyy", size=12, bold=True)
     dv_list(ws, "{}$A$3:$A$400".format(z), SCHED_DATE, strict=True)
-    parasha = data_cell(ws, 3, 4, '=IFERROR(VLOOKUP($B$3,{}$A$3:$D$400,2,FALSE),"")'.format(z),
-                        editable=False)
-    parasha.fill = fill(CALC_BG)
+    calc_cell(ws, 3, 4, '=IFERROR(VLOOKUP($B$3,{}$A$3:$D$400,2,FALSE),"")'.format(z), center=False)
     for ref, col in ((SCHED_CANDLE, 3), (SCHED_HAVDALAH, 4)):
         c = ws[ref]
         c.value = '=IFERROR(VLOOKUP($B$3,{}$A$3:$D$400,{},FALSE),"")'.format(z, col)
@@ -283,7 +368,7 @@ def build_schedule(wb):
     hint.font = f(10, color=MUTED, italic=True)
     hint.alignment = align()
 
-    header_row(ws, SCHED_HEADER_ROW, ["יום", "שעה", "אירוע", "מקום", "הערה", "הצעה"])
+    header_row(ws, SCHED_HEADER_ROW, ["יום", "שעה", "אירוע", "מקום", "הערה", "הצעה", "משימות"])
     template = read_schedule_template()
     for i in range(SCHED_ROWS):
         r = SCHED_FIRST_ROW + i
@@ -294,9 +379,9 @@ def build_schedule(wb):
         data_cell(ws, r, L_EVENT, row["אירוע"] if row else None, bold=True)
         data_cell(ws, r, L_PLACE, (row["מקום"] or None) if row else None)
         data_cell(ws, r, L_NOTE, (row["הערה"] or None) if row else None, wrap=True)
-        sug = data_cell(ws, r, L_SUGGEST, suggestion_formula(row) if row else None,
-                        editable=False, center=True, fmt="hh:mm")
+        sug = calc_cell(ws, r, L_SUGGEST, suggestion_formula(row) if row else None, fmt="hh:mm")
         sug.font = f(10, color=MUTED)
+        calc_cell(ws, r, L_TASKS, '=IF(C{r}="","",COUNTIF({t},C{r}))'.format(r=r, t=T(T_ANCHOR)))
         if day:
             ws.cell(row=r, column=L_DAY).fill = fill(DAY_FILLS.get(day, BAND))
         ws.row_dimensions[r].height = 22
@@ -304,7 +389,7 @@ def build_schedule(wb):
     ws.freeze_panes = "A{}".format(SCHED_FIRST_ROW)
     note_row(ws, SCHED_FIRST_ROW + SCHED_ROWS + 1,
              "«שעה» היא הלו\"ז שנשלח בפועל — עורכים בה חופשי. «הצעה» מחושבת מכניסת/צאת השבת "
-             "(הכללים ב-data/schedule_template.csv) ומתעדכנת כשמחליפים תאריך.", last_col=6)
+             "(הכללים ב-data/schedule_template.csv). «משימות» = כמה משימות מעוגנות לאירוע בלו\"ז הצל.", last_col=7)
     return ws
 
 
@@ -314,38 +399,45 @@ def build_schedule(wb):
 def build_tasks(wb):
     ws = wb.create_sheet(SH_TASKS)
     page(ws, tab=TAB_INPUT)
-    widths(ws, {"A": 11, "B": 8, "C": 26, "D": 52, "E": 8, "F": 44, "G": 18, "H": 22})
-    title_row(ws, 1, "משימות השבת — מי עושה מה ומתי", span="A:H", size=18)
-    header_row(ws, 2, ["יום", "שעה", "קבוצה", "משימה", "אנשים", "שמות", "עוגן בלו\"ז", "הערה"])
+    widths(ws, {"A": 13, "B": 10, "C": 8, "D": 26, "E": 48, "F": 7, "G": 40, "H": 16, "I": 7, "J": 18, "K": 20})
+    title_row(ws, 1, "משימות השבת — מי עושה מה ומתי", span="A:K", size=18)
+    header_row(ws, 2, ["שלב", "יום", "שעה", "קבוצה", "משימה", "אנשים", "שמות", "מתכון", "ניקוד", "עוגן בלו\"ז", "הערה"])
 
     library = read_csv("task_library.csv")
     for i in range(TASK_ROWS):
         r = TASK_FIRST_ROW + i
         row = library[i] if i < len(library) else None
-        data_cell(ws, r, T_DAY, row["יום"] if row else None, center=True)
+        get = lambda k: (row.get(k) or None) if row else None
+        data_cell(ws, r, T_STAGE, get("שלב"), center=True)
+        data_cell(ws, r, T_DAY, get("יום"), center=True)
         data_cell(ws, r, T_HOUR, as_time(row["שעה"]) if row and row["שעה"] else None,
                   center=True, bold=True, fmt="hh:mm")
-        data_cell(ws, r, T_GROUP, (row["קבוצה"] or None) if row else None)
-        data_cell(ws, r, T_TASK, row["משימה"] if row else None, wrap=True)
+        data_cell(ws, r, T_GROUP, get("קבוצה"))
+        data_cell(ws, r, T_TASK, get("משימה"), wrap=True)
         data_cell(ws, r, T_PEOPLE, int(row["אנשים"]) if row and row["אנשים"] else None, center=True)
         names = data_cell(ws, r, T_NAMES, None, wrap=True)
-        names.fill = fill(CALC_BG)
-        data_cell(ws, r, T_ANCHOR, (row["עוגן"] or None) if row else None)
+        names.fill = fill(SCRIPT_BG)
+        data_cell(ws, r, T_RECIPE, get("מתכון"))
+        data_cell(ws, r, T_POINTS, int(row["ניקוד"]) if row and row.get("ניקוד") else None, center=True)
+        data_cell(ws, r, T_ANCHOR, get("עוגן"))
         data_cell(ws, r, T_NOTE, None, wrap=True)
         if row and row["יום"]:
             ws.cell(row=r, column=T_DAY).fill = fill(DAY_FILLS.get(row["יום"], BAND))
         ws.row_dimensions[r].height = 30 if row else 18
 
     last = TASK_FIRST_ROW + TASK_ROWS - 1
-    dv_list(ws, '"{}"'.format(DAYS), "A{}:A{}".format(TASK_FIRST_ROW, last))
-    dv_list(ws, "{}$A${}:$A${}".format(q(SH_GROUPS), GROUP_FIRST_ROW, GROUP_FIRST_ROW + GROUP_ROWS - 1),
-            "C{}:C{}".format(TASK_FIRST_ROW, last))
-    dv_list(ws, "{}$C${}:$C${}".format(q(SH_SCHED), SCHED_FIRST_ROW, SCHED_FIRST_ROW + SCHED_ROWS - 1),
-            "G{}:G{}".format(TASK_FIRST_ROW, last))
+    span = lambda col: "{c}{a}:{c}{b}".format(c=col_letter(col), a=TASK_FIRST_ROW, b=last)
+    dv_list(ws, '"{}"'.format(",".join(STAGES)), span(T_STAGE))
+    dv_list(ws, '"{}"'.format(DAYS), span(T_DAY))
+    dv_list(ws, G(G_NAME), span(T_GROUP))
+    dv_list(ws, rng(SH_RECIPES, 2, 3, RECIPE_ROWS), span(T_RECIPE))
+    dv_list(ws, '"1,2,3"', span(T_POINTS))
+    dv_list(ws, L(L_EVENT), span(T_ANCHOR))
     ws.freeze_panes = "A{}".format(TASK_FIRST_ROW)
     note_row(ws, last + 2,
              "«אנשים» = כמה צריך למשימה; ריק = כל הקבוצה. «שמות» מתמלא ע\"י השיבוץ ואפשר לתקן ידנית. "
-             "«עוגן» = האירוע בלו\"ז שלידו המשימה תופיע בלו\"ז הצל.", last_col=8)
+             "«מתכון» = מנה מ«מתכונים» שתודפס על הפלייר. «ניקוד» = רמת קושי (1–3) למעקב העומס. "
+             "«עוגן» = האירוע בלו\"ז שלידו המשימה תופיע בלו\"ז הצל.", last_col=11)
     return ws
 
 
@@ -355,44 +447,40 @@ def build_tasks(wb):
 def build_groups(wb):
     ws = wb.create_sheet(SH_GROUPS)
     page(ws, tab=TAB_INPUT)
-    widths(ws, {"A": 28, "B": 22, "C": 16, "D": 60, "E": 8, "F": 10})
-    title_row(ws, 1, "הקבוצות השבת", span="A:F", size=18)
-    header_row(ws, 2, ["קבוצה", "קבוצת אם", "מוביל/ה", "חניכים", "גודל", "משימות"])
+    widths(ws, {"A": 28, "B": 14, "C": 16, "D": 60, "E": 8, "F": 10})
+    title_row(ws, 1, "קבוצות העבודה השבת", span="A:F", size=18)
+    header_row(ws, 2, ["קבוצה", "שלב", "מוביל/ה", "חניכים", "גודל", "משימות"])
 
     plan = read_csv("group_plan.csv")
-    t_groups = "{}$C${}:$C${}".format(q(SH_TASKS), TASK_FIRST_ROW, TASK_FIRST_ROW + TASK_ROWS - 1)
     for i in range(GROUP_ROWS):
         r = GROUP_FIRST_ROW + i
         row = plan[i] if i < len(plan) else None
         data_cell(ws, r, G_NAME, row["קבוצה"] if row else None, bold=True)
-        data_cell(ws, r, G_PARENT, (row["קבוצת אם"] or None) if row else None)
+        data_cell(ws, r, G_STAGE, (row["שלב"] or None) if row else None, center=True)
         data_cell(ws, r, G_LEADER, (row["מוביל/ה"] or None) if row else None)
         members = data_cell(ws, r, G_MEMBERS, None, wrap=True)
-        members.fill = fill(CALC_BG)
-        size = data_cell(ws, r, G_SIZE,
-                         '=IF(D{r}="","",LEN(D{r})-LEN(SUBSTITUTE(D{r},",",""))+1)'.format(r=r),
-                         editable=False, center=True)
-        size.fill = fill(CALC_BG)
-        count = data_cell(ws, r, G_COUNT, '=IF(A{r}="","",COUNTIF({t},A{r}))'.format(r=r, t=t_groups),
-                          editable=False, center=True)
-        count.fill = fill(CALC_BG)
+        members.fill = fill(SCRIPT_BG)
+        calc_cell(ws, r, G_SIZE, '=IF(D{r}="","",LEN(D{r})-LEN(SUBSTITUTE(D{r},",",""))+1)'.format(r=r))
+        calc_cell(ws, r, G_COUNT, '=IF(A{r}="","",COUNTIF({t},A{r}))'.format(r=r, t=T(T_GROUP)))
         ws.row_dimensions[r].height = 30 if row else 18
+    last = GROUP_FIRST_ROW + GROUP_ROWS - 1
+    dv_list(ws, '"{}"'.format(",".join(STAGES)), "B{}:B{}".format(GROUP_FIRST_ROW, last))
     ws.freeze_panes = "A{}".format(GROUP_FIRST_ROW)
-    note_row(ws, GROUP_FIRST_ROW + GROUP_ROWS + 1,
+    note_row(ws, last + 2,
              "המבנה הקבוע ב-data/group_plan.csv. «חניכים» נכתב ע\"י השיבוץ (מופרד בפסיקים); "
-             "«גודל» ו«משימות» מחושבים.", last_col=6)
+             "«גודל» ו«משימות» מחושבים. פלייר נוצר לכל קבוצה כאן.", last_col=6)
     return ws
 
 
 # ---------------------------------------------------------------------------
-# גיליון: חניכים
+# גיליון: חניכים — מעקב עומס
 # ---------------------------------------------------------------------------
 def build_students(wb):
     ws = wb.create_sheet(SH_STUDENTS)
-    page(ws, tab=TAB_INPUT)
-    widths(ws, {"A": 26, "B": 10, "C": 9, "D": 30, "E": 30})
-    title_row(ws, 1, "חניכים — מי נמצא ומי בתורנות", span="A:E", size=18)
-    header_row(ws, 2, ["שם", "תוכנית", "זמין/ה", "קבוצה השבת", "הערה"])
+    page(ws, tab=TAB_SCRIPT)
+    widths(ws, {"A": 26, "B": 10, "C": 9, "D": 44, "E": 9, "F": 9, "G": 9, "H": 30})
+    title_row(ws, 1, "חניכים — מי נמצא, מי בתורנות, וכמה עומס", span="A:H", size=18)
+    header_row(ws, 2, ["שם", "תוכנית", "זמין/ה", "קבוצות השבת", "משימות השבת", "ניקוד השבת", "ניקוד מצטבר", "הערה"])
 
     students = read_csv("students.csv")
     for i in range(STUDENT_ROWS):
@@ -400,15 +488,59 @@ def build_students(wb):
         row = students[i] if i < len(students) else None
         data_cell(ws, r, S_NAME, row["שם"] if row else None)
         data_cell(ws, r, S_PROGRAM, (row.get("תוכנית") or None) if row else None, center=True)
-        data_cell(ws, r, S_AVAILABLE, None, center=True)
-        data_cell(ws, r, S_GROUP, None)
-        data_cell(ws, r, S_NOTE, None)
+        for col in (S_AVAILABLE, S_GROUPS, S_NOTE):
+            data_cell(ws, r, col, None, center=(col == S_AVAILABLE)).fill = fill(SCRIPT_BG)
+        calc_cell(ws, r, S_TASKS, '=IF(A{r}="","",COUNTIF({n},"*"&A{r}&"*"))'.format(r=r, n=T(T_NAMES)))
+        calc_cell(ws, r, S_POINTS, '=IF(A{r}="","",SUMIF({n},"*"&A{r}&"*",{p}))'.format(
+            r=r, n=T(T_NAMES), p=T(T_POINTS)))
+        calc_cell(ws, r, S_TOTAL, '=IF(A{r}="","",SUMIF({hn},A{r},{hp}))'.format(
+            r=r, hn=H(H_NAME), hp=H(H_POINTS)))
     last = STUDENT_FIRST_ROW + STUDENT_ROWS - 1
     dv_list(ws, '"כן,לא"', "C{}:C{}".format(STUDENT_FIRST_ROW, last))
-    dv_list(ws, "{}$A${}:$A${}".format(q(SH_GROUPS), GROUP_FIRST_ROW, GROUP_FIRST_ROW + GROUP_ROWS - 1),
-            "D{}:D{}".format(STUDENT_FIRST_ROW, last))
     ws.freeze_panes = "A{}".format(STUDENT_FIRST_ROW)
+    note_row(ws, last + 2,
+             "«זמין/ה» ו«קבוצות השבת» נכתבים ע\"י השיבוץ מרשימת הנוכחות. «משימות» ו«ניקוד השבת» "
+             "נספרים מ«משימות»; «ניקוד מצטבר» מ«היסטוריה» (כל השבתות).", last_col=8)
     return ws
+
+
+# ---------------------------------------------------------------------------
+# גיליון: היסטוריה — הזיכרון של המערכת
+# ---------------------------------------------------------------------------
+def build_history(wb):
+    ws = wb.create_sheet(SH_HISTORY)
+    page(ws, tab=TAB_SCRIPT)
+    widths(ws, {"A": 12, "B": 26, "C": 14, "D": 28, "E": 48, "F": 8})
+    title_row(ws, 1, "היסטוריית תורנויות — רשומה לכל משימה של כל חניך", span="A:F", size=18)
+    header_row(ws, 2, ["תאריך", "שם", "שלב", "קבוצה", "משימה", "ניקוד"])
+    for i, row in enumerate(read_history()):
+        r = HISTORY_FIRST_ROW + i
+        write_history_row(ws, r, row)
+    ws.freeze_panes = "A{}".format(HISTORY_FIRST_ROW)
+    return ws
+
+
+HISTORY_FIELDS = ["תאריך", "שם", "שלב", "קבוצה", "משימה", "ניקוד"]
+
+
+def read_history():
+    path = DATA / "duty_history.csv"
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        return [r for r in csv.DictReader(fh) if r.get("שם")]
+
+
+def write_history_row(ws, r, row):
+    d = datetime.strptime(row["תאריך"], "%Y-%m-%d").date()
+    for col, val, fmt in ((H_DATE, d, "dd/mm/yyyy"), (H_NAME, row["שם"], None), (H_STAGE, row.get("שלב") or None, None),
+                          (H_GROUP, row.get("קבוצה") or None, None), (H_TASK, row.get("משימה") or None, None),
+                          (H_POINTS, int(row.get("ניקוד") or 1), None)):
+        c = ws.cell(row=r, column=col, value=val)
+        c.font = f(10)
+        c.alignment = align(h="center" if col in (H_DATE, H_STAGE, H_POINTS) else "right")
+        if fmt:
+            c.number_format = fmt
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +562,9 @@ def build_recipes(wb):
         data_cell(ws, r, 6, wrap=True)
     dv_list(ws, '"{}"'.format(RECIPE_KINDS), "A3:A{}".format(2 + RECIPE_ROWS))
     ws.freeze_panes = "A3"
+    note_row(ws, RECIPE_ROWS + 4,
+             "שם המנה (עמודה B) הוא מה שבוחרים בעמודת «מתכון» ב«משימות» — והמתכון מודפס על הפלייר של הקבוצה. "
+             "מרכיבים והוראות: שורה לכל פריט (Alt+Enter לשורה חדשה בתא).", last_col=6)
     return ws
 
 
@@ -480,15 +615,16 @@ def build_zmanim(wb):
 def main():
     wb = Workbook()
     wb.remove(wb.active)
-    build_help(wb)
+    build_dashboard(wb)
     build_schedule(wb)
     build_tasks(wb)
     build_groups(wb)
     build_students(wb)
+    build_history(wb)
     build_recipes(wb)
     build_catering(wb)
     build_zmanim(wb)
-    wb.active = 1
+    wb.active = 0
     wb.save(OUT)
     print("נבנה: {} ({} גיליונות)".format(OUT.relative_to(ROOT), len(wb.sheetnames)))
 
