@@ -11,8 +11,9 @@
 בלי שעה = כל הקבוצה.
 
 השיבוץ רץ שלב אחרי שלב (הכנות שישי ← תורנות שישי ← תורנות שבת): בכל שלב חניך
-יכול להיות בקבוצה אחת, אבל הוא יכול להופיע בכמה שלבים (עד --max-stages). מי שצבר
-פחות ניקוד — בהיסטוריה ובשבת הזו — נבחר קודם; חניכי אלול מתפזרים יחסית.
+יכול להיות בקבוצה אחת, אבל הוא יכול להופיע בכמה שלבים (עד --max-stages) כל עוד
+השעות לא מתנגשות. מי שצבר פחות ניקוד — בהיסטוריה ובשבת הזו — נבחר קודם; חניכי
+אלול מתפזרים יחסית.
 
 הצמדות ידניות ב-data/attendance/<תאריך>.csv («שיבוץ ידני», כמה קבוצות מופרדות
 ב-;) נשמרות גם אם הקבוצה גדולה מהשיא. המבנה הקבוע ב-data/group_plan.csv.
@@ -101,6 +102,11 @@ def read_tasks(path):
             "points": int(points) if points not in (None, "") else 1,
         })
     return tasks
+
+
+def timed_slots(tasks, group):
+    """המשבצות (יום, שעה) שהקבוצה תופסת בפועל — משימה בלי שעה אינה תופסת זמן."""
+    return {key for key, _ in slots_of(tasks, group) if key[0] != "*"}
 
 
 def slots_of(tasks, group):
@@ -217,7 +223,7 @@ def fill_tasks(members, tasks, group):
 def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
     """מריץ את השיבוץ שלב אחרי שלב ומחזיר (קבוצות, שמות למשימה, הקטנות)."""
     groups, task_names, shrunk = {}, {}, []
-    week_points, stages_of = Counter(), Counter()
+    week_points, stages_of, busy = Counter(), Counter(), {}
     stages = [s for s in bw.STAGES if any(g["stage"] == s for g in plan)]
     stages += [g["stage"] for g in plan if g["stage"] not in stages]      # שלב לא מוכר — בסוף
     for i, stage in enumerate(OrderedDict.fromkeys(stages)):
@@ -225,7 +231,13 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
         stage_names = {g["name"] for g in stage_plan}
         stage_pins = {n: [g for g in gs if g in stage_names] for n, gs in pins.items()}
         stage_pins = {n: gs for n, gs in stage_pins.items() if gs}
-        pool = [n for n in available if stages_of[n] < max_stages or n in stage_pins]
+        # חניך פנוי לשלב רק אם אף משימה שכבר שובץ אליה אינה מתנגשת בזמן עם
+        # משימות השלב — כך בית מדרש ב-8:00 והכנות ב-8:00 לא נופלים על אותו אדם.
+        stage_slots = set().union(*(timed_slots(tasks, g["name"]) for g in stage_plan)) \
+            if stage_plan else set()
+        pool = [n for n in available
+                if (stages_of[n] < max_stages or n in stage_pins)
+                and not (busy.get(n, set()) & stage_slots)]
 
         fixed = Counter(g for gs in stage_pins.values() for g in gs)
         for g in stage_plan:
@@ -246,8 +258,10 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
             for t in tasks:
                 for n in names.get(t["row"], []):
                     week_points[n] += t["points"]
+            occupied = timed_slots(tasks, g["name"])
             for n in result[g["name"]]:
                 stages_of[n] += 1
+                busy.setdefault(n, set()).update(occupied)
     return groups, task_names, shrunk
 
 

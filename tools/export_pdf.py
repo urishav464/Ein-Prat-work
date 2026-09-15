@@ -203,17 +203,37 @@ th.names,td.names{width:60mm;font-size:11pt}
 .recipe .col.ing{flex:0 0 62mm}
 .recipe h3{font-family:'Rubik',sans-serif;font-size:10.5pt;color:#5A6572;margin-bottom:1mm}
 .recipe p{font-size:10.5pt;line-height:1.5;white-space:pre-line}
+.recipe p b{display:block;margin-top:1.5mm}
+.recipe p b:first-child{margin-top:0}
+.recipe ol{margin:0;padding-right:5mm;font-size:10.5pt;line-height:1.5}
+.recipe ol li{margin-bottom:.8mm}
 .recipe .note{margin-top:2mm;font-size:9.5pt;color:#5A6572}
 """
+
+
+def ingredients_html(text):
+    """שורה לכל מרכיב; שורה שנגמרת בנקודתיים היא כותרת משנה (לבצק / למילוי)."""
+    out = []
+    for line in (text or "").split("\n"):
+        line = line.strip()
+        out.append("<b>{}</b>".format(esc(line)) if line.endswith(":") else esc(line))
+    return "\n".join(out) or "—"
+
+
+def steps_html(text):
+    steps = [s.strip() for s in (text or "").split("\n") if s.strip()]
+    if not steps:
+        return "<p>—</p>"
+    return "<ol>{}</ol>".format("".join("<li>{}</li>".format(esc(s)) for s in steps))
 
 
 def recipe_html(recipe):
     return ('<div class="recipe"><h2>{dish}{qty}</h2><div class="cols">'
             '<div class="col ing"><h3>מרכיבים</h3><p>{ing}</p></div>'
-            '<div class="col"><h3>הכנה</h3><p>{steps}</p></div></div>{note}</div>').format(
+            '<div class="col"><h3>הכנה</h3>{steps}</div></div>{note}</div>').format(
         dish=esc(recipe["dish"]),
         qty='<span>כמות: {}</span>'.format(esc(recipe["qty"])) if recipe["qty"] else "",
-        ing=esc(recipe["ingredients"]) or "—", steps=esc(recipe["steps"]) or "—",
+        ing=ingredients_html(recipe["ingredients"]), steps=steps_html(recipe["steps"]),
         note='<div class="note">{}</div>'.format(esc(recipe["note"])) if recipe["note"] else "")
 
 

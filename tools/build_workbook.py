@@ -61,7 +61,7 @@ L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST, L_TASKS = range(1, 8)
 
 STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת"]
 DAYS = "שישי,שבת,מוצאי שבת"
-RECIPE_KINDS = "עוגות,סלטים,מטבוחה,ארוחת צהריים שישי"
+RECIPE_KINDS = "מאפים,עוגות,סלטים,בישול,ארוחת צהריים שישי"
 MEALS = "ארוחת ערב,קידוש,ארוחת צהריים,סעודה שלישית"
 
 # --- צבעים ------------------------------------------------------------------
@@ -552,14 +552,19 @@ def build_recipes(wb):
     widths(ws, {"A": 18, "B": 26, "C": 12, "D": 50, "E": 50, "F": 24})
     title_row(ws, 1, "מתכונים — עוגות, סלטים, מטבוחה וארוחת צהריים שישי", span="A:F", size=18)
     header_row(ws, 2, ["קטגוריה", "מנה", "כמות", "מרכיבים", "הוראות", "הערה"])
+    recipes = read_csv("recipes.csv") if (DATA / "recipes.csv").exists() else []
     for i in range(RECIPE_ROWS):
         r = 3 + i
-        data_cell(ws, r, 1, center=True)
-        data_cell(ws, r, 2, bold=True)
-        data_cell(ws, r, 3, center=True)
-        data_cell(ws, r, 4, wrap=True)
-        data_cell(ws, r, 5, wrap=True)
-        data_cell(ws, r, 6, wrap=True)
+        row = recipes[i] if i < len(recipes) else None
+        get = lambda k: (row.get(k) or None) if row else None
+        data_cell(ws, r, 1, get("קטגוריה"), center=True)
+        data_cell(ws, r, 2, get("מנה"), bold=True)
+        data_cell(ws, r, 3, get("כמות"), center=True)
+        data_cell(ws, r, 4, get("מרכיבים"), wrap=True)
+        data_cell(ws, r, 5, get("הוראות"), wrap=True)
+        data_cell(ws, r, 6, get("הערה"), wrap=True)
+        if row:
+            ws.row_dimensions[r].height = 120
     dv_list(ws, '"{}"'.format(RECIPE_KINDS), "A3:A{}".format(2 + RECIPE_ROWS))
     ws.freeze_panes = "A3"
     note_row(ws, RECIPE_ROWS + 4,
