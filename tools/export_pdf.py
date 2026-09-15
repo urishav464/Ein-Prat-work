@@ -193,6 +193,7 @@ h1{font-size:26pt}
 th.hour,td.hour{width:20mm;text-align:center;font-family:'Rubik',sans-serif;font-weight:700;font-size:12pt}
 td.day{font-size:9pt;color:#5A6572;display:block}
 td.task{font-size:12pt}
+td.task .note{display:block;margin-top:1mm;font-size:9.5pt;color:#5A6572}
 th.names,td.names{width:60mm;font-size:11pt}
 .empty{margin-top:8mm;text-align:center;color:#8A94A0;font-size:12pt}
 .recipe{margin-top:7mm;border:1px solid #1F2430;padding:4mm 5mm;page-break-inside:avoid}
@@ -237,7 +238,7 @@ def recipe_html(recipe):
         note='<div class="note">{}</div>'.format(esc(recipe["note"])) if recipe["note"] else "")
 
 
-def flyer_html(group, tasks, data):
+def flyer_html(group, tasks, data, with_recipes=False):
     """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומתכון לכל מנה שמופיעה במשימותיה."""
     rows, last_day = [], None
     ordered = sorted(tasks, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
@@ -248,16 +249,19 @@ def flyer_html(group, tasks, data):
         day = ""
         if multi_day and t["day"] != last_day:
             day, last_day = '<span class="day">{}</span>'.format(esc(t["day"])), t["day"]
-        rows.append('<tr><td class="hour">{day}{hour}</td><td class="task">{task}</td>'
+        rows.append('<tr><td class="hour">{day}{hour}</td><td class="task">{task}{note}</td>'
                     '<td class="names">{names}</td></tr>'.format(
-                        day=day, hour=esc(hhmm(t["hour"])) or "—", task=esc(t["task"]), names=esc(names)))
+                        day=day, hour=esc(hhmm(t["hour"])) or "—", task=esc(t["task"]),
+                        note='<span class="note">{}</span>'.format(esc(t["note"])) if t["note"] else "",
+                        names=esc(names)))
     table = ('<table><thead><tr><th class="hour">שעה</th><th>משימה</th><th class="names">מי</th></tr></thead>'
              '<tbody>{}</tbody></table>'.format("".join(rows))) if rows else \
         '<div class="empty">אין עדיין משימות לקבוצה</div>'
     dishes = []
-    for t in ordered:
-        if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
-            dishes.append(t["recipe"])
+    if with_recipes:            # ברירת המחדל: הפלייר בלי המתכון — הוא נשאר בגיליון
+        for t in ordered:
+            if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
+                dishes.append(t["recipe"])
     recipes = "".join(recipe_html(data["recipes"][d]) for d in dishes)
     return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
 <style>{fonts}{base}{css}</style></head><body><div class="sheet">
@@ -428,6 +432,8 @@ def main():
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-11")
     ap.add_argument("--only", choices=["flyers", "shadow"], help="להפיק רק חלק")
     ap.add_argument("--no-png", action="store_true", help="בלי תמונות PNG")
+    ap.add_argument("--with-recipes", action="store_true",
+                    help="להדפיס את המתכון על הפלייר (ברירת מחדל: בלי)")
     args = ap.parse_args()
 
     d = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -446,7 +452,7 @@ def main():
             tasks = [t for t in data["tasks"] if t["group"] == group["name"]]
             pdf = out_dir / "{}.pdf".format(group["name"])
             png = None if args.no_png else out_dir / "{}.png".format(group["name"])
-            render(flyer_html(group, tasks, data), pdf, png)
+            render(flyer_html(group, tasks, data, args.with_recipes), pdf, png)
             made += [x for x in (pdf, png) if x]
     if args.only != "flyers":
         pdf = out_dir / "לוז צל.pdf"

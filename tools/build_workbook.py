@@ -420,7 +420,7 @@ def build_tasks(wb):
         data_cell(ws, r, T_RECIPE, get("מתכון"))
         data_cell(ws, r, T_POINTS, int(row["ניקוד"]) if row and row.get("ניקוד") else None, center=True)
         data_cell(ws, r, T_ANCHOR, get("עוגן"))
-        data_cell(ws, r, T_NOTE, None, wrap=True)
+        data_cell(ws, r, T_NOTE, get("הערה"), wrap=True)
         if row and row["יום"]:
             ws.cell(row=r, column=T_DAY).fill = fill(DAY_FILLS.get(row["יום"], BAND))
         ws.row_dimensions[r].height = 30 if row else 18
