@@ -13,7 +13,7 @@ python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-0
 python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx   # carry last week's edits forward
 python3 tools/attendance.py 2026-09-18 < names.txt   # paste-in roster matching (--all, --show, --file)
 python3 tools/assign_groups.py 2026-09-18        # fills names (--dry-run, --seed, --max-stages, --file)
-python3 tools/export_pdf.py 2026-09-18           # PDFs+PNGs (--only flyers|shadow, --no-png, --with-recipes)
+python3 tools/export_pdf.py 2026-09-18           # PDFs+PNGs (--only flyers|shadow, --no-png, --with-recipes adds the method)
 python3 tools/zmanim.py 2026-09-01 2027-09-01    # regenerate data/zmanim.csv
 python3 tools/fetch_fonts.py                     # refill assets/fonts/ (already committed)
 ```

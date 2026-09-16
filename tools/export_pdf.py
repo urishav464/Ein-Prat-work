@@ -203,6 +203,7 @@ th.names,td.names{width:60mm;font-size:11pt}
 .recipe .cols{display:flex;gap:6mm;margin-top:2.5mm}
 .recipe .col{flex:1}
 .recipe .col.ing{flex:0 0 62mm}
+.recipe.ing-only .col.ing{flex:1 1 auto}
 .recipe h3{font-family:'Rubik',sans-serif;font-size:10.5pt;color:#5A6572;margin-bottom:1mm}
 .recipe p{font-size:10.5pt;line-height:1.5;white-space:pre-line}
 .recipe p b{display:block;margin-top:1.5mm}
@@ -229,18 +230,23 @@ def steps_html(text):
     return "<ol>{}</ol>".format("".join("<li>{}</li>".format(esc(s)) for s in steps))
 
 
-def recipe_html(recipe):
-    return ('<div class="recipe"><h2>{dish}{qty}</h2><div class="cols">'
-            '<div class="col ing"><h3>מרכיבים</h3><p>{ing}</p></div>'
-            '<div class="col"><h3>הכנה</h3>{steps}</div></div>{note}</div>').format(
-        dish=esc(recipe["dish"]),
+def recipe_html(recipe, with_steps=False):
+    """בלוק המנה על הפלייר. ברירת המחדל — מצרכים וכמות בלבד; אופן ההכנה רק לפי בקשה."""
+    steps = ('<div class="col"><h3>הכנה</h3>{}</div>'.format(steps_html(recipe["steps"]))
+             if with_steps else "")
+    return ('<div class="recipe{cls}"><h2>{title}{qty}</h2><div class="cols">'
+            '<div class="col ing">{head}<p>{ing}</p></div>'
+            '{steps}</div>{note}</div>').format(
+        cls="" if with_steps else " ing-only",
+        head="<h3>מרכיבים</h3>" if with_steps else "",
+        title=esc(recipe["dish"] if with_steps else "מצרכים — " + recipe["dish"]),
         qty='<span>כמות: {}</span>'.format(esc(recipe["qty"])) if recipe["qty"] else "",
-        ing=ingredients_html(recipe["ingredients"]), steps=steps_html(recipe["steps"]),
+        ing=ingredients_html(recipe["ingredients"]), steps=steps,
         note='<div class="note">{}</div>'.format(esc(recipe["note"])) if recipe["note"] else "")
 
 
 def flyer_html(group, tasks, data, with_recipes=False):
-    """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומתכון לכל מנה שמופיעה במשימותיה."""
+    """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומצרכים לכל מנה שמופיעה במשימותיה."""
     rows, last_day = [], None
     ordered = sorted(tasks, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
                                            t["hour"] or datetime.min.time(), t["row"]))
@@ -258,12 +264,11 @@ def flyer_html(group, tasks, data, with_recipes=False):
     table = ('<table><thead><tr><th class="hour">שעה</th><th>משימה</th><th class="names">מי</th></tr></thead>'
              '<tbody>{}</tbody></table>'.format("".join(rows))) if rows else \
         '<div class="empty">אין עדיין משימות לקבוצה</div>'
-    dishes = []
-    if with_recipes:            # ברירת המחדל: הפלייר בלי המתכון — הוא נשאר בגיליון
-        for t in ordered:
-            if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
-                dishes.append(t["recipe"])
-    recipes = "".join(recipe_html(data["recipes"][d]) for d in dishes)
+    dishes = []                 # המצרכים תמיד על הפלייר; אופן ההכנה רק עם --with-recipes
+    for t in ordered:
+        if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
+            dishes.append(t["recipe"])
+    recipes = "".join(recipe_html(data["recipes"][d], with_recipes) for d in dishes)
     return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
 <style>{fonts}{base}{css}</style></head><body><div class="sheet">
 <h1>{title}</h1><div class="stage">{stage}</div><div class="when">{when}</div>
@@ -437,7 +442,7 @@ def main():
     ap.add_argument("--only", choices=["flyers", "shadow"], help="להפיק רק חלק")
     ap.add_argument("--no-png", action="store_true", help="בלי תמונות PNG")
     ap.add_argument("--with-recipes", action="store_true",
-                    help="להדפיס את המתכון על הפלייר (ברירת מחדל: בלי)")
+                    help="להוסיף גם את אופן ההכנה (ברירת מחדל: מצרכים בלבד)")
     args = ap.parse_args()
 
     d = datetime.strptime(args.date, "%Y-%m-%d").date()
