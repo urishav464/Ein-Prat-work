@@ -54,6 +54,11 @@ def split_names(text):
     return [n.strip() for n in (text or "").split(",") if n.strip()]
 
 
+def split_dishes(text):
+    """עמודת «מתכון» יכולה להחזיק כמה מנות, מופרדות ב-; (משימה שמכינה שני סלטים)."""
+    return [d.strip() for d in (text or "").split(";") if d.strip()]
+
+
 def read_workbook(path):
     wb = load_workbook(path)
     sched, zm = wb[bw.SH_SCHED], wb[bw.SH_ZMAN]
@@ -204,6 +209,10 @@ th.names,td.names{width:60mm;font-size:11pt}
 .recipe .col{flex:1}
 .recipe .col.ing{flex:0 0 62mm}
 .recipe.ing-only .col.ing{flex:1 1 auto}
+.ing-grid{display:flex;gap:5mm;align-items:flex-start;margin-top:6mm}
+.ing-grid .recipe{flex:1 1 0;min-width:0;margin-top:0}
+.recipe.ing-only h2{font-size:13pt}
+.recipe.ing-only p{font-size:10pt;line-height:1.45}
 .recipe h3{font-family:'Rubik',sans-serif;font-size:10.5pt;color:#5A6572;margin-bottom:1mm}
 .recipe p{font-size:10.5pt;line-height:1.5;white-space:pre-line}
 .recipe p b{display:block;margin-top:1.5mm}
@@ -266,9 +275,12 @@ def flyer_html(group, tasks, data, with_recipes=False):
         '<div class="empty">אין עדיין משימות לקבוצה</div>'
     dishes = []                 # המצרכים תמיד על הפלייר; אופן ההכנה רק עם --with-recipes
     for t in ordered:
-        if t["recipe"] and t["recipe"] in data["recipes"] and t["recipe"] not in dishes:
-            dishes.append(t["recipe"])
+        for dish in split_dishes(t["recipe"]):
+            if dish in data["recipes"] and dish not in dishes:
+                dishes.append(dish)
     recipes = "".join(recipe_html(data["recipes"][d], with_recipes) for d in dishes)
+    if recipes and not with_recipes:        # שתי רשימות מצרכים יושבות זו לצד זו
+        recipes = '<div class="ing-grid">{}</div>'.format(recipes)
     return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
 <style>{fonts}{base}{css}</style></head><body><div class="sheet">
 <h1>{title}</h1><div class="stage">{stage}</div><div class="when">{when}</div>
