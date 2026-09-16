@@ -344,24 +344,36 @@ def shadow_lines(items, groups, introduced):
     return "".join(out)
 
 
-# מתאים את לו"ז הצל לעמוד אחד: מודדים כמה הוא גולש, ומכווצים במעט לפני ההדפסה.
+# מדידת לו"ז הצל: כמה הוא גולש מעמוד אחד, וגובה כל שורה — כדי לכווץ או לחלק לעמודים.
 MEASURE_SCRIPT = """<script>
 (function(){
   function report(){
     var page = document.querySelector('.page');
     var inner = document.querySelector('.inner');
+    var table = inner.querySelector('table');
     var cs = getComputedStyle(page);
     var avail = page.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    document.title = 'FIT:' + (avail / inner.getBoundingClientRect().height);
+    var innerH = inner.getBoundingClientRect().height;
+    var heights = [];
+    var rows = table.querySelectorAll('tbody tr');
+    for (var i = 0; i < rows.length; i++) {
+      heights.push(Math.round(rows[i].getBoundingClientRect().height));
+    }
+    document.title = 'FIT:' + (avail / innerH) +
+                     '|AVAIL:' + Math.round(avail) +
+                     '|CHROME:' + Math.round(innerH - table.getBoundingClientRect().height) +
+                     '|ROWS:' + heights.join(',');
   }
   window.addEventListener('load', report);
   if (document.fonts && document.fonts.ready) { document.fonts.ready.then(report); }
 })();
 </script>"""
-MIN_FIT = 0.72          # מתחת לזה עדיף שני עמודים קריאים מעמוד אחד זעיר
+MIN_FIT = 0.72          # מתחת לזה עדיף לחלק לעמודים קריאים מלדחוס עמוד אחד זעיר
 
 
-def shadow_html(data, fit=1.0, measure=False):
+def shadow_rows(data):
+    """שורות לו"ז הצל — אירוע ומי עושה מה לידו. «יום» נשמר בנפרד כדי שאפשר יהיה
+    לחזור על כותרת היום בראש כל עמוד."""
     events, groups = data["events"], data["groups"]
     by_event = {id(e): [] for e in events}
     loose = []
@@ -370,31 +382,71 @@ def shadow_html(data, fit=1.0, measure=False):
         e = find_event(events, t)
         (by_event[id(e)] if e else loose).append(t)
 
-    rows, last_day, introduced = [], None, set()
+    rows, introduced = [], set()
     for e in events:
-        day_head = ""
-        if e["day"] != last_day:
-            day_head = '<span class="day">יום {}:</span>'.format(esc(e["day"]))
-            last_day = e["day"]
-        rows.append('<tr><td class="event">{day}<span class="hour">{hour}</span>'
-                    '<span class="name">{name}</span>{place}</td><td class="lines">{lines}</td></tr>'.format(
-                        day=day_head, hour=esc(hhmm(e["hour"])), name=esc(e["name"]),
-                        place='<span class="place">{}</span>'.format(esc(e["place"])) if e["place"] else "",
-                        lines=shadow_lines(by_event[id(e)], groups, introduced) or "&nbsp;"))
+        rows.append({"day": e["day"], "hour": hhmm(e["hour"]), "name": e["name"], "place": e["place"],
+                     "loose": False, "lines": shadow_lines(by_event[id(e)], groups, introduced) or "&nbsp;"})
     if loose:
-        rows.append('<tr><td class="event loose"><span class="name">{}</span></td>'
-                    '<td class="lines">{}</td></tr>'.format(NO_ANCHOR, shadow_lines(loose, groups, introduced)))
+        rows.append({"day": None, "hour": "", "name": NO_ANCHOR, "place": None, "loose": True,
+                     "lines": shadow_lines(loose, groups, introduced)})
+    return rows
 
-    fixed = measure or fit < 1.0
+
+def shadow_row_html(row, show_day):
+    return ('<tr><td class="event{loose}">{day}<span class="hour">{hour}</span>'
+            '<span class="name">{name}</span>{place}</td><td class="lines">{lines}</td></tr>').format(
+        loose=" loose" if row["loose"] else "",
+        day='<span class="day">יום {}:</span>'.format(esc(row["day"])) if show_day else "",
+        hour=esc(row["hour"]), name=esc(row["name"]),
+        place='<span class="place">{}</span>'.format(esc(row["place"])) if row["place"] else "",
+        lines=row["lines"])
+
+
+def shadow_html(data, pages, fit=1.0, measure=False, of=None, first=1):
+    """מסמך לו"ז הצל. `pages` = רשימת עמודים, כל עמוד רשימת שורות מ-shadow_rows.
+    `of`/`first` מאפשרים לרנדר עמוד בודד ועדיין לסמן «עמוד 2 מתוך 3»."""
+    total = of or len(pages)
+    fixed = measure or fit < 1.0 or total > 1
+    sheets = []
+    for i, page_rows in enumerate(pages):
+        body, last_day = [], None
+        for j, row in enumerate(page_rows):
+            body.append(shadow_row_html(row, bool(row["day"]) and (j == 0 or row["day"] != last_day)))
+            last_day = row["day"] or last_day
+        sheets.append('<div class="page{fixed}"><div class="inner">'
+                      '<h1>לו"ז שבת ולו"ז צל</h1><div class="when">{when}{part}</div>'
+                      '<table><tbody>{rows}</tbody></table>'
+                      '<footer>מדרשת עין פרת</footer></div></div>'.format(
+                          fixed=" fixed" if fixed else "", when=esc(when_line(data)),
+                          part=" · עמוד {} מתוך {}".format(first + i, total) if total > 1 else "",
+                          rows="".join(body)))
     return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
 <style>{fonts}{base}{css}:root{{--fit:{fit}}}</style></head><body>
-<div class="page{fixed}"><div class="inner">
-<h1>לו"ז שבת ולו"ז צל</h1><div class="when">{when}</div>
-<table><tbody>{rows}</tbody></table>
-<footer>מדרשת עין פרת</footer>
-</div></div>{script}</body></html>""".format(
-        fonts=font_face_css(), base=BASE_CSS, css=SHADOW_CSS, fit=fit, fixed=" fixed" if fixed else "",
-        when=esc(when_line(data)), rows="".join(rows), script=MEASURE_SCRIPT if measure else "")
+{sheets}{script}</body></html>""".format(
+        fonts=font_face_css(), base=BASE_CSS, css=SHADOW_CSS, fit=fit,
+        sheets="".join(sheets), script=MEASURE_SCRIPT if measure else "")
+
+
+def split_pages(rows, heights, avail, chrome):
+    """חלוקת השורות לעמודים לפי הגובה שנמדד, בלי לחתוך שורה באמצע.
+    אחרי החלוקה מאזנים: עמוד אחרון עם שורה בודדת נראה רע."""
+    def chunk(cap):
+        pages, cur, used = [], [], 0
+        for row, h in zip(rows, heights):
+            if cur and used + h > cap:
+                pages.append(cur)
+                cur, used = [], 0
+            cur.append(row)
+            used += h
+        return pages + ([cur] if cur else [])
+
+    cap = (avail - chrome) * 0.97          # מרווח לכותרת היום שחוזרת בראש עמוד המשך
+    pages = chunk(cap)
+    if len(pages) > 1:                     # פיזור שווה, כל עוד מספר העמודים לא גדל
+        balanced = chunk(max(sum(heights) / len(pages) * 1.08, max(heights)))
+        if len(balanced) == len(pages):
+            pages = balanced
+    return pages
 
 
 # ---------------------------------------------------------------------------
@@ -408,8 +460,9 @@ def chrome_binary():
     raise SystemExit("לא נמצא דפדפן Chromium להפקת ה-PDF")
 
 
-def measure_fit(html_text):
-    """מריץ את העמוד ב-Chromium ומחזיר את מקדם ההתאמה לעמוד אחד (1.0 = נכנס)."""
+def measure_shadow(html_text):
+    """מריץ את לו"ז הצל ב-Chromium ומחזיר (מקדם התאמה לעמוד אחד, גובה פנוי,
+    גובה הכותרת והפוטר, גובה כל שורה). 1.0 = נכנס לעמוד."""
     chrome = chrome_binary()
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "measure.html"
@@ -418,30 +471,36 @@ def measure_fit(html_text):
             [chrome, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=8000",
              "--user-data-dir={}/profile".format(tmp), "--dump-dom", source.as_uri()],
             capture_output=True, timeout=180)
-        match = re.search(r"FIT:([0-9.]+)", result.stdout.decode("utf-8", "replace"))
+        match = re.search(r"FIT:([0-9.]+)\|AVAIL:([0-9]+)\|CHROME:([0-9]+)\|ROWS:([0-9,]*)",
+                          result.stdout.decode("utf-8", "replace"))
         if not match:
-            return 1.0
+            return 1.0, 0, 0, []
         ratio = float(match.group(1))
-        return 1.0 if ratio >= 1.03 else ratio * 0.97
+        heights = [int(h) for h in match.group(4).split(",") if h]
+        return (1.0 if ratio >= 1.03 else ratio * 0.97,
+                int(match.group(2)), int(match.group(3)), heights)
 
 
-def render(html_text, out_pdf, out_png=None):
+def render(html_text, out_pdf=None, out_png=None, png_pages=None):
+    """מרנדר את ה-HTML ל-PDF ו/או ל-PNG. `png_pages` = כמה עמודים התמונה מכסה
+    (ברירת מחדל: מספר העמודים ב-PDF שנוצר); מסמך שכבר מחולק לעמודים מצלם עמוד אחד."""
     chrome = chrome_binary()
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "page.html"
         source.write_text(html_text, encoding="utf-8")
         common = [chrome, "--headless", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
                   "--virtual-time-budget=6000", "--user-data-dir={}/profile".format(tmp)]
-        subprocess.run(common + ["--no-pdf-header-footer", "--print-to-pdf-no-header",
-                                 "--print-to-pdf={}".format(out_pdf), source.as_uri()],
-                       check=True, capture_output=True, timeout=180)
+        if out_pdf:
+            subprocess.run(common + ["--no-pdf-header-footer", "--print-to-pdf-no-header",
+                                     "--print-to-pdf={}".format(out_pdf), source.as_uri()],
+                           check=True, capture_output=True, timeout=180)
         if out_png:
-            pages = pdf_pages(out_pdf)        # התמונה מכסה את כל העמודים, לא רק את הראשון
+            pages = png_pages or (pdf_pages(out_pdf) if out_pdf else 1)
             subprocess.run(common + ["--window-size=794,{}".format(1123 * pages),
                                      "--force-device-scale-factor=2",
                                      "--screenshot={}".format(out_png), source.as_uri()],
                            check=True, capture_output=True, timeout=180)
-    return pdf_pages(out_pdf)
+    return pdf_pages(out_pdf) if out_pdf else 1
 
 
 def pdf_pages(path):
@@ -476,14 +535,23 @@ def main():
             render(flyer_html(group, tasks, data, args.with_recipes), pdf, png)
             made += [x for x in (pdf, png) if x]
     if args.only != "flyers":
+        rows = shadow_rows(data)
+        fit, avail, chrome_h, heights = measure_shadow(shadow_html(data, [rows], measure=True))
+        if fit >= MIN_FIT:
+            pages = [rows]                # נכנס לעמוד אחד, אולי בכיווץ קל
+        else:
+            pages, fit = split_pages(rows, heights, avail, chrome_h), 1.0
         pdf = out_dir / "לוז צל.pdf"
-        png = None if args.no_png else out_dir / "לוז צל.png"
-        fit = measure_fit(shadow_html(data, measure=True))
-        if fit < MIN_FIT:
-            fit = 1.0                     # צפוף מדי לעמוד אחד — עדיף שני עמודים קריאים
-        pages = render(shadow_html(data, fit=fit), pdf, png)
-        made += [x for x in (pdf, png) if x]
-        print("  לו\"ז צל: {} עמוד/ים".format(pages))
+        render(shadow_html(data, pages, fit=fit), pdf)
+        made.append(pdf)
+        if not args.no_png:               # תמונה לכל עמוד — נוח לשלוח בנפרד
+            for i, page_rows in enumerate(pages):
+                png = out_dir / ("לוז צל.png" if len(pages) == 1
+                                 else "לוז צל {}.png".format(i + 1))
+                render(shadow_html(data, [page_rows], fit=fit, of=len(pages), first=i + 1),
+                       out_png=png, png_pages=1)
+                made.append(png)
+        print("  לו\"ז צל: {} עמוד/ים".format(len(pages)))
 
     for path in made:
         print("  {:<40} {:>8,} bytes".format(path.name, path.stat().st_size))

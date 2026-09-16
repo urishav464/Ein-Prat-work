@@ -90,10 +90,13 @@ script writes, grey = computed.
 under `/opt/pw-browsers/`) with `--print-to-pdf` and `--screenshot`. Fonts are embedded as
 base64 data URIs from `assets/fonts/` so rendering never touches the network.
 `--virtual-time-budget` is required or Chromium captures before layout settles. The shadow
-schedule fits itself to one page by first running `measure_fit` (a `--dump-dom` pass where
-an inline script sets `document.title` to `FIT:<ratio>`) and then baking that ratio into a
-CSS `transform: scale()`; below `MIN_FIT` it deliberately spills to two pages rather than
-shrink the text to unreadable.
+schedule first runs `measure_shadow` (a `--dump-dom` pass where an inline script sets
+`document.title` to `FIT:<ratio>|AVAIL:<px>|CHROME:<px>|ROWS:<h,h,…>`). If the ratio is at
+least `MIN_FIT` the whole schedule goes on one page, baking the ratio into a CSS
+`transform: scale()`. Otherwise `split_pages` chunks the rows by their measured heights
+into balanced `.page` divs — never cutting a row — the PDF carries them all, and each page
+is re-rendered on its own into `לוז צל <n>.png` so a single page can be sent as an image.
+Continuation pages repeat the day heading and are labelled «עמוד n מתוך m».
 
 ### Hebrew data conventions
 
