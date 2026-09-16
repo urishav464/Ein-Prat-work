@@ -1,5 +1,9 @@
 # Mishmar management app — שנה ב' תשפ"ז (5787 / 2026-27)
-streamlit>=1.40
+# Pinned to the bundle RTL_CSS was measured against (.claude/rules/streamlit-dom.md).
+# `>=1.40` let Cloud pick up 1.64.0 the day it shipped, and its radio DOM change
+# silently unstyled the sidebar nav. Bump deliberately: upgrade locally, run
+# scripts/streamlit_dom_context.py, re-measure, then widen this.
+streamlit>=1.63,<1.65
 pyluach>=2.2          # Hebrew/Gregorian dates
 
 # Speaker discovery. The package was renamed from `duckduckgo-search` to `ddgs`;

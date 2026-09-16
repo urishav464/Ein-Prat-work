@@ -26,6 +26,8 @@ python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules
 python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (seed 5787)
 ```
 
+**Run the harness on the Streamlit that `requirements.txt` pins** (`streamlit>=1.63,<1.65`): Cloud installs the newest allowed version on every push, and 1.64 moved the radio DOM under a sidebar the 1.63 harness had just measured. Upgrading = `pip install`, `scripts/streamlit_dom_context.py`, re-measure, then widen the pin.
+
 There is no test suite and no live Supabase reachable from a sandbox. Verification runs on a local PostgreSQL 16 + a PostgREST-shaped shim + headless Chromium — described in `.claude/rules/database.md` §"Verifying changes" and `.claude/rules/ui.md` §"Verifying the UI", run end to end by the `deploy-check` agent. Without Streamlit secrets the app boots in name-only dev login, but storage still needs Supabase — there is no local storage mode.
 
 ## Hard constraints

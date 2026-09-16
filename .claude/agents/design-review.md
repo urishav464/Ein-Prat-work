@@ -69,7 +69,12 @@ ONLY the JSON in §5.
      selectors the same way, and prefer counting nodes in the live DOM over counting strings in
      the bundle** — a testid-only audit passed `[data-baseweb="select"]` twice while it matched
      **zero nodes**: 1.62 renders the selectbox through react-aria (`div[role="group"]`), so the
-     field-background and RTL rules for every dropdown in the app were dead.
+     field-background and RTL rules for every dropdown in the app were dead. **And check that the
+     installed Streamlit is the one `requirements.txt` pins** (`python3 -c "import streamlit;
+     print(streamlit.__version__)"`): a child-combinator rule can be alive in one release and dead
+     in the next with every testid still present — 1.64 put a wrapper `<div>` between
+     `stRadioGroup` and its `<label>`s, and `radiogroup > label` went dead on Cloud while the
+     1.63 harness passed. `.claude/rules/streamlit-dom.md` carries both trees.
   2. **Contrast** — WCAG relative luminance on the text colours the CSS actually sets
      (`.card-meta`, `.step`, chips, captions) against `#f2eee3` and `#ffffff`; an `opacity`
      must be composited into the colour first. Body text under 4.5:1 is a finding.

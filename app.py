@@ -90,8 +90,14 @@ RTL_CSS = """
   /* The override above must NOT reach Streamlit's icon glyphs — they are
      ligature text ("keyboard_arrow_down") that renders literally without
      the Material font. */
-  [data-testid="stIconMaterial"], span[class*="material-symbols"] {
+  /* Every Material icon is a <span translate="no"> with the icon NAME as its
+     text — the bundle sets translate:`no` in exactly two places, both icon
+     components — and only some of them carry stIconMaterial: the status
+     widget's tick is stExpanderIconCheck, and under the Assistant override it
+     painted the literal word "check", clipped to "chec" beside «הסריקה הסתיימה». */
+  [data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"], span[translate="no"] {
       font-family: 'Material Symbols Rounded' !important;
+      line-height: 1; overflow: visible;
   }
   h1, h2, h3, h4 {
       font-family: 'Rubik', 'Assistant', sans-serif !important;
@@ -170,26 +176,29 @@ RTL_CSS = """
       opacity: 0;
       transition: opacity 120ms ease;
   }
-  /* every control in the sidebar tracks its full width, and its label sits in
-     the middle of it — a 100%-wide button with a right-hugging label reads as
-     a bug, not as Hebrew. */
-  /* The nav radiogroup and its labels are flex items inside flex COLUMNS whose
-     align-items is flex-start — so `width: 100%` alone still shrank each card
-     to its own text. `align-self: stretch` is the rule that actually makes
-     them span the panel. */
+  /* ---- The nav cards. The label IS the card; the radio circle is hidden.
+     The radio's DOM moved between Streamlit 1.63 and 1.64: a react-aria
+     wrapper <div> now sits between the group and each <label>, so every
+     `radiogroup > label` rule went dead on Cloud the day 1.64 shipped
+     (2026-09-15) — while the local 1.63 harness kept passing. The anchors
+     below are the ones BOTH bundles carry: `stRadioGroup`, the <label> that
+     carries `stRadioOption`, react-aria's `data-selected` / `data-focus-visible`
+     on that label, and the drawn circle by its emotion target class in each
+     version PLUS one structural :has() that fits both depths. ---- */
+  /* every control in the sidebar tracks its full width. Streamlit sizes the
+     radio's own element container to its CONTENT (measured: 137px inside a
+     239px block), and the group's align-items is flex-start, so each level
+     down to the label has to be told to stretch. */
   [data-testid="stSidebar"] .stButton,
   [data-testid="stSidebar"] .stButton button,
   [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
       width: 100%;
       box-sizing: border-box;
   }
-  /* Streamlit sizes the radio's own element container to its CONTENT
-     (measured: 137px inside a 239px block), so the cards stopped short of the
-     panel edge no matter what the label said. The container is the thing that
-     has to stretch. */
   [data-testid="stSidebar"] [data-testid="stElementContainer"],
   [data-testid="stSidebar"] [data-testid="stRadio"],
-  [data-testid="stSidebar"] div[role="radiogroup"] {
+  [data-testid="stSidebar"] [data-testid="stRadioGroup"],
+  [data-testid="stSidebar"] [data-testid="stRadioGroup"] > * {
       width: 100% !important;
       align-self: stretch;
       align-items: stretch;
@@ -202,17 +211,17 @@ RTL_CSS = """
   /* The label's inner wrappers are flex rows; under RTL their content packs
      to the RIGHT, so centring the <p> alone centred it inside a 97px box that
      was itself right-aligned in a 208px row. The ROWS have to centre. */
-  [data-testid="stSidebar"] div[role="radiogroup"] > label > div,
-  [data-testid="stSidebar"] div[role="radiogroup"] > label > div > div {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] > div,
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] > div > div {
       width: 100%;
       justify-content: center;
       text-align: center;
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] {
       text-align: center;
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label p { text-align: center; }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] p { text-align: center; }
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] {
       align-self: stretch;
       box-sizing: border-box;
       display: flex; align-items: center; justify-content: center;
@@ -226,25 +235,31 @@ RTL_CSS = """
       transition: border-color .15s ease, background .15s ease, transform .1s ease;
       box-shadow: 0 1px 2px rgba(60,50,20,.05);
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"]:hover {
       border-color: #1d3e7d;
       transform: translateX(-2px);
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected],
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"]:has(input:checked) {
       background: linear-gradient(135deg, #e7edf9, #dbe5f6);
       border-color: #1d3e7d;
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected] p,
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"]:has(input:checked) p {
       font-weight: 700;
   }
-  /* the visual radio mark. Two places, because the DOM has both a hidden
-     input wrapper (label > span) and the drawn 16px circle nested beside the
-     text (label > div > div > div:first-child). Hiding them keeps the label
-     clickable — it still wraps the real input. */
-  [data-testid="stSidebar"] div[role="radiogroup"] > label > span:first-child {
+  /* the visual radio mark. The hidden input sits in the label's first <span>
+     in both versions; the drawn 16px circle is `label > div > div > div` in
+     1.63 and `label > div > div` in 1.64 — so it is named by its emotion
+     target class per version, and structurally: the one div whose only child
+     is an empty div (the inner dot). Hiding them keeps the label clickable —
+     it still wraps the real input. */
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] > span:first-child {
       display: none;
   }
-  [data-testid="stSidebar"] div[role="radiogroup"] > label > div > div > div:first-child {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] [class*="eqiohyi4"],
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] [class*="e1mpz0hj4"],
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"] div:has(> div:only-child:empty) {
       display: none;
   }
 
@@ -252,7 +267,8 @@ RTL_CSS = """
      tertiary buttons and absent on the nav cards (their radio input is hidden). ---- */
   button:focus-visible, input:focus-visible, textarea:focus-visible,
   [data-testid="stSelectbox"] div[role="group"]:focus-within,
-  [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:focus-visible) {
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"][data-focus-visible],
+  [data-testid="stSidebar"] label[data-testid="stRadioOption"]:has(input:focus-visible) {
       outline: 2px solid #1d3e7d !important;
       outline-offset: 2px;
   }
@@ -373,12 +389,32 @@ RTL_CSS = """
   [class*="st-key-ib-"] [data-testid="stPopoverButton"] [data-testid="stIconMaterial"],
   [class*="st-key-ib-"] [data-testid="stPopoverButton"] svg { display: none; }
   [data-testid="stPopoverBody"] { min-width: min(24rem, 92vw); }
-  /* card titles that are buttons: the label sits at the right edge, with the
-     chips and the axis under it — a centred title read as "shifted" */
-  /* the label is a <p> with the body weight — bold on the button alone did nothing */
-  [class*="st-key-pc-"] button p, [class*="st-key-mc-"] button p { font-weight: 700; }
+  /* pipeline cards (instructor pc-, trainee mc-): the WHOLE card is the door.
+     The tertiary title button is the card's first child; it is stretched over
+     the card and made invisible — it keeps its label for screen readers and
+     stays in the tab order — while the visible title is a markdown line. */
+  [class*="st-key-card-pc-"], [class*="st-key-card-mc-"] {
+      position: relative; cursor: pointer;
+      transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  [class*="st-key-card-pc-"]:hover, [class*="st-key-card-mc-"]:hover {
+      border-color: #1d3e7d !important; box-shadow: 0 2px 6px rgba(29, 62, 125, 0.12);
+  }
+  [class*="st-key-card-pc-"] > [class*="st-key-pc-"],
+  [class*="st-key-card-mc-"] > [class*="st-key-mc-"] {
+      position: absolute; inset: 0; margin: 0; z-index: 1;
+  }
+  /* every wrapper between the container and the button must be full height,
+     or the overlay is a 22px strip at the top of a 200px card (measured) */
+  [class*="st-key-pc-"] > div, [class*="st-key-mc-"] > div,
+  [class*="st-key-pc-"] .stButton, [class*="st-key-mc-"] .stButton { height: 100% !important; }
   [class*="st-key-pc-"] button, [class*="st-key-mc-"] button {
-      justify-content: flex-end; text-align: right; padding-inline: 0;
+      width: 100% !important; height: 100% !important; min-height: 0;
+      opacity: 0; cursor: pointer;
+  }
+  [class*="st-key-card-pc-"]:has(button:focus-visible),
+  [class*="st-key-card-mc-"]:has(button:focus-visible) {
+      outline: 2px solid #1d3e7d; outline-offset: 2px;
   }
 
   /* ---- Expanders: hairline, not a boxed box ---- */
@@ -470,7 +506,7 @@ RTL_CSS = """
      chips wrap. ---- */
   /* Cards FILL their row instead of leaving a ragged stripe on the left: a
      fixed width is the flex-basis, and the leftover space is shared out. */
-  .st-key-pipeline-grid > *, .st-key-pipeline-past > * { flex: 1 1 240px !important; }
+  .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-my-grid > * { flex: 1 1 240px !important; }
   .st-key-overdue-grid > * { flex: 1 1 300px !important; }
   [data-testid="stMetric"] { flex: 1 1 150px; }
   /* A slot's task chips: a bordered container's default padding is a card's;
@@ -488,7 +524,7 @@ RTL_CSS = """
   /* Only where several cards actually fit does a cap make sense: below this a
      lone card should use the whole column, not sit in a 340px stripe. */
   @media (min-width: 1101px) {
-      .st-key-pipeline-grid > *, .st-key-pipeline-past > * { max-width: 340px; }
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-my-grid > * { max-width: 340px; }
       .st-key-overdue-grid > * { max-width: 420px; }
   }
 
@@ -513,7 +549,8 @@ RTL_CSS = """
       .chip { white-space: nowrap; }
       [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button { padding: .25rem .55rem; min-height: 2.1rem; }
       /* fixed-width cards fill the phone instead of leaving a stripe */
-      .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-overdue-grid > * {
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-overdue-grid > *,
+      .st-key-my-grid > * {
           flex: 0 0 100% !important; width: 100% !important; max-width: 100% !important; }
       .step { min-width: 48px; font-size: .62rem; }
       .step .dot { width: 24px; height: 24px; font-size: .78rem; }
@@ -722,11 +759,9 @@ def _mishmar_card(m: dict, progress: dict, overdue_count: int, owners: list[str]
     money. Fixed width on purpose (four fit a 1040px content column): the grid
     around it wraps 4 / 2 / 1 across."""
     topic = (m.get("topic") or "").strip()
+    title = f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · {topic or 'ללא נושא'}"
     with st.container(border=True, width=240, key=f"card-pc-{m['id']}"):
-        if st.button(f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])} · "
-                     f"{topic or 'ללא נושא'}",
-                     key=f"pc-{m['id']}", type="tertiary", width="stretch", wrap=True):
-            _goto(NAV_WORKFILE, m["id"])
+        _card_door(f"pc-{m['id']}", title, m["id"])
         over_chip = _chip(f"{overdue_count} באיחור", "red") if overdue_count else ""
         st.markdown(
             f"<div>{_countdown_chip(m)}"
@@ -1513,15 +1548,26 @@ def _next_mishmar_hero(m: dict, progress: dict) -> None:
             st.success("כל המשימות של השלב הנוכחי סגורות. 🎉")
 
 
+def _card_door(key: str, title: str, mid: int) -> None:
+    """The WHOLE card is the door. The title used to be the only clickable
+    thing — a tertiary button on the first line — and on a phone a thumb on
+    the chips or the axis did nothing. Now the button is laid over the entire
+    card by CSS (`st-key-card-pc-` / `-mc-` are `position: relative`, the
+    button's container `inset: 0`, opacity 0) and keeps its label for screen
+    readers and the focus ring; the visible title is this markdown line.
+    The button must be the card's FIRST child, so the overlay has the card's
+    full height to cover. Click cost unchanged: `_goto` is a screen change."""
+    if st.button(title, key=key, type="tertiary", width="stretch"):
+        _goto(NAV_WORKFILE, mid)
+    st.markdown(f"<div class='task-desc'>{_clean(title)}</div>", unsafe_allow_html=True)
+
+
 def _mini_mishmar_card(m: dict, progress: dict,
                        owners: Optional[list[str]] = None) -> None:
     """Same grammar as the instructor's pipeline row — partner names and the
     dated phase axis — so a trainee reads their own queue the same way."""
-    with st.container(border=True, key=f"card-mc-{m['id']}"):
-        # the date is the door — same as the instructor's cards
-        if st.button(f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}",
-                     key=f"mc-{m['id']}", type="tertiary", width="stretch"):
-            _goto(NAV_WORKFILE, m["id"])
+    with st.container(border=True, width=240, key=f"card-mc-{m['id']}"):
+        _card_door(f"mc-{m['id']}", f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}", m["id"])
         st.markdown(f"<div>{_countdown_chip(m)}{_owners_chip(owners or [])}</div>",
                     unsafe_allow_html=True)
         st.markdown(_phase_axis_html(progress, m, mini=True), unsafe_allow_html=True)
@@ -1571,14 +1617,19 @@ def _student_body(student_id: int) -> None:
     st.markdown("#### המשמר הבא שלי")
     _next_mishmar_hero(hero, progress[hero["id"]])
 
-    others = [m for m in mine if m["id"] != hero["id"]]
+    # by the PARSED date, not by id — the hero already learned that lesson
+    others = sorted((m for m in mine if m["id"] != hero["id"]),
+                    key=lambda m: _parse_date(m.get("gregorian_date")) or today)
     if others:
         st.markdown("#### שאר המשמרים שלי")
         st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. קובץ העבודה פתוח לכולם תמיד.")
         owners = dm.get_owners_by_mishmar()
-        cols = st.columns(min(3, max(1, len(others))))
-        for i, m in enumerate(others):
-            with cols[i % len(cols)]:
+        # A wrapping flex row, not st.columns. Dealt round-robin into three
+        # columns, a phone STACKED column 0 (#07, #21) before column 1 (#09) —
+        # February before November. In a flex row the DOM order is the order
+        # at every width; the browser wraps 3 / 2 / 1 across.
+        with st.container(horizontal=True, wrap=True, gap="small", key="my-grid"):
+            for m in others:
                 _mini_mishmar_card(m, progress[m["id"]], owners.get(m["id"], []))
 
     done = [t for t in all_tasks if t["status"] == "DONE"]
@@ -1803,20 +1854,22 @@ def show_speaker_search() -> None:
     if go and (topic.strip() or lesson_topic.strip()):
         # A minute-long call gets a running log, not a spinner: each round and
         # each name being deepened is written as it happens, then collapses.
-        with st.status("סורק את הרשת…", expanded=True) as status:
+        # `box`, not `status` — that name is the search-engine status dict above
+        with st.status("סורק את הרשת…", expanded=True) as box:
             log, stages = st.empty(), []
 
             def _stage(line: str) -> None:
                 stages.append(line)
-                status.update(label=line)
+                box.update(label=line)
                 log.markdown("\n".join(f"- {_clean(x)}" for x in stages))
 
             res = ca.scout_speakers(topic.strip(), lesson, lesson_topic.strip(),
                                     progress=_stage)
             n_found = len(res.get("candidates") or [])
-            status.update(
-                label=("הסריקה הסתיימה" if res.get("fallback")
-                       else f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"),
+            box.update(
+                label=(f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"
+                       if not res.get("fallback") else
+                       "הסריקה הסתיימה — בלי מועמדים"),
                 state="complete", expanded=False)
         st.session_state["scout_result"] = res
         st.session_state.pop("verify_name", None)
@@ -1867,11 +1920,13 @@ def show_speaker_search() -> None:
                 f"(אחרי {raw.get('rounds_used', 1)} סבבי חיפוש ו-{len(raw.get('queries') or [])} שאילתות). "
                 "השאר מוצגים עם דרגת הוודאות שלהם — אפשר לחדד את נושא השיעור ולסרוק שוב."
             )
+        # one index PER CARD: `i` stepped by two, so both cards of a row shared
+        # a key — a DuplicateElementKey on the very screen this is for
         for i in range(0, len(cands), 2):
             cols = st.columns(2)
-            for col, c in zip(cols, cands[i:i + 2]):
+            for j, (col, c) in enumerate(zip(cols, cands[i:i + 2])):
                 with col:
-                    _scout_card(c, mid, lesson, i)
+                    _scout_card(c, mid, lesson, i + j)
         # What the curation call cost, so the cache claim is checkable on the
         # live deploy rather than asserted: cache_read > 0 on the second search
         # of an evening means the prefix is being served at a tenth of the price.
@@ -1890,10 +1945,8 @@ def show_speaker_search() -> None:
         with st.expander("🌐 כל מה שהחיפוש הגולמי העלה"):
             _raw_search_results(raw)
     else:
-        if result.get("error"):
-            st.caption(f"⚠️ הסינון החכם לא רץ ({result['error'][:80]}) — מציגים את התוצאות הגולמיות.")
         st.divider()
-        _raw_search_results(raw)
+        _scout_fallback(result, raw)
 
     if st.session_state.get("verify_name"):
         st.divider()
@@ -1920,15 +1973,58 @@ def show_speaker_search() -> None:
             st.markdown(f"`{err['query']}` — [חיפוש ידני]({err['manual']['duckduckgo']})")
 
 
+# Why the scout came back without candidates, in the pair's language. The
+# internal token («empty synthesis») used to be printed inside a Hebrew sentence.
+SCOUT_FALLBACK_TEXT = {
+    "no_names": "החיפוש לא העלה אף שם שנראה כמו אדם. נסו נושא קצר יותר, או זווית אחרת.",
+    "model_rejected_all": "הסינון בדק את השמות שנמצאו ופסל את כולם — אף אחד לא נראה כמו "
+                          "מרצה חי ופעיל לנושא הזה. זו תשובה כנה, לא תקלה.",
+    "truncated": "תשובת הסינון נקטעה באמצע. סרקו שוב.",
+    "empty_reply": "הסינון לא החזיר תשובה. סרקו שוב.",
+    "error": "הסינון החכם לא רץ",
+}
+
+
+def _scout_fallback(result: dict, raw: dict) -> None:
+    """The screen when the scout has no candidates. It used to be the raw
+    mining dump — 38 «names» like «עבודה נוספת לא», presented as the product.
+    Now: the reason, what the model rejected and why (so nobody searches the
+    same names again), and only the raw names that carry a real signal of a
+    person, folded."""
+    reason = result.get("reason") or ("error" if result.get("error") else "no_names")
+    msg = SCOUT_FALLBACK_TEXT.get(reason, SCOUT_FALLBACK_TEXT["error"])
+    if reason == "error" and result.get("error"):
+        msg += f" ({_clean(result['error'])[:80]})"
+    st.warning(msg)
+    if result.get("rejected"):
+        with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})", expanded=True):
+            for r in result["rejected"]:
+                st.markdown(f"- **{_clean(r.get('name') or '')}** — {_clean(r.get('why') or '')}")
+    names = [e for e in (raw.get("web_names") or []) if e.get("confidence") in ("high", "medium")]
+    if names:
+        with st.expander(f"🌐 שמות גולמיים עם תואר ({len(names)})"):
+            _raw_search_results({**raw, "web_names": names})
+    else:
+        st.caption("לא נמצא אף שם עם תואר אקדמי או עדות שמדובר באדם.")
+    if raw.get("queries"):
+        with st.expander(f"השאילתות שרצו ({len(raw['queries'])})"):
+            for q in raw["queries"]:
+                st.markdown(f"- `{_clean(q)}`")
+
+
 def _raw_search_results(result: dict) -> None:
-    """The pre-synthesis listing — also the whole page when there is no API key."""
-    st.markdown(f"##### 🌐 שמות חדשים מהרשת ({len(result.get('web_names') or [])})")
+    """The pre-synthesis listing — the whole page when there is no API key."""
+    names = (result.get("web_names") or [])[:20]
+    more = len(result.get("web_names") or []) - len(names)
+    # the header counts what is RENDERED — it used to promise 38 and show 20
+    st.markdown(f"##### 🌐 שמות חדשים מהרשת ({len(names)})"
+                + (f" · ועוד {more} שלא מוצגים" if more > 0 else ""))
     st.caption(
         "כל שם כאן הוא ⚠️ **לאמת** — הוא חולץ מתוצאות חיפוש, לא מהמאגר. "
         "פרטי קשר לעולם לא ממולאים אוטומטית."
     )
-    for i, entry in enumerate((result.get("web_names") or [])[:20]):
-        _speaker_card(entry, result.get("topic") or "", result.get("lesson") or "1", i)
+    for i, entry in enumerate(names):
+        _speaker_card(entry, result.get("topic") or "", result.get("lesson") or "", i)
 
     if result.get("errors"):
         st.markdown("##### שאילתות שלא רצו — הריצו ידנית")
@@ -3238,7 +3334,9 @@ def show_sidebar() -> None:
                  key="nav", label_visibility="collapsed")
         st.divider()
         st.caption('🕯️ שנה ב׳ · תשפ״ז · 5787')
-        st.caption(f"גרסה: {build_stamp()}")
+        # the Streamlit version too: RTL_CSS is measured against one bundle, and
+        # a drift on Cloud (1.64 changed the radio DOM) must be visible from a phone
+        st.caption(f"גרסה: {build_stamp()} · Streamlit {st.__version__}")
         # a callback: logout runs before the page renders, so one run draws
         # the login screen — `if button: logout(); st.rerun()` drew it twice
         st.button("התנתק", width="stretch", on_click=logout)

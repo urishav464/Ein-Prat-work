@@ -24,7 +24,7 @@ FACTS = """
 ## Structural facts (measured in headless Chromium, Streamlit {v})
 
 - `st.container(border=True)`: the border, radius and padding sit on the **`stVerticalBlock`
-  itself** (emotion hash `xaibe2` in 1.62.0); it also carries `data-test-scroll-behavior`, but
+  itself** (emotion hash `xaibe2` in 1.62.0; unchanged through 1.64.0); it also carries `data-test-scroll-behavior`, but
   so do width-only, keyed and fragment wrappers (hash `1n6tfoc`) — that attribute is NOT a card
   selector. The app styles cards opt-in through their key (`.st-key-card-…`). The old `…BlockBorderWrapper` testid no longer exists.
 - **`st.dialog`, popovers, toasts and the select dropdown are portaled to `<body>`** — OUTSIDE
@@ -41,7 +41,21 @@ FACTS = """
 - `st.caption` → `stCaptionContainer` (NOT `stMarkdownContainer`); `st.feedback` →
   `stFeedback` / `stFeedbackButton`; `st.segmented_control` and `st.pills` → `stButtonGroup`
   (labels via DynamicButtonLabel, not markdown — need their own RTL rule).
-- Material icons are ligature text in `stIconMaterial` — keep them out of the font override.
+- Material icons are ligature text: a `<span translate="no">` whose text is the icon NAME. The
+  bundle sets `translate: no` in exactly two places, both icon components, and only some carry
+  `stIconMaterial` — the status widget's tick is `stExpanderIconCheck`. A font override that
+  reaches them paints the literal word (measured on 1.64: «check» clipped to «chec» beside
+  «הסריקה הסתיימה»). Carve out `[data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"],
+  span[translate="no"]`.
+- **The radio's DOM moved in 1.64** (measured against the 1.63 and 1.64 bundles): 1.63 is
+  `div[stRadioGroup][role=radiogroup] > label[stRadioOption] > span(input) + div > div(row) >
+  div(circle)`; 1.64 inserts a react-aria wrapper — `div[stRadioGroup] > div > label[stRadioOption]
+  > span(input) + div(row) > div(circle)` — so every `radiogroup > label` rule went dead, and the
+  circle sits one level higher. Anchors that hold in both: `label[data-testid="stRadioOption"]`,
+  `[data-testid="stRadioGroup"] > *`, react-aria's `data-selected` / `data-focus-visible` on the
+  label, the circle's emotion target class per version (`eqiohyi4` 1.62/63, `e1mpz0hj4` 1.64) and
+  the structural `div:has(> div:only-child:empty)`. A role selector (`div[role=…]`) is a blind spot
+  for a testid-only audit — the same class of miss as `data-baseweb`.
 - The sidebar collapse is a `transform: translateX(-width)` in the bundle — wrong under RTL;
   `RTL_CSS` neutralises it.
 - Keyed containers → class `st-key-<key>` on the `stVerticalBlock` / `stHorizontalBlock` itself.

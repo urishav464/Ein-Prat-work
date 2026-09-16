@@ -288,9 +288,29 @@ _HEB = r"[א-ת]"
 _RE_TITLED_NAME = re.compile(
     rf"(?:{_TITLES})\s+((?:{_HEB}{{2,}}[־'\"]?\s+){{0,2}}{_HEB}{{2,}})"
 )
-# A bare two-or-three-word Hebrew sequence. Much noisier — only trusted when
-# it shows up in a result TITLE, and always scored lower.
-_RE_BARE_NAME = re.compile(rf"\b({_HEB}{{2,}}\s+{_HEB}{{2,}}(?:\s+{_HEB}{{2,}})?)\b")
+# A bare name is a PAIR of adjacent Hebrew words in a result TITLE (plus a
+# third when the second is a name connector — «יוסי בן ארי»). Every adjacent
+# pair of a Hebrew run is tried: a non-overlapping regex used to align its
+# window on «שיחה עם דן» and never see «דן כהן» at all. Much noisier than a
+# titled match, hence the second-signal bar in `extract_names`.
+_RE_HEB_RUN = re.compile(rf"{_HEB}[{_HEB[1:-1]}׳'\"־-]*(?:\s+{_HEB}[{_HEB[1:-1]}׳'\"־-]*)*")
+_NAME_CONNECTORS = {"בן", "בר", "בת", "אבו", "אל", "דה"}
+
+
+def _bare_windows(title: str) -> list[str]:
+    out: list[str] = []
+    for run in _RE_HEB_RUN.findall(title or ""):
+        words = [w for w in re.split(r"\s+", run) if w]
+        i = 0
+        while i < len(words) - 1:
+            cand = f"{words[i]} {words[i + 1]}"
+            if words[i + 1] in _NAME_CONNECTORS and i + 2 < len(words):
+                cand = f"{cand} {words[i + 2]}"
+                i += 1                   # «בן ארי» is not a second person
+            if cand not in out:
+                out.append(cand)
+            i += 1
+    return out
 
 # Words that look like names to a regex but are not people.
 _NOT_A_NAME = {
@@ -315,6 +335,79 @@ _NOT_A_NAME = {
 }
 
 
+# Function words, connectives, common verbs and site chrome that a 2–3-word
+# window catches in a page title. A blocklist is the right tool: a person's name
+# never contains one of these, while a whitelist of given names would reject
+# real people. The first live search minted «עבודה נוספת לא», «באה במקום
+# העבודה» and «גולשים לתוכן ההרצאה» as people — every word of them is here.
+_STOPWORDS = {
+    "לא", "של", "את", "על", "עם", "כל", "גם", "אבל", "או", "אם", "כי", "מה", "מי",
+    "איך", "למה", "מתי", "איפה", "כאן", "שם", "עכשיו", "היום", "אתמול", "מחר",
+    "יש", "אין", "היה", "היתה", "הייתה", "היו", "יהיה", "תהיה", "להיות",
+    "באה", "בא", "באו", "בואו", "הולך", "הולכת", "במקום", "בגלל", "בשביל", "כדי",
+    "לפי", "מול", "תחת", "בתוך", "מתוך", "אצל", "לעומת", "בעקבות", "ליד", "דרך",
+    "עבודה", "עבודות", "העבודה", "נוספת", "נוסף", "נוספים", "נוספות", "הקיימת", "הקיים",
+    "חדש", "חדשה", "חדשים", "ישן", "ישנה", "גדול", "גדולה", "קטן", "קטנה",
+    "טוב", "טובה", "רע", "רעה", "מלא", "מלאה", "המלא", "המלאה", "ראשון", "ראשונה",
+    "שני", "שנייה", "אחר", "אחרת", "אחרים", "אחרות", "עצמו", "עצמה", "עצמם",
+    "גולשים", "גולש", "לתוכן", "תוכן", "התוכן", "לצפייה", "להאזנה", "להורדה", "לקריאה",
+    "דף", "הדף", "העמוד", "הבית", "האתר", "ערוץ", "הערוץ", "פרקים", "עונה",
+    "שידור", "שידורים", "חי", "בשידור", "ההרצאה", "ההרצאות", "שיעור", "השיעור",
+    "שיעורים", "הקורס", "המאמר", "הספר", "הראיון", "שיחה", "השיחה", "הפודקאסט",
+    "בעברית", "עברית", "ישראלי", "ישראלית", "שאלה", "השאלה", "שאלות", "תשובה",
+    "התשובה", "תשובות", "דבר", "הדבר", "דברים", "פעם", "פעמים", "שנים", "השנה",
+    "ימים", "שבוע", "חודש", "דקות", "שעות", "שעה", "חלק", "החלק", "סוף", "הסוף",
+    "תחילת", "התחלה", "אנחנו", "אתם", "אתן", "אני", "אתה", "הן", "שלנו", "שלכם",
+    "שלי", "זאת", "זו", "אלה", "אלו", "כך", "ככה", "לכן", "אז", "רק", "כבר",
+    "עדיין", "מאוד", "יותר", "פחות", "הכי", "כמה", "הרבה", "מעט", "קצת", "בערך",
+    "המאה", "המאות", "העולם", "החיים", "האדם", "בני", "הגדול", "הגדולה", "הקטן",
+}
+_NOT_A_NAME = _NOT_A_NAME | _STOPWORDS
+
+# A role word IMMEDIATELY before or after a bare two-word window is what turns
+# «שיחה עם דן כהן» into a person and leaves «גולשים לתוכן ההרצאה» alone. It
+# has to be the very next word: a 30-character window let «שיחה עם … מות
+# הנראטיב» promote «מות הנראטיב» to a person.
+_ROLE_WORDS = {
+    "מרצה", "מרצת", "חוקר", "חוקרת", "סופר", "סופרת", "משורר", "משוררת",
+    "היסטוריון", "היסטוריונית", "פילוסוף", "פילוסופית", "פסיכולוג", "פסיכולוגית",
+    "סוציולוג", "סוציולוגית", "אנתרופולוג", "אנתרופולוגית", "במאי", "במאית",
+    "אמן", "אמנית", "עיתונאי", "עיתונאית", "הרב", "הרבנית", "פרופסור", "דוקטור",
+    "בהנחיית", "בהנחיה", "מאת", "בהשתתפות", "הרצאתו", "הרצאתה",
+    # connectives that introduce a person in a title: «שיחה עם», «הרצאה של»
+    "עם", "של",
+}
+
+
+def _role_adjacent(title: str, name: str) -> bool:
+    words = [w.strip("\"״׳'־-:,.?!()[]{}·—–|") for w in re.split(r"\s+", title or "")]
+    words = [w for w in words if w]
+    parts = name.split()
+    for i in range(len(words) - len(parts) + 1):
+        if words[i:i + len(parts)] == parts:
+            before = words[i - 1] if i > 0 else ""
+            after = words[i + len(parts)] if i + len(parts) < len(words) else ""
+            if before in _ROLE_WORDS or after in _ROLE_WORDS:
+                return True
+    return False
+
+
+def lesson_keywords(lesson_topic: str, limit: int = 3) -> list[str]:
+    """The lesson title as SEARCH TERMS, not as a phrase.
+
+    «מות הנראטיב הגדול: איך המאה ה-20 ריסקה את הוודאות?» was pasted whole
+    into every query, in quotes — an exact phrase no page on the web contains,
+    so the engine degraded to noise and 38 junk "names" came back. Three
+    content words, unquoted, is what a person would type."""
+    out: list[str] = []
+    for w in re.split(r"\s+", lesson_topic or ""):
+        w = w.strip("\"״׳'־-:,.?!()[]{}")
+        if len(w) >= 4 and re.fullmatch(r"[א-ת\"״׳'־-]+", w) \
+                and w not in _STOPWORDS and w not in out:
+            out.append(w)
+    return out[:limit]
+
+
 def _looks_like_person(name: str) -> bool:
     parts = [p for p in re.split(r"\s+", name.strip()) if p]
     if not (2 <= len(parts) <= 3):
@@ -326,7 +419,7 @@ def _looks_like_person(name: str) -> bool:
     return True
 
 
-def _trim_to_name(captured: str) -> Optional[str]:
+def _trim_to_name(captured: str, titled: bool = True) -> Optional[str]:
     """The person inside a greedy capture, or None.
 
     Both name patterns take up to three Hebrew words, so «ד״ר רות לוי מרצה»
@@ -334,20 +427,28 @@ def _trim_to_name(captured: str) -> Optional[str]:
     losing a real person, and (worse) counting her once instead of twice, which
     is the difference between «medium» and «high» confidence. Backing off to the
     first two words recovers her without loosening what counts as a person.
+
+    The back-off is for TITLED captures only: on a bare window it gave a
+    rejected three-word phrase a second chance to become a two-word "name".
     """
     name = captured.strip()
     if _looks_like_person(name):
         return name
     parts = [p for p in re.split(r"\s+", name) if p]
-    if len(parts) > 2:
+    if titled and len(parts) > 2:
         shorter = " ".join(parts[:2])
         if _looks_like_person(shorter):
             return shorter
     return None
 
 
-def extract_names(results: list[dict]) -> list[dict]:
+def extract_names(results: list[dict], exclude_words: set[str] | frozenset[str] = frozenset()) -> list[dict]:
     """Mine person-names out of search results.
+
+    `exclude_words` are the words of the SUBJECT being searched: a topic phrase
+    recurs in result after result («מות הנראטיב» in every title about the
+    lesson), which is exactly the second-signal bar a bare window has to clear
+    — so a window that contains a subject word is never a person.
 
     This is what makes discovery real rather than decorative. Without it the
     module could only ever verify names somebody already knew, which means an
@@ -376,14 +477,23 @@ def extract_names(results: list[dict]) -> list[dict]:
                 entry["evidence"].append(r)
 
         # Bare names only from titles, where a person's name is far more
-        # likely to be the subject than in prose.
-        for m in _RE_BARE_NAME.finditer(title):
-            name = _trim_to_name(m.group(1))
-            if not name or name in found:
+        # likely to be the subject than in prose — and a bare window needs a
+        # SECOND signal before it is a person at all: the same two words in
+        # another result, or a role word beside them («שיחה עם דן כהן»).
+        for window in _bare_windows(title):
+            name = _trim_to_name(window, titled=False)
+            if not name or any(w in exclude_words for w in name.split()):
                 continue
-            found[name] = {
-                "name": name, "hits": 1, "titled": False, "evidence": [r],
-            }
+            entry = found.setdefault(
+                name, {"name": name, "hits": 0, "titled": False, "evidence": [], "role": False}
+            )
+            if entry["titled"]:
+                continue                 # counted by the titled pattern already
+            if r not in entry["evidence"]:
+                entry["evidence"].append(r)
+                entry["hits"] += 1
+            if _role_adjacent(title, name):
+                entry["role"] = True
 
     out = []
     for entry in found.values():
@@ -391,8 +501,10 @@ def extract_names(results: list[dict]) -> list[dict]:
             confidence = "high"
         elif entry["titled"]:
             confidence = "medium"
-        else:
+        elif entry["hits"] >= 2 or entry.get("role"):
             confidence = "low"
+        else:
+            continue                     # one bare window in one title is not a person
         entry["confidence"] = confidence
         entry["flags"] = _flags_for(entry["name"], entry["evidence"])
         out.append(entry)
@@ -464,9 +576,16 @@ def search_candidates(
         raise ValueError("topic is required")
 
     lesson = str(lesson or "")
+    subject_words = frozenset(w.strip("\"״׳'־-:,.?!()") for w in
+                              re.split(r"\s+", f"{topic} {lesson_topic}") if len(w) > 1)
     # The evening's topic and the SLOT's topic are different questions — «אמון»
     # for the night, «אמון במשפחה» for this lesson — and the queries want both.
+    # `subject` is the human-readable pair (shown, and handed to verification);
+    # the QUERIES quote only the topic and add the lesson as up to three plain
+    # keywords, in the first round only — the escalation rounds widen the net,
+    # and a sentence in quotes was the reason the first live search found nothing.
     subject = f"{topic} {lesson_topic}".strip() if lesson_topic.strip() else topic
+    keywords = lesson_keywords(lesson_topic)
 
     if lesson == "4":
         # The generator prompt is explicit: lesson 4 is חבורות / ניגון /
@@ -504,11 +623,13 @@ def search_candidates(
     errors: list[dict] = []
     web_names: list[dict] = []
 
-    def _run(templates: list[str]) -> None:
+    def _run(templates: list[str], with_keywords: bool = False) -> None:
         for template in templates:
             if len(queries) >= MAX_DISCOVERY_QUERIES:
                 return
-            q = template.format(topic=subject)
+            q = template.format(topic=topic)
+            if with_keywords and keywords:
+                q = f"{q} {' '.join(keywords)}"
             if q in queries:
                 continue
             queries.append(q)
@@ -535,9 +656,9 @@ def search_candidates(
     for templates in rounds:
         if progress:
             progress(f"{round_labels[rounds_used]} · סבב {rounds_used + 1}")
-        _run(templates)
+        _run(templates, with_keywords=(rounds_used == 0))
         rounds_used += 1
-        web_names = extract_names(raw)
+        web_names = extract_names(raw, exclude_words=subject_words)
         if _strong() >= MIN_STRONG_CANDIDATES or len(queries) >= MAX_DISCOVERY_QUERIES:
             break
 
@@ -553,6 +674,7 @@ def search_candidates(
         "topic": topic,
         "lesson_topic": lesson_topic,
         "subject": subject,
+        "keywords": keywords,
         "rounds_used": rounds_used,
         "strong_found": sum(1 for e in web_names if e.get("confidence") == "high"),
         "lesson": lesson,

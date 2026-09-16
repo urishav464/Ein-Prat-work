@@ -223,7 +223,7 @@ def _now_iso() -> str:
 # check a database one version behind looks perfectly healthy and then throws a
 # redacted APIError deep inside a screen — which is exactly how a missing
 # `logistics_items` blanked the whole workfile instead of saying «run the SQL».
-REQUIRED_SCHEMA_VERSION = 7
+REQUIRED_SCHEMA_VERSION = 8
 
 
 def _missing_relation(exc: Exception) -> bool:

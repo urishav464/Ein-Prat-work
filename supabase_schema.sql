@@ -486,6 +486,28 @@ UPDATE tasks SET category = 'יום המשמר'
 -- משימות שאין סיבה שיתקיימו: «תודות».
 DELETE FROM tasks WHERE task_description LIKE '%תודות%';
 
+-- גרסה 8 — המשימות הכלליות מהזריעה. «סגירת מרצים» ו«סגירת חברותות/חבורות»
+-- נזרעו לכל משמר מ-students_tasks.md, ומאז שהמבנה יוצר לכל מקטע את המשימות
+-- שלו («סגירת מרצה — שיעור 1», «מי מעביר את התוכן — חבורות») הן כפילות
+-- שאף אחד לא סוגר — ולכן שלב «מרצים ותוכן» לא נסגר לעולם. פעם אחת: השורות
+-- הפתוחות, הלא-מקושרות, שלא נוצרו על ידי המערכת נמחקות; מה שסומן «בוצע» נשאר
+-- כהיסטוריה. «סידור חדרים» מקבל את הניסוח של התבנית («סידור הבית מדרש»), כי
+-- זו המשימה שהלוגיקה של חללי החבורות מניחה שקיימת. מוגן במפתח, כדי שהרצה
+-- חוזרת לא תמחק משימה שאדם כתב מאז באותן מילים.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_meta WHERE key = 'tasks_generic_retired') THEN
+    DELETE FROM tasks
+     WHERE generated = false AND lesson_id IS NULL AND status <> 'DONE'
+       AND task_description IN ('סגירת מרצים', 'סגירת חברותות/חבורות');
+    UPDATE tasks SET task_description = 'סידור הבית מדרש'
+     WHERE task_description = 'סידור חדרים';
+    INSERT INTO app_meta (key, value)
+    VALUES ('tasks_generic_retired', now()::text)
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
 -- ההרשאות המפורשות חייבות לכסות גם את הטבלאות החדשות.
 GRANT ALL ON lesson_speakers TO service_role;
 REVOKE ALL ON lesson_speakers FROM anon, authenticated;
@@ -496,5 +518,5 @@ REVOKE ALL ON speaker_searches FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '7')
+VALUES ('schema_version', '8')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;

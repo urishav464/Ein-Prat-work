@@ -819,6 +819,40 @@ def _history_line(name: str) -> Optional[str]:
     return None
 
 
+_NAME_MARKS = str.maketrans("", "", "׳״'\"")
+
+
+def _norm_name(name: str) -> str:
+    return " ".join((name or "").translate(_NAME_MARKS).split())
+
+
+def _usage_of(resp) -> dict:
+    usage = getattr(resp, "usage", None)
+    return {
+        "input": getattr(usage, "input_tokens", None),
+        "output": getattr(usage, "output_tokens", None),
+        "cache_read": getattr(usage, "cache_read_input_tokens", None),
+        "cache_write": getattr(usage, "cache_creation_input_tokens", None),
+    } if usage else {}
+
+
+def _scout_json(text: str) -> dict:
+    """The JSON object in a reply that may carry prose around it — or be a
+    bare array of candidates, which the old `{…}` slice turned into the first
+    candidate alone and, from there, into «empty synthesis»."""
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        raise ValueError("no JSON in the reply")
+    start = min(starts)
+    end = max(text.rfind("}"), text.rfind("]"))
+    data = json.loads(text[start:end + 1])
+    if isinstance(data, list):
+        return {"candidates": data}
+    if not isinstance(data, dict):
+        raise ValueError("the reply is not a JSON object")
+    return data
+
+
 def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
                    progress=None) -> dict:
     """One web search → 5 researched candidates, or a fallback rendered raw.
@@ -882,7 +916,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
     } for e in shortlist]
 
     if not web_part:
-        return {"fallback": True, "raw": raw}
+        # nothing that looks like a person — no model call, no charge
+        return {"fallback": True, "raw": raw, "reason": "no_names"}
 
     payload = json.dumps(
         {"topic": topic, "lesson_topic": lesson_topic,
@@ -902,37 +937,45 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
             progress("מסנן ומדרג — ארבעה שמות שנבדקו")
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=2000,
+            max_tokens=4000,
             system=[{"type": "text", "text": SCOUT_SYSTEM,
                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
             output_config={"effort": "medium"},
             messages=[{"role": "user", "content": payload}],
         )
-        usage = getattr(resp, "usage", None)
-        usage_out = {
-            "input": getattr(usage, "input_tokens", None),
-            "output": getattr(usage, "output_tokens", None),
-            "cache_read": getattr(usage, "cache_read_input_tokens", None),
-            "cache_write": getattr(usage, "cache_creation_input_tokens", None),
-        } if usage else {}
-        text = "".join(b.text for b in resp.content
+        usage_out = _usage_of(resp)
+        # Each failure names itself: the screen used to print the internal
+        # token inside a Hebrew sentence, and a truncated reply, an empty one
+        # and a malformed one all looked the same.
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            return {"fallback": True, "raw": raw, "reason": "truncated",
+                    "error": "max_tokens", "usage": _usage_of(resp)}
+        text = "".join(getattr(b, "text", "") for b in (resp.content or [])
                        if getattr(b, "type", None) == "text")
-        start, end = text.find("{"), text.rfind("}")
-        data = json.loads(text[start:end + 1])
+        if not text.strip():
+            return {"fallback": True, "raw": raw, "reason": "empty_reply",
+                    "error": "empty reply", "usage": _usage_of(resp)}
+        data = _scout_json(text)
         candidates = data.get("candidates") or []
-        rejected = data.get("rejected") or []
-    except (ChatUnavailable, Exception) as exc:
-        return {"fallback": True, "raw": raw, "error": f"{type(exc).__name__}: {exc}"}
+        rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
+    except Exception as exc:                     # noqa: BLE001 — named, not hidden
+        return {"fallback": True, "raw": raw, "reason": "error",
+                "error": f"{type(exc).__name__}: {exc}"}
 
     # The no-invention rule, enforced and not just requested: a candidate
-    # whose name matches nothing we sent is dropped.
-    known_web = {w["name"] for w in web_part if w.get("name")}
+    # whose name matches nothing we sent is dropped. Matched WITHOUT the
+    # geresh/quote marks — the model normalises «ד״ר» to «ד"ר» and a real
+    # candidate used to fall out of the list for a punctuation mark.
+    known_web = {_norm_name(w["name"]): w["name"] for w in web_part if w.get("name")}
     known_links = {ev["href"] for w in web_part for ev in w["evidence"] if ev.get("href")}
     vetted = []
     for c in candidates[:MAX_SCOUT_CANDIDATES]:
-        name = (c.get("name") or "").strip()
-        if not name or name not in known_web:
+        if not isinstance(c, dict):
+            continue
+        name = known_web.get(_norm_name(c.get("name") or ""))
+        if not name:
             continue                       # a name we never sent is invented
+        c["name"] = name
         c["source"] = "web"
         if "⚠️ לאמת" not in (c.get("flags") or []):
             c.setdefault("flags", []).append("⚠️ לאמת")
@@ -958,7 +1001,11 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
         vetted.append(c)
 
     if not vetted:
-        return {"fallback": True, "raw": raw, "error": "empty synthesis"}
+        # the model ran and rejected everything — an honest answer, and the
+        # reasons go to the screen so nobody searches the same names again
+        return {"fallback": True, "raw": raw, "reason": "model_rejected_all",
+                "error": "empty synthesis", "rejected": rejected,
+                "usage": _usage_of(resp)}
 
     # Carry the mined confidence and the travel band onto each card, and report
     # honestly how many are genuinely strong — the screen must never present

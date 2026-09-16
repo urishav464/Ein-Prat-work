@@ -98,6 +98,13 @@ panel instead of on a slot.
   file can never flag a task written since. The seed's template rows (e.g. «סידור הבית מדרש») are
   NOT generated: they belong to the evening, not to a slot. A database one version behind cannot
   read the column — and cannot reach this code either, because the schema gate stops the app first.
+- **The seed's generic speaker rows are gone (schema 8).** `students_tasks.md` carried, under every
+  Mishmar #02–#21, «סגירת מרצים» and «סגירת חברותות/חבורות» — duplicates of the per-slot tasks the
+  structure generates, `generated=false`, never satisfied by anything, so phase 2 «מרצים ותוכן» could
+  never complete on a seeded evening. Removed from the Markdown; in the live DB a one-time,
+  `app_meta.tasks_generic_retired`-guarded migration in the schema tail deletes the OPEN, unlinked,
+  non-generated rows in those two exact wordings (DONE rows stay) and renames «סידור חדרים» to the
+  template's «סידור הבית מדרש» — the row the חבורות room logic assumes. `REQUIRED_SCHEMA_VERSION = 8`.
 - **Deleting a slot deletes only what the slot generated.** `delete_lesson_with_tasks` removes the
   slot's open GENERATED tasks; a task a human tied to that slot is left to the FK's
   `ON DELETE SET NULL` and goes back to being an ordinary task of the evening. It used to delete

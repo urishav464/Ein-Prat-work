@@ -31,6 +31,23 @@ paths:
 - Anything inside a raw-HTML block needs `html.escape` plus markdown stripping (`_clean()`), or backticks and `**` render literally.
 - Never start a Hebrew title with a leading digit (bidi misplaces it — "כל 21 המשמרים", not "21 המשמרים").
 
+## The deployed bundle is pinned, because the CSS is measured against one
+
+- **`requirements.txt` pins `streamlit>=1.63,<1.65`.** It said `>=1.40`, so Streamlit Cloud installed
+  1.64.0 the day it shipped (2026-09-15, on that day's pushes) — and 1.64 moved the radio's DOM, which
+  silently unstyled the sidebar nav on every device while the local 1.63 harness kept passing.
+  Widen the pin only after `pip install` locally, `scripts/streamlit_dom_context.py`, and a re-measure.
+  The sidebar caption shows `st.__version__` beside the build stamp, so a drift is visible from a phone.
+- **The nav cards hang on anchors both bundles carry** (`.claude/rules/streamlit-dom.md` has the two
+  trees): `label[data-testid="stRadioOption"]`, `[data-testid="stRadioGroup"] > *`, react-aria's
+  `data-selected` / `data-focus-visible` on the label, and the circle by its emotion target class per
+  version plus `div:has(> div:only-child:empty)`. Never `div[role="radiogroup"] > label` again — a
+  role selector is invisible to a testid-only audit.
+- **Material icons are `<span translate="no">` with the icon NAME as text.** The status widget's tick
+  is `stExpanderIconCheck`, not `stIconMaterial`; the Hebrew font override reached it and painted
+  «chec». The carve-out is `[data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"],
+  span[translate="no"]`.
+
 ## What Streamlit portals to `<body>` never inherits the app's RTL
 
 `st.dialog`, popovers, toasts and the selectbox's dropdown are rendered **outside
@@ -57,6 +74,19 @@ never by eye.
 - Card primitive = `st.container(border=True, key="card-…")`. **In Streamlit 1.62 the border lives on the `stVerticalBlock` itself** — `stVerticalBlockBorderWrapper` is gone from the bundle, and the white/rounded/hairline card rule was silently dead for a whole release because it still named it. **`data-test-scroll-behavior` is NOT a card discriminator either**: it sits on width-only, keyed and fragment wrappers too, and a rule anchored on it painted the whole workfile and the metric column white. The card rule is therefore **opt-in by key**: `[class*="st-key-card-"]` (white, hairline, 12px radius, `padding: var(--sp-4)`, inner `gap: var(--sp-2)`); every `st.container(border=True)` that is a card carries a `card-` key, and a bordered container without one is deliberately unstyled. **Audit every `data-testid` in `RTL_CSS` against `streamlit/static/static/js/*.js` after any Streamlit upgrade** (the `design-review` agent does exactly this; zero hits = dead rule). Tags = `.chip .chip-{red,yellow,green,gray,gold,blue}`. Phases = `.stepper/.step/.step-bar`. Chat bubbles style `[data-testid="stChatMessage"]`; avatars hidden via `[data-testid^="stChatMessageAvatar"]`.
 - The sidebar nav is `st.radio` restyled: the label IS the card; the radio mark is drawn twice in the DOM (hidden input wrapper `label > span:first-child` AND a 16px circle at `label > div > div > div:first-child`) — both must stay hidden.
 - No data dumps: prefer cards/grids/steppers over giant tables; long grids fold into expanders (open only when nothing urgent).
+
+## Pipeline cards are doors, at every width
+
+- **The whole card is clickable** (`_card_door`, used by the instructor's `pc-` card and the trainee's
+  `mc-` card): the tertiary title button is the card's FIRST child, CSS lays its container over the
+  card (`position: relative` on `st-key-card-pc-/-mc-`, `inset: 0; z-index: 1` on the button's
+  `st-key-pc-/-mc-` container, every wrapper down to the button `height: 100%`, the button
+  `opacity: 0`) and the visible title is a markdown line. The label stays for screen readers and the
+  tab order; the card shows a hover border and a `:has(button:focus-visible)` ring. Measured: the
+  overlay is the card's full box at 1500px and 390px, and a click on the axis lands on the Mishmar.
+- **The trainee's strip is a wrapping flex row** (`my-grid`), sorted by `_parse_date`. It was
+  `st.columns(3)` dealt round-robin — on a phone the columns STACK, so column 0 (#07, #21) rendered
+  before column 1 (#09): February before November. A flex row keeps DOM order at any width.
 
 ## One naming for the evening's slots (`_slot_names`)
 
