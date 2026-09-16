@@ -19,7 +19,7 @@ OUT = DATA / "students.csv"
 HEADERS = ["שם", "תוכנית", "קבוצה קבועה", "הערה"]
 PLACEHOLDER_COUNT = 40
 
-CANONICAL = {"מישל דויד": "מישל דוד"}
+CANONICAL = {"מישל דויד": "מישל דוד", "מעין דינר": "מעיין רחל דינר"}
 
 NAME_HINTS = ("שם", "name", "חניך")
 SKIP_HINTS = ("חותמת", "timestamp", "מייל", "email", "טלפון", "phone")

@@ -23,7 +23,8 @@ import roster
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "attendance"
 LINE_NOISE = re.compile(r"^\s*(?:[-•*]|\d+[.)]?)\s*")
-FIELDS = ["שם", "תוכנית", "זמין לתורנות", "שיבוץ ידני", "הערה"]
+FIELDS = ["שם", "תוכנית", "חבורה", "זמין לתורנות", "לא זמין בשלב",
+          "צוות שבת", "שיבוץ ידני", "הערה"]
 
 
 def path_for(date):
@@ -51,6 +52,25 @@ def load_pins(date):
         return {}
     return {r["שם"]: r["שיבוץ ידני"].strip() for r in rows
             if (r.get("שיבוץ ידני") or "").strip()}
+
+
+def load_staff(date):
+    """אנשי צוות השבת — מי שמסומן «צוות שבת» = כן."""
+    rows = _rows(date) or []
+    return [r["שם"] for r in rows if (r.get("צוות שבת") or "").strip() == "כן"]
+
+
+def load_havurot(date):
+    """{שם: חבורה} לחניכים שיש להם חבורה."""
+    rows = _rows(date) or []
+    return {r["שם"]: r["חבורה"].strip() for r in rows if (r.get("חבורה") or "").strip()}
+
+
+def load_blocked(date):
+    """שלבים שחניך אינו זמין בהם: {שם: {שלב, ...}} — שמירות, הגעה מאוחרת וכד'."""
+    rows = _rows(date) or []
+    return {r["שם"]: {x.strip() for x in r["לא זמין בשלב"].split(";") if x.strip()}
+            for r in rows if (r.get("לא זמין בשלב") or "").strip()}
 
 
 def load_available(date):
@@ -115,10 +135,10 @@ def main():
         writer.writeheader()
         for name in matched:
             old = existing.get(name, {})
-            writer.writerow({"שם": name, "תוכנית": program.get(name, ""),
-                             "זמין לתורנות": old.get("זמין לתורנות", "כן"),
-                             "שיבוץ ידני": old.get("שיבוץ ידני", ""),
-                             "הערה": old.get("הערה", "")})
+            row = {"שם": name, "תוכנית": program.get(name, "")}
+            for field in FIELDS[2:]:
+                row[field] = old.get(field, "כן" if field == "זמין לתורנות" else "")
+            writer.writerow(row)
 
     absent = [n for n in all_names if n not in matched]
     counts = {}

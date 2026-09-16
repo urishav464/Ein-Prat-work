@@ -178,6 +178,7 @@ td.event .place{display:block;font-size:9pt;color:#5A6572}
 td.event.loose{background:#FCE3C6}
 td.lines{text-align:center}
 .who{font-weight:600;line-height:1.6}
+.who .resp{font-weight:400;color:#5A6572}
 .line{padding:.4mm 0}
 .line b{font-family:'Rubik',sans-serif;font-weight:600}
 .line .names{color:#3A4552}
@@ -273,7 +274,7 @@ def flyer_html(group, tasks, data, with_recipes=False):
 </div></body></html>""".format(
         fonts=font_face_css(), base=BASE_CSS, css=FLYER_CSS, title=esc(group["name"]),
         stage=esc(group["stage"]), when=esc(when_line(data)),
-        lead='<div class="lead">מוביל/ה: <b>{}</b></div>'.format(esc(group["leader"])) if group["leader"] else "",
+        lead='<div class="lead">אחראי/ת: <b>{}</b></div>'.format(esc(group["leader"])) if group["leader"] else "",
         n=len(group["members"]), members=esc(", ".join(group["members"])) or "—", table=table, recipes=recipes)
 
 
@@ -318,7 +319,10 @@ def shadow_lines(items, groups, introduced):
         members = group["members"] if group else []
         if members and name not in introduced:
             introduced.add(name)
-            out.append('<div class="who">{}</div>'.format(esc(", ".join(members))))
+            resp = (group or {}).get("leader")
+            out.append('<div class="who">{names}{resp}</div>'.format(
+                names=esc(", ".join(members)),
+                resp=' <span class="resp">· אחראי/ת: {}</span>'.format(esc(resp)) if resp else ""))
         out += [task_line(t, members) for t in items if t["group"] == name]
     return "".join(out)
 

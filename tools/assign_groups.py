@@ -51,6 +51,8 @@ def read_plan():
             plan.append({
                 "name": row["קבוצה"].strip(),
                 "stage": (row.get("שלב") or "").strip() or bw.STAGES[-1],
+                "points": int(row.get("ניקוד") or 1),
+                "needs_staff": (row.get("אחראי מצוות") or "").strip() == "כן",
                 "leader": (row.get("מוביל/ה") or "").strip(),
                 "fixed": [x.strip() for x in (row.get("חברים קבועים") or "").split(";") if x.strip()],
                 "size": 0,
@@ -93,13 +95,11 @@ def read_tasks(path):
         if isinstance(hour, datetime):
             hour = hour.time()
         people = ws.cell(row=r, column=bw.T_PEOPLE).value
-        points = ws.cell(row=r, column=bw.T_POINTS).value
         tasks.append({
             "row": r, "stage": _clean(ws.cell(row=r, column=bw.T_STAGE).value) or "",
             "day": _clean(ws.cell(row=r, column=bw.T_DAY).value) or "",
             "hour": hour or None, "group": _clean(ws.cell(row=r, column=bw.T_GROUP).value) or "",
             "task": task, "people": int(people) if people not in (None, "") else None,
-            "points": int(points) if points not in (None, "") else 1,
         })
     return tasks
 
@@ -220,8 +220,17 @@ def fill_tasks(members, tasks, group):
     return names
 
 
-def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
+def pick_staff(slots, staff, used, score, busy, pool):
+    """איש צוות השבת שיהיה אחראי על הקבוצה — הפנוי עם הניקוד הנמוך ביותר."""
+    free = [n for n in staff
+            if n not in used and n in pool and not (busy.get(n, set()) & slots)]
+    return min(free, key=lambda n: (score.get(n, 0), n)) if free else None
+
+
+def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
+               staff=(), blocked=None):
     """מריץ את השיבוץ שלב אחרי שלב ומחזיר (קבוצות, שמות למשימה, הקטנות)."""
+    blocked = blocked or {}
     groups, task_names, shrunk = {}, {}, []
     week_points, stages_of, busy = Counter(), Counter(), {}
     stages = [s for s in bw.STAGES if any(g["stage"] == s for g in plan)]
@@ -237,7 +246,26 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
             if stage_plan else set()
         pool = [n for n in available
                 if (stages_of[n] < max_stages or n in stage_pins)
+                and stage not in blocked.get(n, ())
                 and not (busy.get(n, set()) & stage_slots)]
+
+        # אחראי מצוות השבת לכל קבוצה שדורשת אחד — נספר בתוך גודל הקבוצה.
+        # הצוות מתאפס בכל שלב: אותו אדם יכול להיות אחראי בשישי וגם בשבת, אבל
+        # לא על שתי קבוצות באותו שלב.
+        score_now = {n: past.get(n, 0) + week_points[n] for n in staff}
+        used_here = set()
+        for g in stage_plan:
+            if not g["needs_staff"]:
+                continue
+            chosen = pick_staff(timed_slots(tasks, g["name"]), staff, used_here,
+                                score_now, busy, pool)
+            if chosen:
+                g["leader"] = chosen
+                used_here.add(chosen)
+            else:
+                print("⚠ אין איש צוות פנוי ל«{}»".format(g["name"]))
+        # אנשי הצוות משמשים רק כאחראים — לא ממלאים מקומות רגילים בקבוצות אחרות
+        pool = [n for n in pool if n not in staff or n in used_here]
 
         fixed = Counter(g for gs in stage_pins.values() for g in gs)
         for g in stage_plan:
@@ -253,14 +281,11 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages):
         result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins)
         groups.update(result)
         for g in stage_plan:
-            names = fill_tasks(result[g["name"]], tasks, g["name"])
-            task_names.update(names)
-            for t in tasks:
-                for n in names.get(t["row"], []):
-                    week_points[n] += t["points"]
+            task_names.update(fill_tasks(result[g["name"]], tasks, g["name"]))
             occupied = timed_slots(tasks, g["name"])
             for n in result[g["name"]]:
                 stages_of[n] += 1
+                week_points[n] += g["points"]          # הניקוד הוא של התורנות, פעם אחת
                 busy.setdefault(n, set()).update(occupied)
     return groups, task_names, shrunk
 
@@ -272,7 +297,8 @@ def set_cell(ws, row, col, value):
         cell.value = value
 
 
-def write_workbook(path, plan, groups, task_names, present, available, history):
+def write_workbook(path, plan, groups, task_names, present, available, history,
+                   havurot=None, week_points=None):
     wb = load_workbook(path)
 
     ws = wb[bw.SH_TASKS]
@@ -284,10 +310,11 @@ def write_workbook(path, plan, groups, task_names, present, available, history):
         r = bw.GROUP_FIRST_ROW + i
         set_cell(ws, r, bw.G_NAME, g["name"])
         set_cell(ws, r, bw.G_STAGE, g["stage"] or None)
+        set_cell(ws, r, bw.G_POINTS, g["points"])
         set_cell(ws, r, bw.G_LEADER, g["leader"] or None)
         set_cell(ws, r, bw.G_MEMBERS, ", ".join(groups[g["name"]]) or None)
     for r in range(bw.GROUP_FIRST_ROW + len(plan), ws.max_row + 1):
-        for col in (bw.G_NAME, bw.G_STAGE, bw.G_LEADER, bw.G_MEMBERS):
+        for col in (bw.G_NAME, bw.G_STAGE, bw.G_POINTS, bw.G_LEADER, bw.G_MEMBERS):
             set_cell(ws, r, col, None)
 
     ws = wb[bw.SH_STUDENTS]
@@ -299,6 +326,7 @@ def write_workbook(path, plan, groups, task_names, present, available, history):
         name = ws.cell(row=r, column=bw.S_NAME).value
         if not name:
             continue
+        set_cell(ws, r, bw.S_HAVURA, (havurot or {}).get(name))
         if name not in present:
             set_cell(ws, r, bw.S_AVAILABLE, None)
             set_cell(ws, r, bw.S_NOTE, "לא נוכח/ת")
@@ -306,6 +334,7 @@ def write_workbook(path, plan, groups, task_names, present, available, history):
             set_cell(ws, r, bw.S_AVAILABLE, "כן" if name in available else "לא")
             set_cell(ws, r, bw.S_NOTE, None)
         set_cell(ws, r, bw.S_GROUPS, "; ".join(lookup[name]) if name in lookup else None)
+        set_cell(ws, r, bw.S_POINTS, (week_points or {}).get(name))
 
     ws = wb[bw.SH_HISTORY]
     for r in range(bw.HISTORY_FIRST_ROW, ws.max_row + 1):
@@ -338,6 +367,9 @@ def main():
     if available is None:
         raise SystemExit("אין רשימת נוכחות ל-{} — הריצו קודם tools/attendance.py".format(args.date))
     pins = {n: [g.strip() for g in v.split(";") if g.strip()] for n, v in attendance_mod.load_pins(date).items()}
+    staff = attendance_mod.load_staff(date)
+    blocked = attendance_mod.load_blocked(date)
+    havurot = attendance_mod.load_havurot(date)
 
     plan = read_plan()
     tasks = read_tasks(path)
@@ -353,7 +385,8 @@ def main():
 
     groups, task_names, shrunk = assign_all(
         plan, tasks, available, programs, past, pins,
-        args.seed if args.seed is not None else date.toordinal(), args.max_stages)
+        args.seed if args.seed is not None else date.toordinal(), args.max_stages,
+        staff=staff, blocked=blocked)
 
     on_duty = {m for v in groups.values() for m in v}
     print("שבת {} · {} נוכחים · {} זמינים · {} תורנים · {} קבוצות".format(
@@ -385,12 +418,13 @@ def main():
     if args.dry_run:
         print("\n(dry-run — לא נכתב דבר)")
         return
-    by_row = {t["row"]: t for t in tasks}
-    records = [{"תאריך": date.isoformat(), "שם": n, "שלב": by_row[r]["stage"], "קבוצה": by_row[r]["group"],
-                "משימה": by_row[r]["task"], "ניקוד": by_row[r]["points"]}
-               for r, names in task_names.items() for n in names]
+    records = [{"תאריך": date.isoformat(), "שם": n, "שלב": g["stage"],
+                "קבוצה": g["name"], "ניקוד": g["points"]}
+               for g in plan for n in groups[g["name"]]]
     history = record_duty(date.isoformat(), records)
-    write_workbook(path, plan, groups, task_names, set(present), set(available), history)
+    week_points = {n: sum(g["points"] for g in plan if n in groups[g["name"]]) for n in on_duty}
+    write_workbook(path, plan, groups, task_names, set(present), set(available),
+                   history, havurot, week_points)
     print("\nנכתב אל {}".format(path.relative_to(ROOT) if path.resolve().is_relative_to(ROOT) else path))
 
 
