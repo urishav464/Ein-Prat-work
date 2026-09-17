@@ -199,7 +199,7 @@ h1{font-size:26pt}
 .members{margin:5mm auto 0;text-align:center;font-size:12pt;line-height:1.8;max-width:170mm}
 .members b{display:block;font-family:'Rubik',sans-serif;font-size:10pt;color:#5A6572}
 th.hour,td.hour{width:20mm;text-align:center;font-family:'Rubik',sans-serif;font-weight:700;font-size:12pt}
-td.day{font-size:9pt;color:#5A6572;display:block}
+td.hour .day{display:block;font-family:'Heebo',sans-serif;font-weight:400;font-size:9pt;color:#5A6572;margin-bottom:.5mm}
 td.task{font-size:12pt}
 td.task .note{display:block;margin-top:1mm;font-size:9.5pt;color:#5A6572}
 th.names,td.names{width:60mm;font-size:11pt}
