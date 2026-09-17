@@ -80,8 +80,12 @@ script writes, grey = computed.
   candidates are ranked by historical + already-earned-this-week points, lowest first.
 - **Per-Shabbat overrides** all live in `data/attendance/<date>.csv`: `זמין לתורנות`,
   `לא זמין בשלב` (stage exclusions, `;`-separated), `שיבוץ ידני` (pins, `;`-separated),
-  `צוות שבת` (staff who become the group's אחראי/ת, counted inside the group size and kept
-  out of ordinary slots). Elul students are spread across groups by ratio.
+  `אחראי על` (pin + this group's אחראי/ת, student or staff — suppresses the automatic
+  staff pick for that group), `צוות שבת` (staff who become the group's אחראי/ת, counted
+  inside the group size and kept out of ordinary slots unless pinned). A pin or leader
+  role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
+  points are added to the person's ranking score in earlier stages, so stage order can't
+  silently defeat a pin. Elul students are spread across groups by ratio.
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
 
 ### Rendering
@@ -89,14 +93,16 @@ script writes, grey = computed.
 `export_pdf.py` builds HTML and drives headless Chromium (`CHROME_CANDIDATES`, resolved
 under `/opt/pw-browsers/`) with `--print-to-pdf` and `--screenshot`. Fonts are embedded as
 base64 data URIs from `assets/fonts/` so rendering never touches the network.
-`--virtual-time-budget` is required or Chromium captures before layout settles. The shadow
-schedule first runs `measure_shadow` (a `--dump-dom` pass where an inline script sets
-`document.title` to `FIT:<ratio>|AVAIL:<px>|CHROME:<px>|ROWS:<h,h,…>`). If the ratio is at
-least `MIN_FIT` the whole schedule goes on one page, baking the ratio into a CSS
-`transform: scale()`. Otherwise `split_pages` chunks the rows by their measured heights
-into balanced `.page` divs — never cutting a row — the PDF carries them all, and each page
-is re-rendered on its own into `לוז צל <n>.png` so a single page can be sent as an image.
-Continuation pages repeat the day heading and are labelled «עמוד n מתוך m».
+`--virtual-time-budget` is required or Chromium captures before layout settles. Pages are
+fitted by measuring first: `measure_page` is a `--dump-dom` pass where an inline script sets
+`document.title` to `FIT:<ratio>|AVAIL:<px>|CHROME:<px>|ROWS:<h,h,…>`; the ratio is then
+baked into a CSS `transform: scale()` on `.inner`. A flyer shrinks down to `FLYER_MIN_FIT`
+to stay on one page. The shadow schedule goes on one page if the ratio is at least
+`MIN_FIT`; otherwise `split_pages` chunks the rows by their measured heights into balanced
+`.page` divs — never cutting a row, shrinking as far as `PAGE_SAVE_FIT` when that saves a
+whole page — the PDF carries them all, and each page is re-rendered on its own into
+`לוז צל <n>.png` so a single page can be sent as an image. Continuation pages repeat the
+day heading and are labelled «עמוד n מתוך m».
 
 ### Hebrew data conventions
 

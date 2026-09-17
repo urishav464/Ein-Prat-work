@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "attendance"
 LINE_NOISE = re.compile(r"^\s*(?:[-•*]|\d+[.)]?)\s*")
 FIELDS = ["שם", "תוכנית", "חבורה", "זמין לתורנות", "לא זמין בשלב",
-          "צוות שבת", "שיבוץ ידני", "הערה"]
+          "צוות שבת", "שיבוץ ידני", "אחראי על", "הערה"]
 
 
 def path_for(date):
@@ -52,6 +52,18 @@ def load_pins(date):
         return {}
     return {r["שם"]: r["שיבוץ ידני"].strip() for r in rows
             if (r.get("שיבוץ ידני") or "").strip()}
+
+
+def load_leaders(date):
+    """אחראי/ת לקבוצה בשבת הזו: {קבוצה: שם}. מי שרשום ב«אחראי על» מוצמד לקבוצה
+    ונרשם כאחראי/ת שלה (כמה קבוצות — מופרדות ב-;)."""
+    rows = _rows(date) or []
+    leaders = {}
+    for r in rows:
+        for group in (r.get("אחראי על") or "").split(";"):
+            if group.strip():
+                leaders[group.strip()] = r["שם"]
+    return leaders
 
 
 def load_staff(date):

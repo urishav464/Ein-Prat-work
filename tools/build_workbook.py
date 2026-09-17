@@ -60,7 +60,7 @@ H_DATE, H_NAME, H_STAGE, H_GROUP, H_POINTS = range(1, 6)
 L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST, L_TASKS = range(1, 8)
 
 STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת"]
-DAYS = "שישי,שבת,מוצאי שבת"
+DAYS = "חמישי,שישי,שבת,מוצאי שבת"
 RECIPE_KINDS = "מאפים,עוגות,סלטים,בישול,ארוחת צהריים שישי"
 MEALS = "ארוחת ערב,קידוש,ארוחת צהריים,סעודה שלישית"
 
@@ -69,7 +69,7 @@ INK, MUTED, LINE, BAND = "1F2430", "6B7280", "C9CFD8", "EDF1F6"
 ACCENT, INPUT_BG, CALC_BG, SCRIPT_BG = "2E5C8A", "FFF9E3", "EEF3F8", "E3F4F1"
 TAB_INPUT, TAB_SCRIPT, TAB_REF = "E8A33D", "3BA48C", "9AA5B1"
 LEGEND = "צהוב = ממלאים · טורקיז = הסקריפט כותב · אפור = מחושב"
-DAY_FILLS = {"שישי": "E8F0F8", "שבת": "F3EDE3", "מוצאי שבת": "EDEAF5"}
+DAY_FILLS = {"חמישי": "F0F0F0", "שישי": "E8F0F8", "שבת": "F3EDE3", "מוצאי שבת": "EDEAF5"}
 FONT = "Arial"
 
 

@@ -31,8 +31,8 @@ CHROME_CANDIDATES = [
     "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
     "chromium", "chromium-browser", "google-chrome",
 ]
-DAY_ORDER = {"שישי": 0, "שבת": 1, "מוצאי שבת": 2}
-SCHEDULE_DAY = {"שישי": "שישי", "שבת": "שבת", "מוצאי שבת": "שבת"}   # מוצ"ש יושב בלו"ז תחת שבת
+DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
+SCHEDULE_DAY = {"חמישי": "חמישי", "שישי": "שישי", "שבת": "שבת", "מוצאי שבת": "שבת"}   # מוצ"ש יושב בלו"ז תחת שבת
 NO_ANCHOR = "ללא עוגן"
 
 
@@ -160,6 +160,8 @@ BASE_CSS = """
 body{font-family:'Heebo',sans-serif;direction:rtl;color:#1F2430;background:#fff;
      -webkit-print-color-adjust:exact;print-color-adjust:exact}
 .sheet{width:210mm;padding:12mm 12mm 14mm}
+.fixed{height:297mm;overflow:hidden}
+.inner{transform-origin:top center;transform:scale(var(--fit,1))}
 h1{font-family:'Rubik',sans-serif;font-size:22pt;text-align:center;color:#1F2430}
 .when{text-align:center;font-size:11pt;color:#5A6572;margin-top:1.5mm}
 table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:5mm}
@@ -171,8 +173,6 @@ footer{margin-top:6mm;text-align:center;font-size:8.5pt;color:#8A94A0}
 
 SHADOW_CSS = """
 .page{width:210mm;padding:10mm 10mm 12mm;position:relative}
-.page.fixed{height:297mm;overflow:hidden}
-.inner{transform-origin:top center;transform:scale(var(--fit,1))}
 td,th{padding:1.4mm 2.5mm;font-size:9.5pt;line-height:1.35}
 td.event{width:46mm;text-align:center}
 td.event .day{display:block;font-family:'Rubik',sans-serif;font-weight:700;font-size:13.5pt;
@@ -254,8 +254,9 @@ def recipe_html(recipe, with_steps=False):
         note='<div class="note">{}</div>'.format(esc(recipe["note"])) if recipe["note"] else "")
 
 
-def flyer_html(group, tasks, data, with_recipes=False):
-    """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומצרכים לכל מנה שמופיעה במשימותיה."""
+def flyer_html(group, tasks, data, with_recipes=False, fit=1.0, measure=False):
+    """פלייר לקבוצת עבודה אחת: משימות עם שעה ושמות, ומצרכים לכל מנה שמופיעה במשימותיה.
+    `fit` < 1 מכווץ לעמוד אחד; `measure` מוסיף את סקריפט המדידה."""
     rows, last_day = [], None
     ordered = sorted(tasks, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
                                            t["hour"] or datetime.min.time(), t["row"]))
@@ -282,14 +283,15 @@ def flyer_html(group, tasks, data, with_recipes=False):
     if recipes and not with_recipes:        # שתי רשימות מצרכים יושבות זו לצד זו
         recipes = '<div class="ing-grid">{}</div>'.format(recipes)
     return """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
-<style>{fonts}{base}{css}</style></head><body><div class="sheet">
+<style>{fonts}{base}{css}:root{{--fit:{fit}}}</style></head><body><div class="sheet page{fixed}"><div class="inner">
 <h1>{title}</h1><div class="stage">{stage}</div><div class="when">{when}</div>
 {lead}
 <div class="members"><b>חברי הקבוצה · {n}</b>{members}</div>
 {table}{recipes}
 <footer>מדרשת עין פרת</footer>
-</div></body></html>""".format(
+</div></div>{script}</body></html>""".format(
         fonts=font_face_css(), base=BASE_CSS, css=FLYER_CSS, title=esc(group["name"]),
+        fit=fit, fixed=" fixed" if (measure or fit < 1.0) else "", script=MEASURE_SCRIPT if measure else "",
         stage=esc(group["stage"]), when=esc(when_line(data)),
         lead='<div class="lead">אחראי/ת: <b>{}</b></div>'.format(esc(group["leader"])) if group["leader"] else "",
         n=len(group["members"]), members=esc(", ".join(group["members"])) or "—", table=table, recipes=recipes)
@@ -369,6 +371,7 @@ MEASURE_SCRIPT = """<script>
 })();
 </script>"""
 MIN_FIT = 0.72          # מתחת לזה עדיף לחלק לעמודים קריאים מלדחוס עמוד אחד זעיר
+FLYER_MIN_FIT = 0.8     # פלייר שגולש מכווץ עד כאן; מעבר לזה — שני עמודים
 
 
 def shadow_rows(data):
@@ -385,20 +388,22 @@ def shadow_rows(data):
     rows, introduced = [], set()
     for e in events:
         rows.append({"day": e["day"], "hour": hhmm(e["hour"]), "name": e["name"], "place": e["place"],
-                     "loose": False, "lines": shadow_lines(by_event[id(e)], groups, introduced) or "&nbsp;"})
+                     "note": e["note"], "loose": False,
+                     "lines": shadow_lines(by_event[id(e)], groups, introduced) or "&nbsp;"})
     if loose:
-        rows.append({"day": None, "hour": "", "name": NO_ANCHOR, "place": None, "loose": True,
-                     "lines": shadow_lines(loose, groups, introduced)})
+        rows.append({"day": None, "hour": "", "name": NO_ANCHOR, "place": None, "note": None,
+                     "loose": True, "lines": shadow_lines(loose, groups, introduced)})
     return rows
 
 
 def shadow_row_html(row, show_day):
     return ('<tr><td class="event{loose}">{day}<span class="hour">{hour}</span>'
-            '<span class="name">{name}</span>{place}</td><td class="lines">{lines}</td></tr>').format(
+            '<span class="name">{name}</span>{place}{note}</td><td class="lines">{lines}</td></tr>').format(
         loose=" loose" if row["loose"] else "",
         day='<span class="day">יום {}:</span>'.format(esc(row["day"])) if show_day else "",
         hour=esc(row["hour"]), name=esc(row["name"]),
         place='<span class="place">{}</span>'.format(esc(row["place"])) if row["place"] else "",
+        note='<span class="place">{}</span>'.format(esc(row["note"])) if row["note"] else "",
         lines=row["lines"])
 
 
@@ -427,9 +432,13 @@ def shadow_html(data, pages, fit=1.0, measure=False, of=None, first=1):
         sheets="".join(sheets), script=MEASURE_SCRIPT if measure else "")
 
 
+PAGE_SAVE_FIT = 0.9     # כיווץ קל עד כאן מותר אם הוא חוסך עמוד שלם
+
+
 def split_pages(rows, heights, avail, chrome):
     """חלוקת השורות לעמודים לפי הגובה שנמדד, בלי לחתוך שורה באמצע.
-    אחרי החלוקה מאזנים: עמוד אחרון עם שורה בודדת נראה רע."""
+    מחזיר (עמודים, מקדם כיווץ): אם כיווץ קל חוסך עמוד שלם — מכווצים; ואז מאזנים
+    בין העמודים, כי עמוד אחרון עם שורה בודדת נראה רע."""
     def chunk(cap):
         pages, cur, used = [], [], 0
         for row, h in zip(rows, heights):
@@ -440,13 +449,22 @@ def split_pages(rows, heights, avail, chrome):
             used += h
         return pages + ([cur] if cur else [])
 
-    cap = (avail - chrome) * 0.97          # מרווח לכותרת היום שחוזרת בראש עמוד המשך
-    pages = chunk(cap)
+    # הגבהים נמדדו ללא כיווץ; בכיווץ f נכנסים לעמוד (avail/f − chrome) מהם.
+    # 0.97 — מרווח לכותרת היום שחוזרת בראש עמוד המשך.
+    capacity = lambda f: (avail / f - chrome) * 0.97
+    fit, pages = 1.0, chunk(capacity(1.0))
+    if len(pages) > 1:
+        n, f = len(pages) - 1, 1.0         # הכיווץ הקטן ביותר שמכניס הכל ב-n עמודים
+        while f > PAGE_SAVE_FIT:
+            f = round(f - 0.01, 2)
+            if len(chunk(capacity(f))) <= n:
+                fit, pages = f, chunk(capacity(f))
+                break
     if len(pages) > 1:                     # פיזור שווה, כל עוד מספר העמודים לא גדל
         balanced = chunk(max(sum(heights) / len(pages) * 1.08, max(heights)))
         if len(balanced) == len(pages):
             pages = balanced
-    return pages
+    return pages, fit
 
 
 # ---------------------------------------------------------------------------
@@ -460,9 +478,9 @@ def chrome_binary():
     raise SystemExit("לא נמצא דפדפן Chromium להפקת ה-PDF")
 
 
-def measure_shadow(html_text):
-    """מריץ את לו"ז הצל ב-Chromium ומחזיר (מקדם התאמה לעמוד אחד, גובה פנוי,
-    גובה הכותרת והפוטר, גובה כל שורה). 1.0 = נכנס לעמוד."""
+def measure_page(html_text):
+    """מריץ עמוד (לו"ז צל או פלייר) ב-Chromium ומחזיר (מקדם התאמה לעמוד אחד, גובה
+    פנוי, גובה הכותרת והפוטר, גובה כל שורת טבלה). 1.0 = נכנס לעמוד."""
     chrome = chrome_binary()
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "measure.html"
@@ -532,15 +550,18 @@ def main():
             tasks = [t for t in data["tasks"] if t["group"] == group["name"]]
             pdf = out_dir / "{}.pdf".format(group["name"])
             png = None if args.no_png else out_dir / "{}.png".format(group["name"])
-            render(flyer_html(group, tasks, data, args.with_recipes), pdf, png)
+            fit = measure_page(flyer_html(group, tasks, data, args.with_recipes, measure=True))[0]
+            if fit < FLYER_MIN_FIT:
+                fit = 1.0                 # ארוך מדי לכיווץ סביר — עדיף שני עמודים קריאים
+            render(flyer_html(group, tasks, data, args.with_recipes, fit=fit), pdf, png)
             made += [x for x in (pdf, png) if x]
     if args.only != "flyers":
         rows = shadow_rows(data)
-        fit, avail, chrome_h, heights = measure_shadow(shadow_html(data, [rows], measure=True))
+        fit, avail, chrome_h, heights = measure_page(shadow_html(data, [rows], measure=True))
         if fit >= MIN_FIT:
             pages = [rows]                # נכנס לעמוד אחד, אולי בכיווץ קל
         else:
-            pages, fit = split_pages(rows, heights, avail, chrome_h), 1.0
+            pages, fit = split_pages(rows, heights, avail, chrome_h)
         pdf = out_dir / "לוז צל.pdf"
         render(shadow_html(data, pages, fit=fit), pdf)
         made.append(pdf)

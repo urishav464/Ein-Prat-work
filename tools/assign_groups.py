@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLAN = DATA / "group_plan.csv"
 DUTY = DATA / "duty_history.csv"
-DAY_ORDER = {"שישי": 0, "שבת": 1, "מוצאי שבת": 2}
+DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -228,18 +228,33 @@ def pick_staff(slots, staff, used, score, busy, pool):
 
 
 def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
-               staff=(), blocked=None):
+               staff=(), blocked=None, leaders=None):
     """מריץ את השיבוץ שלב אחרי שלב ומחזיר (קבוצות, שמות למשימה, הקטנות)."""
     blocked = blocked or {}
+    leaders = leaders or {}
     groups, task_names, shrunk = {}, {}, []
     week_points, stages_of, busy = Counter(), Counter(), {}
     stages = [s for s in bw.STAGES if any(g["stage"] == s for g in plan)]
     stages += [g["stage"] for g in plan if g["stage"] not in stages]      # שלב לא מוכר — בסוף
+    points_of = {g["name"]: g["points"] for g in plan}
+    promised = {n: list(gs) for n, gs in pins.items()}          # הצמדות + אחראים = התחייבויות
+    for group, name in leaders.items():
+        promised.setdefault(name, []).append(group)
+    done = set()
     for i, stage in enumerate(OrderedDict.fromkeys(stages)):
         stage_plan = [g for g in plan if g["stage"] == stage]
         stage_names = {g["name"] for g in stage_plan}
         stage_pins = {n: [g for g in gs if g in stage_names] for n, gs in pins.items()}
         stage_pins = {n: gs for n, gs in stage_pins.items() if gs}
+        # התחייבות לשלב מאוחר יותר: השעות שלה שמורות כבר עכשיו, והניקוד שלה נספר
+        # בדירוג — כך מי שהוצמד לבית מדרש לא נלקח קודם להכנה ב-8:00, ומי שמחכה
+        # לו תורנות שבת לא נבחר לשישי לפני מי שאין לו כלום.
+        reserved, committed = {}, Counter()
+        for n, gs in promised.items():
+            for g in gs:
+                if g in points_of and g not in stage_names and g not in done:
+                    reserved.setdefault(n, set()).update(timed_slots(tasks, g))
+                    committed[n] += points_of[g]
         # חניך פנוי לשלב רק אם אף משימה שכבר שובץ אליה אינה מתנגשת בזמן עם
         # משימות השלב — כך בית מדרש ב-8:00 והכנות ב-8:00 לא נופלים על אותו אדם.
         stage_slots = set().union(*(timed_slots(tasks, g["name"]) for g in stage_plan)) \
@@ -247,15 +262,25 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
         pool = [n for n in available
                 if (stages_of[n] < max_stages or n in stage_pins)
                 and stage not in blocked.get(n, ())
-                and not (busy.get(n, set()) & stage_slots)]
+                and not (busy.get(n, set()) & stage_slots)
+                and (n in stage_pins or not (reserved.get(n, set()) & stage_slots))]
 
         # אחראי מצוות השבת לכל קבוצה שדורשת אחד — נספר בתוך גודל הקבוצה.
         # הצוות מתאפס בכל שלב: אותו אדם יכול להיות אחראי בשישי וגם בשבת, אבל
         # לא על שתי קבוצות באותו שלב.
-        score_now = {n: past.get(n, 0) + week_points[n] for n in staff}
+        score_now = {n: past.get(n, 0) + week_points[n] + committed[n] for n in staff}
         used_here = set()
+        for g in stage_plan:                      # אחראי/ת שנקבע/ה לשבת הזו — קודם לכל
+            match, _ = roster.match_name(leaders.get(g["name"], ""), pool) \
+                if g["name"] in leaders else (None, None)
+            if match:
+                g["leader"] = match
+                if match in staff:
+                    used_here.add(match)
+            elif g["name"] in leaders:
+                print("⚠ האחראי/ת «{}» ל«{}» לא זמין/ה בשלב".format(leaders[g["name"]], g["name"]))
         for g in stage_plan:
-            if not g["needs_staff"]:
+            if not g["needs_staff"] or g["leader"]:
                 continue
             chosen = pick_staff(timed_slots(tasks, g["name"]), staff, used_here,
                                 score_now, busy, pool)
@@ -264,8 +289,8 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
                 used_here.add(chosen)
             else:
                 print("⚠ אין איש צוות פנוי ל«{}»".format(g["name"]))
-        # אנשי הצוות משמשים רק כאחראים — לא ממלאים מקומות רגילים בקבוצות אחרות
-        pool = [n for n in pool if n not in staff or n in used_here]
+        # אנשי הצוות משמשים כאחראים או כחברים שהוצמדו ידנית — לא ממלאים מקומות רגילים
+        pool = [n for n in pool if n not in staff or n in used_here or n in stage_pins]
 
         fixed = Counter(g for gs in stage_pins.values() for g in gs)
         for g in stage_plan:
@@ -277,9 +302,10 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
         for g in stage_plan:
             g["size"] = max(peak(tasks, g["name"]), fixed.get(g["name"], 0))
 
-        score = {n: past.get(n, 0) + week_points[n] for n in pool}
+        score = {n: past.get(n, 0) + week_points[n] + committed[n] for n in pool}
         result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins)
         groups.update(result)
+        done.update(stage_names)
         for g in stage_plan:
             task_names.update(fill_tasks(result[g["name"]], tasks, g["name"]))
             occupied = timed_slots(tasks, g["name"])
@@ -369,6 +395,7 @@ def main():
     pins = {n: [g.strip() for g in v.split(";") if g.strip()] for n, v in attendance_mod.load_pins(date).items()}
     staff = attendance_mod.load_staff(date)
     blocked = attendance_mod.load_blocked(date)
+    leaders = attendance_mod.load_leaders(date)
     havurot = attendance_mod.load_havurot(date)
 
     plan = read_plan()
@@ -386,7 +413,7 @@ def main():
     groups, task_names, shrunk = assign_all(
         plan, tasks, available, programs, past, pins,
         args.seed if args.seed is not None else date.toordinal(), args.max_stages,
-        staff=staff, blocked=blocked)
+        staff=staff, blocked=blocked, leaders=leaders)
 
     on_duty = {m for v in groups.values() for m in v}
     print("שבת {} · {} נוכחים · {} זמינים · {} תורנים · {} קבוצות".format(
