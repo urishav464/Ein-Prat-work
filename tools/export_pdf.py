@@ -174,9 +174,10 @@ footer{margin-top:6mm;text-align:center;font-size:8.5pt;color:#8A94A0}
 SHADOW_CSS = """
 .page{width:210mm;padding:10mm 10mm 12mm;position:relative}
 td,th{padding:1.4mm 2.5mm;font-size:9.5pt;line-height:1.35}
-td.event{width:46mm;text-align:center}
-td.event .day{display:block;font-family:'Rubik',sans-serif;font-weight:700;font-size:13.5pt;
-              text-align:right;margin-bottom:1mm}
+td.event{width:46mm;text-align:center;position:relative}
+td.event.has-day{padding-top:9mm}
+td.event .day{position:absolute;top:1.4mm;right:2.5mm;font-family:'Rubik',sans-serif;
+              font-weight:700;font-size:13.5pt}
 td.event .hour{display:block;font-family:'Rubik',sans-serif;font-size:10.5pt}
 td.event .name{display:block;font-size:11.5pt;font-weight:600}
 td.event .place{display:block;font-size:9pt;color:#5A6572}
@@ -184,6 +185,7 @@ td.event.loose{background:#FCE3C6}
 td.lines{text-align:center}
 .who{font-weight:600;line-height:1.6}
 .who .resp{font-weight:400;color:#5A6572}
+.who .resp b{font-weight:700;color:#1F2430}
 .line{padding:.4mm 0}
 .line b{font-family:'Rubik',sans-serif;font-weight:600}
 .line .names{color:#3A4552}
@@ -341,7 +343,7 @@ def shadow_lines(items, groups, introduced):
             resp = (group or {}).get("leader")
             out.append('<div class="who">{names}{resp}</div>'.format(
                 names=esc(", ".join(members)),
-                resp=' <span class="resp">· אחראי/ת: {}</span>'.format(esc(resp)) if resp else ""))
+                resp=' <span class="resp">· אחראי/ת: <b>{}</b></span>'.format(esc(resp)) if resp else ""))
         out += [task_line(t, members) for t in items if t["group"] == name]
     return "".join(out)
 
@@ -397,9 +399,9 @@ def shadow_rows(data):
 
 
 def shadow_row_html(row, show_day):
-    return ('<tr><td class="event{loose}">{day}<span class="hour">{hour}</span>'
+    return ('<tr><td class="event{loose}{has_day}">{day}<span class="hour">{hour}</span>'
             '<span class="name">{name}</span>{place}{note}</td><td class="lines">{lines}</td></tr>').format(
-        loose=" loose" if row["loose"] else "",
+        loose=" loose" if row["loose"] else "", has_day=" has-day" if show_day else "",
         day='<span class="day">יום {}:</span>'.format(esc(row["day"])) if show_day else "",
         hour=esc(row["hour"]), name=esc(row["name"]),
         place='<span class="place">{}</span>'.format(esc(row["place"])) if row["place"] else "",
