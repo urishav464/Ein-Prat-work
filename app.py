@@ -1075,6 +1075,41 @@ def _dashboard_body() -> None:
         else:
             _empty("עוד לא התקיים משמר.", "הטבלה תתמלא אחרי הערב הראשון.")
 
+    # What the trainees are searching for — every run, the empty ones too. A
+    # search that found nothing shows its map and its queries: that is where a
+    # bad reading of a topic becomes visible, and where the tool gets better.
+    searches = dm.get_all_searches()
+    with st.expander(f"🔍 חיפושי המרצים של החניכים ({len(searches)})"):
+        if not searches:
+            _empty("עוד לא נערך חיפוש.", "כל סריקה מהמסך «חיפוש מרצים» תופיע כאן.")
+        else:
+            st.caption("לחיצה על «פתח» פותחת את החיפוש כפי שהחניך ראה אותו — המפה, השמות, ומה נפסל.")
+            for row in searches[:40]:
+                r = row.get("results_json") or {}
+                n = len(r.get("candidates") or [])
+                outcome = (f"{n} מועמדים" if not r.get("fallback") else
+                           "בלי תוצאות — " + SCOUT_FALLBACK_TEXT.get(r.get("reason") or "error", "")[:50])
+                fields = " · ".join(a.get("field") or a.get("label") or ""
+                                    for a in (r.get("map") or {}).get("angles") or [] if a.get("on", True))
+                added = r.get("added") or []
+                c1, c2, c3 = st.columns([6, 1, 0.5])
+                c1.markdown(
+                    f"**{_clean(row.get('student_name') or 'צוות')}**"
+                    + (f" · #{row['mishmar_id']:02d}" if row.get("mishmar_id") else "")
+                    + f" · {_clean(row['topic'])}"
+                    + (f" → {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
+                    + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · {outcome}"
+                    + (f" · נוספו: {_clean(' · '.join(added))}" if added else "")
+                    + (f"<br>🗺️ {_clean(fields)}" if fields else "") + "</span>",
+                    unsafe_allow_html=True)
+                if c2.button("פתח", key=f"ds-open-{row['id']}"):
+                    st.session_state["scout_result"] = {
+                        **r, "search_id": row["id"], "topic": row["topic"],
+                        "lesson_topic": row.get("lesson_topic") or "", "mid": row.get("mishmar_id")}
+                    _goto(NAV_SEARCH, row.get("mishmar_id"))
+                c3.button("🗑", key=f"ib-ds-{row['id']}", help="מחיקת הרישום",
+                          on_click=dm.delete_search, args=(row["id"],))
+
     # The evening's opening hour. It lives here and only here: the whole clock
     # of a Mishmar derives from it, so it is the instructor's call, not a field
     # a pair can nudge from inside their own workfile.
@@ -1761,46 +1796,6 @@ def _student_body(student_id: int, student_name: str = "") -> None:
             _card_grid(done, "done")
 
 
-def _speaker_card(entry: dict, topic: str, lesson: str, idx: int) -> None:
-    """One raw mined name (pre-synthesis / fallback view): confidence, flags,
-    evidence, and the explicit add-to-index action. Restored — it was dropped
-    by mistake in the dashboard rewrite, unnoticed because sandbox tests never
-    have web names to render."""
-    name = entry["name"]
-    conf = {"high": "🟢 ודאות גבוהה", "medium": "🟡 ודאות בינונית", "low": "🟠 ודאות נמוכה"}
-    bits = [conf.get(entry.get("confidence", "low"), "")]
-    if entry.get("already_known"):
-        bits.append("‼️ כבר במאגר — בדקו סטטוס לפני פנייה")
-    bits.extend(entry.get("flags", []))
-
-    st.markdown(f"**{_clean(name)}** — " + " · ".join(b for b in bits if b))
-    for note in entry.get("index_notes", []):
-        st.caption(note)
-
-    for ev in entry.get("evidence", [])[:2]:
-        href = ev.get("href", "")
-        if href:
-            st.caption(f"[{_clean(ev.get('title', href))[:90]}]({href})")
-
-    c1, c2, _ = st.columns([1, 1, 3])
-    if c1.button("הוסף למאגר", key=f"add-{idx}-{name}"):
-        # Explicit write-back only. Auto-writing every search result would
-        # grow the index fast and fill it with noise; this keeps
-        # source_type='web_search' meaning "a human decided this is a person".
-        href = entry["evidence"][0].get("href") if entry.get("evidence") else None
-        new_id = dm.add_new_speaker(
-            name=name,
-            expertise_topics=topic,
-            verification_url=href,
-            source_type="web_search",
-            lesson_fit=lesson,
-            notes="נמצא בחיפוש רשת · ⚠️ לאמת לפני פנייה",
-        )
-        st.toast(f"«{name}» נוסף למאגר" if new_id else f"«{name}» כבר קיים במאגר")
-    if c2.button("אמת", key=f"ver-{idx}-{name}"):
-        st.session_state["verify_name"] = name
-
-
 CONFIDENCE_CHIP = {
     "high": ("🟢 ודאות גבוהה", "green"),
     "medium": ("🟡 ודאות בינונית", "yellow"),
@@ -1814,7 +1809,8 @@ REGION_HELP = {
 }
 
 
-def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
+def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
+                search_id: Optional[int] = None) -> None:
     """One researched candidate: who they are, where they are, why they fit,
     and the evidence. Everything here is grounded in what the search returned —
     a field the scout could not support comes back empty, and contact details
@@ -1843,14 +1839,14 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
             st.markdown(f"🏛️ {_clean(c['affiliation'])}")
         if c.get("bio"):
             st.markdown(_clean(c["bio"]))
-        if c.get("rationale"):
-            st.caption("למה מתאים: " + _clean(c["rationale"]))
+        if c.get("fit") or c.get("rationale"):
+            st.caption("למה דווקא: " + _clean(c.get("fit") or c["rationale"]))
         if c.get("recent_years"):
             st.caption("פעיל/ה לפי התוצאות בשנים: " + ", ".join(c["recent_years"][:4]))
-        if c.get("already_approached"):
-            st.warning("‼️ כבר פנו לאדם הזה השנה — בדקו את היומן במאגר לפני פנייה נוספת.")
-        if c.get("history"):
-            st.caption(f"🕓 אצלנו: {c['history']}")
+        # One line of institutional memory — the person is already in the
+        # index, and this is what we know about when they were invited.
+        if c.get("memory"):
+            st.warning(_clean(c["memory"]))
         if c.get("link"):
             st.markdown(f"📄 [מאמר / ראיון בנושא]({c['link']})")
         for ev in (c.get("evidence") or [])[:3]:
@@ -1873,7 +1869,7 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
                 ac2.button("➕ הוסף כמועמד", key=f"cand-{idx}-{name}", type="primary",
                            help="מוסיף לרשימת המועמדים של המקטע — ולמאגר המשותף",
                            on_click=_add_candidate,
-                           args=(c, display, name, lesson, lid, labels[lid]))
+                           args=(c, display, name, lesson, lid, labels[lid], search_id))
             else:
                 ac1.caption("אין עדיין מקטעים במשמר — צרו את שלד הערב קודם")
         else:
@@ -1883,9 +1879,10 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int) -> None:
 
 
 def _add_candidate(c: dict, display: str, name: str, lesson: str,
-                   lid: int, slot_label: str) -> None:
+                   lid: int, slot_label: str, search_id: Optional[int] = None) -> None:
     """on_click: the found name becomes a CANDIDATE on the slot and a row in
-    the shared index. Two writes, one run — never write(); st.rerun()."""
+    the shared index — and the search it came from remembers that it was
+    taken up. Three writes, one run — never write(); st.rerun()."""
     href = c.get("link") or next(
         (e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
     dm.add_new_speaker(
@@ -1896,6 +1893,7 @@ def _add_candidate(c: dict, display: str, name: str, lesson: str,
             c.get("affiliation"), c.get("region_hint"),
             "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
     dm.add_lesson_speaker(lid, name, student_id=st.session_state.student_id)
+    dm.mark_search_added(search_id, name)
     st.toast(f"«{name}» נוסף כמועמד ל{slot_label} — ולמאגר")
 
 
@@ -1915,29 +1913,58 @@ ANGLE_HINTS = {
 }
 
 
+def _search_history(mine: list[dict]) -> None:
+    """The pair's own searches, on arrival and unfolded — a closed tab used to
+    be the end of a search. Every run is kept, the empty ones too; «פתח»
+    restores a saved result at no call."""
+    rows = dm.get_searches_for([m["id"] for m in mine])
+    if not rows:
+        return
+    dates = {m["id"]: m.get("gregorian_date") for m in mine}
+    st.markdown(f"##### 🕘 החיפושים של המשמרים שלך ({len(rows)})")
+    head, rest = rows[:5], rows[5:]
+
+    def _line(row: dict) -> None:
+        r = row.get("results_json") or {}
+        mid = row.get("mishmar_id")
+        n = len(r.get("candidates") or [])
+        outcome = (f"{n} מועמדים" if not r.get("fallback") else
+                   "בלי תוצאות — " + SCOUT_FALLBACK_TEXT.get(r.get("reason") or "error", "")[:60])
+        added = r.get("added") or []
+        fields = " · ".join(a.get("field") or a.get("label") or ""
+                            for a in (r.get("map") or {}).get("angles") or [] if a.get("on", True))
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(
+            (f"**#{mid:02d}** · " if mid else "") + f"**{_clean(row['topic'])}**"
+            + (f" → {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
+            + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · {outcome}"
+            + (f" · נוספו: {_clean(' · '.join(added))}" if added else "")
+            + (f"<br>🗺️ {_clean(fields)}" if fields else "") + "</span>",
+            unsafe_allow_html=True)
+        c2.button("פתח", key=f"reopen-{row['id']}", on_click=_set_state,
+                  args=("scout_result", {**r, "search_id": row["id"], "topic": row["topic"],
+                                         "lesson_topic": row.get("lesson_topic") or "",
+                                         "mid": mid}))
+
+    for row in head:
+        _line(row)
+    if rest:
+        with st.expander(f"עוד {len(rest)} חיפושים"):
+            for row in rest:
+                _line(row)
+
+
 def show_speaker_search() -> None:
     st.title("חיפוש מרצים")
     st.caption(
-        "סריקה של הרשת — לא של המאגר — וחמישה שמות שנבדקו. "
+        "המודל קורא את הנושא כ**תחומים** — אתם מאשרים או מתקנים את המפה — ואז הוא סורק "
+        "את הרשת לפי התחומים ומחזיר שמות עם הזווית שכל אחד עונה עליה. "
         "כל שם הוא ⚠️ לאמת עד שבדקתם, ופרטי קשר לעולם לא נשלפים אוטומטית."
     )
-
-    status = ss.search_status()
-    cache = dm.cache_stats()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("קריאות רשת (בסשן)", status["network_calls"])
-    c2.metric("נחסך מהמטמון", status["cache_hits"])
-    c3.metric("שאילתות במטמון", cache["total"])
-    if not status["available"]:
-        st.warning(
-            f"⏳ מנוע החיפוש חסם אותנו זמנית. ממתינים "
-            f"{status['cooldown_remaining_sec']} שניות. "
-            "בינתיים אפשר להשתמש בקישורי החיפוש הידני שמופיעים בתוצאות."
-        )
-
     mine = _my_mishmarim()
-    default_topic = ""
-    default_mid = None
+    _search_history(mine)
+
+    default_topic, default_mid = "", None
     if mine:
         today = _date_cls.today()
         upcoming = [m for m in mine
@@ -1964,112 +1991,38 @@ def show_speaker_search() -> None:
             format_func=lambda i: "— בלי שיבוץ —" if i is None else labels[i],
             index=(list(labels).index(default_mid) + 1) if default_mid in labels else 0,
         ) if mine else None
-        go = st.form_submit_button("🔎 סרוק את הרשת", type="primary")
+        go_map = st.form_submit_button("🗺️ בנה מפה", type="primary")
+    st.caption("המפה היא קריאה אחת קטנה של המודל — כמה שניות. הסריקה עצמה, אחרי שאישרתם "
+               "את המפה, היא דקה או שתיים ועד שמונה חיפושים ברשת; התוצאה נשמרת.")
 
-    st.caption(
-        "סריקה יסודית מרחיבה את החיפוש עד שיש ארבעה שמות בוודאות גבוהה, "
-        "ומעמיקה על כל אחד מהם — זה לוקח דקה או שתיים, פעם אחת. "
-        "התוצאה נשמרת, ואפשר לפתוח אותה שוב בלי לשלם עליה."
-    )
-
-    # The scout fires ONLY here (rerun trap). Its result is saved, so returning
-    # to the screen — or a partner opening it — costs nothing.
-    if go and (topic.strip() or lesson_topic.strip()):
-        # A minute-long call gets a running log, not a spinner: each round and
-        # each name being deepened is written as it happens, then collapses.
-        # `box`, not `status` — that name is the search-engine status dict above
-        with st.status("סורק את הרשת…", expanded=True) as box:
-            log, stages = st.empty(), []
-
-            def _stage(line: str) -> None:
-                stages.append(line)
-                box.update(label=line)
-                log.markdown("\n".join(f"- {_clean(x)}" for x in stages))
-
-            res = ca.scout_speakers(topic.strip(), lesson, lesson_topic.strip(),
-                                    progress=_stage)
-            n_found = len(res.get("candidates") or [])
-            box.update(
-                label=(f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"
-                       if not res.get("fallback") else
-                       "הסריקה הסתיימה — בלי מועמדים"),
-                state="complete", expanded=False)
-        st.session_state["scout_result"] = res
+    topic, lesson_topic = topic.strip(), lesson_topic.strip()
+    if go_map and (topic or lesson_topic):
+        with st.spinner("קורא את הנושא כתחומים…"):
+            m = ca.scout_map(topic or lesson_topic, lesson_topic, lesson)
+        st.session_state["scout_map"] = {
+            "nonce": st.session_state.get("scout_map_nonce", 0) + 1,
+            "map": m, "topic": topic or lesson_topic, "lesson_topic": lesson_topic,
+            "angle": lesson, "mid": mid,
+        }
+        st.session_state["scout_map_nonce"] = st.session_state["scout_map"]["nonce"]
+        st.session_state.pop("scout_result", None)
         st.session_state.pop("verify_name", None)
         st.session_state.pop("verify_cache", None)
-        if not res.get("fallback"):
-            dm.save_search(topic.strip(), res, mishmar_id=mid,
-                           lesson_topic=lesson_topic.strip(), angle=lesson,
-                           student_id=st.session_state.student_id)
 
-    # Previous scans of this Mishmar — what the pair (or the partner) already tried.
-    saved = dm.get_searches(mid) if mid else dm.get_searches()
-    if saved:
-        with st.expander(f"🕘 חיפושים קודמים ({len(saved)})"):
-            for row in saved:
-                r1, r2 = st.columns([4, 1])
-                r1.markdown(
-                    f"**{_clean(row['topic'])}**"
-                    + (f" · {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
-                    + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · "
-                    + f"{len((row.get('results_json') or {}).get('candidates') or [])} מועמדים</span>",
-                    unsafe_allow_html=True)
-                r2.button("פתח", key=f"reopen-{row['id']}",
-                          on_click=_set_state, args=("scout_result", row["results_json"]))
+    held = st.session_state.get("scout_map")
+    if held:
+        _map_step(held)
 
     result = st.session_state.get("scout_result")
     if not result:
-        st.info("הזינו נושא — של המשמר, של השיעור, או שניהם — ולחצו סרוק.")
+        if not held:
+            st.info("הזינו נושא — של המשמר, של השיעור, או שניהם — ולחצו «בנה מפה».")
         return
-
-    raw = result.get("raw") or {}
-    if raw.get("skipped"):
-        st.info(raw.get("reason") or "החיפוש דולג.")
-        return
-
-    if not result.get("fallback"):
-        st.divider()
-        cands = result["candidates"]
-        strong = result.get("strong", 0)
-        target = result.get("target", 4)
-        st.markdown(f"#### המועמדים שנבדקו ({len(cands)})")
-        # Say plainly what was found. Padding four weak names into a list that
-        # LOOKS like it hit the target is the one thing this screen must not do.
-        if strong >= target:
-            st.success(f"✅ {strong} מועמדים בוודאות גבוהה — כפי שביקשנו.")
-        else:
-            st.info(
-                f"נמצאו **{strong}** בוודאות גבוהה מתוך {target} שביקשנו "
-                f"(אחרי {raw.get('rounds_used', 1)} סבבי חיפוש ו-{len(raw.get('queries') or [])} שאילתות). "
-                "השאר מוצגים עם דרגת הוודאות שלהם — אפשר לחדד את נושא השיעור ולסרוק שוב."
-            )
-        # one index PER CARD: `i` stepped by two, so both cards of a row shared
-        # a key — a DuplicateElementKey on the very screen this is for
-        for i in range(0, len(cands), 2):
-            cols = st.columns(2)
-            for j, (col, c) in enumerate(zip(cols, cands[i:i + 2])):
-                with col:
-                    _scout_card(c, mid, lesson, i + j)
-        # What the curation call cost, so the cache claim is checkable on the
-        # live deploy rather than asserted: cache_read > 0 on the second search
-        # of an evening means the prefix is being served at a tenth of the price.
-        u = result.get("usage") or {}
-        if u.get("input") is not None:
-            st.caption(
-                f"עלות הסינון: {u['input']:,} טוקנים נכנסים · {u.get('output') or 0:,} יוצאים · "
-                f"מהמטמון: {u.get('cache_read') or 0:,}"
-                + (f" · נכתב למטמון: {u['cache_write']:,}" if u.get("cache_write") else "")
-            )
-        if result.get("rejected"):
-            with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})"):
-                st.caption("כדי שלא תחפשו שוב את אותם שמות.")
-                for r in result["rejected"]:
-                    st.markdown(f"- **{_clean(r.get('name') or '')}** — {_clean(r.get('why') or '')}")
-        with st.expander("🌐 כל מה שהחיפוש הגולמי העלה"):
-            _raw_search_results(raw)
+    st.divider()
+    if result.get("fallback"):
+        _scout_fallback(result)
     else:
-        st.divider()
-        _scout_fallback(result, raw)
+        _scout_results(result)
 
     if st.session_state.get("verify_name"):
         st.divider()
@@ -2081,7 +2034,7 @@ def show_speaker_search() -> None:
         vcache = st.session_state.setdefault("verify_cache", {})
         if name not in vcache:
             with st.spinner("מאמת…"):
-                vcache[name] = ss.verify_speaker(name, topic=raw.get("subject") or "")
+                vcache[name] = ss.verify_speaker(name, topic=result.get("topic") or "")
         v = vcache[name]
         for k, val in v["checklist"].items():
             st.markdown(f"- **{k}:** {val}")
@@ -2096,24 +2049,173 @@ def show_speaker_search() -> None:
             st.markdown(f"`{err['query']}` — [חיפוש ידני]({err['manual']['duckduckgo']})")
 
 
+def _map_step(held: dict) -> None:
+    """The intermediate step: the topic read as fields, one card per angle,
+    editable — terms as a text line, a checkbox per angle — and only then the
+    expensive button. The trainee sees how the topic was read and can fix it
+    before anything is paid for; that reading is also the pedagogy here."""
+    m, nonce = held["map"], held["nonce"]
+    if m.get("error") or not m.get("angles"):
+        st.warning(
+            "המפה לא נבנתה — "
+            + SCOUT_FALLBACK_TEXT.get(m.get("reason") or "error", SCOUT_FALLBACK_TEXT["error"])
+            + (f" ({_clean(m['error'])[:80]})" if m.get("error") else "")
+        )
+        st.caption("בינתיים, חיפוש ידני לפי הזוויות:")
+        for label, hint in ANGLE_HINTS.items():
+            if label == "בלי המלצה":
+                continue
+            links = ss.manual_search_links(f"{held['topic']} {hint}")
+            st.markdown(f"- **{label}** — [Google]({links['google']}) · [DuckDuckGo]({links['duckduckgo']})")
+        st.button("🔁 נסו שוב", key=f"map-retry-{nonce}", on_click=_clear_map)
+        return
+
+    st.markdown("#### 🗺️ המפה — איך המודל קרא את הנושא")
+    if m.get("reading"):
+        st.caption(_clean(m["reading"]))
+    for a in m["angles"]:
+        k = a["key"]
+        with st.container(border=True, key=f"card-map-{k}-{nonce}"):
+            st.markdown(f"**{a['label']} — {_clean(a.get('field') or '')}**"
+                        + (f" <span class='card-meta'>{_clean(a.get('who') or '')}</span>"
+                           if a.get("who") else ""), unsafe_allow_html=True)
+            if a.get("why"):
+                st.caption(_clean(a["why"]))
+            st.text_input("מונחי חיפוש (מופרדים בפסיק)", value=", ".join(a.get("terms") or []),
+                          key=f"map-terms-{k}-{nonce}")
+            if a.get("where"):
+                st.caption("איפה יושבים אנשים כאלה: " + _clean(" · ".join(a["where"])))
+            st.checkbox("לחפש בזווית הזו", value=True, key=f"map-on-{k}-{nonce}")
+
+    b1, b2 = st.columns([1.4, 1])
+    if b1.button("🔎 סרוק את הרשת", type="primary", width="stretch", key=f"scan-{nonce}"):
+        _run_scan(held)
+    # a callback, not `pop(); st.rerun()` — the click already reruns the page
+    b2.button("🔁 מפה מחדש", type="tertiary", key=f"map-again-{nonce}", on_click=_clear_map)
+
+
+def _clear_map() -> None:
+    """on_click: forget the map and any result under it."""
+    st.session_state.pop("scout_map", None)
+    st.session_state.pop("scout_result", None)
+
+
+def _edited_map(held: dict) -> dict:
+    """The map as the trainee left it: edited terms, unticked angles off."""
+    m, nonce = held["map"], held["nonce"]
+    angles = []
+    for a in m["angles"]:
+        k = a["key"]
+        raw = st.session_state.get(f"map-terms-{k}-{nonce}", "")
+        terms = [x.strip() for x in str(raw).split(",") if x.strip()] or a.get("terms") or []
+        angles.append({**a, "terms": terms[:4],
+                       "on": bool(st.session_state.get(f"map-on-{k}-{nonce}", True))})
+    return {**m, "angles": angles}
+
+
+def _run_scan(held: dict) -> None:
+    """The expensive call, fired ONLY from the button (rerun trap). Every run
+    is saved — the empty ones too — so the pair, the partner and the
+    instructor can come back to it."""
+    smap = _edited_map(held)
+    topic, lesson_topic, lesson, mid = (held["topic"], held["lesson_topic"],
+                                        held["angle"], held.get("mid"))
+    with st.status("סורק את הרשת…", expanded=True) as box:
+        log, stages = st.empty(), []
+
+        def _stage(line: str) -> None:
+            stages.append(line)
+            box.update(label=line)
+            log.markdown("\n".join(f"- {_clean(x)}" for x in stages[-12:]))
+
+        res = ca.scout_speakers(topic, lesson, lesson_topic, progress=_stage,
+                                scout_map_result=smap)
+        n_found = len(res.get("candidates") or [])
+        u = res.get("usage") or {}
+        box.update(
+            label=(f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"
+                   f" · {u.get('searches') or 0} חיפושים"
+                   if not res.get("fallback") else "הסריקה הסתיימה — בלי מועמדים"),
+            state="complete", expanded=False)
+    slim = ca.slim_for_storage(res)
+    sid = dm.save_search(topic, slim, mishmar_id=mid, lesson_topic=lesson_topic,
+                         angle=lesson, student_id=st.session_state.student_id)
+    st.session_state["scout_result"] = {**res, "search_id": sid, "topic": topic,
+                                        "lesson_topic": lesson_topic, "mid": mid}
+    st.session_state.pop("verify_name", None)
+    st.session_state.pop("verify_cache", None)
+
+
+def _scout_results(result: dict) -> None:
+    """Grounded names, grouped under the angle each one answers, the group
+    headed by the map's field and why it speaks to the topic."""
+    cands = result["candidates"]
+    smap = result.get("map") or {}
+    by_key = {a["key"]: a for a in smap.get("angles") or []}
+    mid, lesson = result.get("mid"), (st.session_state.get("scout_map") or {}).get("angle", "")
+    strong, target = result.get("strong", 0), result.get("target", 4)
+    st.markdown(f"#### המועמדים שנבדקו ({len(cands)})")
+    if strong >= target:
+        st.success(f"✅ {strong} מועמדים בוודאות גבוהה — כפי שביקשנו.")
+    else:
+        st.info(f"נמצאו **{strong}** בוודאות גבוהה מתוך {target} שביקשנו. "
+                "השאר מוצגים עם דרגת הוודאות שלהם — «אמת» בודק שם אחד לעומק, "
+                "ואפשר לערוך את המפה ולסרוק שוב.")
+    groups = [(k, [c for c in cands if c.get("angle") == k]) for k in ("1", "2", "3")]
+    groups.append(("", [c for c in cands if c.get("angle") not in ("1", "2", "3")]))
+    idx = 0
+    for k, group in groups:
+        if not group:
+            continue
+        a = by_key.get(k) or {}
+        st.markdown(f"##### {ca.ANGLES.get(k, 'ללא זווית')}"
+                    + (f" — {_clean(a['field'])}" if a.get("field") else ""))
+        if a.get("why"):
+            st.caption(_clean(a["why"]))
+        for i in range(0, len(group), 2):
+            cols = st.columns(2)
+            for col, c in zip(cols, group[i:i + 2]):
+                with col:
+                    _scout_card(c, mid, lesson, idx, result.get("search_id"))
+                idx += 1
+    u = result.get("usage") or {}
+    if u.get("input") is not None or u.get("searches") is not None:
+        st.caption(
+            f"עלות הסריקה: {u.get('searches') or 0} חיפושים · {u.get('fetches') or 0} דפים נפתחו · "
+            f"{u.get('input') or 0:,} טוקנים נכנסים · {u.get('output') or 0:,} יוצאים"
+            + (f" · מהמטמון: {u['cache_read']:,}" if u.get("cache_read") else "")
+        )
+    if result.get("rejected"):
+        with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})"):
+            st.caption("כדי שלא תחפשו שוב את אותם שמות.")
+            for r in result["rejected"]:
+                st.markdown(f"- **{_clean(r.get('name') or '')}** — {_clean(r.get('why') or '')}")
+    if result.get("queries"):
+        with st.expander(f"🌐 מה החיפוש עשה ({len(result['queries'])})"):
+            for q in result["queries"]:
+                st.markdown(f"- {_clean(q)}")
+
+
 # Why the scout came back without candidates, in the pair's language. The
 # internal token («empty synthesis») used to be printed inside a Hebrew sentence.
 SCOUT_FALLBACK_TEXT = {
-    "no_names": "החיפוש לא העלה אף שם שנראה כמו אדם. נסו נושא קצר יותר, או זווית אחרת.",
-    "model_rejected_all": "הסינון בדק את השמות שנמצאו ופסל את כולם — אף אחד לא נראה כמו "
+    "no_map": "אין מפה — בנו מפה קודם.",
+    "no_names": "החיפוש לא הביא אף שם שנתמך בדף שנקרא. נסו לערוך את מונחי המפה — רחב יותר, "
+                "או תחום אחר — ולסרוק שוב.",
+    "model_rejected_all": "הסינון בדק את השמות שעלו ופסל את כולם — אף אחד לא נראה כמו "
                           "מרצה חי ופעיל לנושא הזה. זו תשובה כנה, לא תקלה.",
-    "truncated": "תשובת הסינון נקטעה באמצע. סרקו שוב.",
-    "empty_reply": "הסינון לא החזיר תשובה. סרקו שוב.",
-    "error": "הסינון החכם לא רץ",
+    "truncated": "הסריקה נקטעה לפני שסיימה. סרקו שוב, אולי עם פחות זוויות.",
+    "empty_reply": "המודל לא החזיר תשובה. סרקו שוב.",
+    "search_disabled": "חיפוש ברשת כבוי לארגון הזה ב-Claude Console. המדריך יכול להפעיל אותו "
+                       "ב-Settings → Privacy; עד אז — הקישורים הידניים למטה.",
+    "error": "הסריקה לא רצה",
 }
 
 
-def _scout_fallback(result: dict, raw: dict) -> None:
-    """The screen when the scout has no candidates. It used to be the raw
-    mining dump — 38 «names» like «עבודה נוספת לא», presented as the product.
-    Now: the reason, what the model rejected and why (so nobody searches the
-    same names again), and only the raw names that carry a real signal of a
-    person, folded."""
+def _scout_fallback(result: dict) -> None:
+    """The screen when the scout has no candidates: the reason, what was
+    rejected and why, and — because the map is still here — one manual
+    search link per term, so a pair can carry on by hand."""
     reason = result.get("reason") or ("error" if result.get("error") else "no_names")
     msg = SCOUT_FALLBACK_TEXT.get(reason, SCOUT_FALLBACK_TEXT["error"])
     if reason == "error" and result.get("error"):
@@ -2123,39 +2225,19 @@ def _scout_fallback(result: dict, raw: dict) -> None:
         with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})", expanded=True):
             for r in result["rejected"]:
                 st.markdown(f"- **{_clean(r.get('name') or '')}** — {_clean(r.get('why') or '')}")
-    names = [e for e in (raw.get("web_names") or []) if e.get("confidence") in ("high", "medium")]
-    if names:
-        with st.expander(f"🌐 שמות גולמיים עם תואר ({len(names)})"):
-            _raw_search_results({**raw, "web_names": names})
-    else:
-        st.caption("לא נמצא אף שם עם תואר אקדמי או עדות שמדובר באדם.")
-    if raw.get("queries"):
-        with st.expander(f"השאילתות שרצו ({len(raw['queries'])})"):
-            for q in raw["queries"]:
-                st.markdown(f"- `{_clean(q)}`")
-
-
-def _raw_search_results(result: dict) -> None:
-    """The pre-synthesis listing — the whole page when there is no API key."""
-    names = (result.get("web_names") or [])[:20]
-    more = len(result.get("web_names") or []) - len(names)
-    # the header counts what is RENDERED — it used to promise 38 and show 20
-    st.markdown(f"##### 🌐 שמות חדשים מהרשת ({len(names)})"
-                + (f" · ועוד {more} שלא מוצגים" if more > 0 else ""))
-    st.caption(
-        "כל שם כאן הוא ⚠️ **לאמת** — הוא חולץ מתוצאות חיפוש, לא מהמאגר. "
-        "פרטי קשר לעולם לא ממולאים אוטומטית."
-    )
-    for i, entry in enumerate(names):
-        _speaker_card(entry, result.get("topic") or "", result.get("lesson") or "", i)
-
-    if result.get("errors"):
-        st.markdown("##### שאילתות שלא רצו — הריצו ידנית")
-        for err in result["errors"]:
-            st.markdown(
-                f"`{err['query']}` — [DuckDuckGo]({err['manual']['duckduckgo']}) · "
-                f"[Google]({err['manual']['google']})"
-            )
+    smap = result.get("map") or {}
+    terms = [(a["label"], t) for a in smap.get("angles") or [] if a.get("on", True)
+             for t in (a.get("terms") or [])]
+    if terms:
+        st.markdown("**חיפוש ידני לפי מונחי המפה:**")
+        for label, term in terms:
+            links = ss.manual_search_links(f"{term} מרצה OR חוקר OR חוקרת")
+            st.markdown(f"- {label} · **{_clean(term)}** — [Google]({links['google']}) · "
+                        f"[DuckDuckGo]({links['duckduckgo']})")
+    if result.get("queries"):
+        with st.expander(f"🌐 מה החיפוש עשה ({len(result['queries'])})"):
+            for q in result["queries"]:
+                st.markdown(f"- {_clean(q)}")
 
 
 def _speaker_index_card(r: dict, history: list[dict], dup_count: int,

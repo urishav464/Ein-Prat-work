@@ -25,9 +25,52 @@ A turn re-sends its whole history on every API call, and a tool-using turn makes
 - `close_topic` returns `phase_opened` (the newly-current phase + open tasks) and `index_matches` — **a closed topic is a sentence, so the matcher falls back to its meaningful words** — and builds the default timeline when the evening is empty. An iron rule makes the model unfold all of that in the SAME response.
 - **Phones never enter chat context.** `render_context` shows candidates as name+status only; the test suite asserts a phone string does not appear.
 
-## The scout (the speaker-search screen's synthesis)
+## The scout (the speaker-search screen) — map → people → fit, TWO calls per search
 
-`scout_speakers(topic, lesson)` gathers through the throttled search paths and spends exactly ONE model call to curate 3–4 candidates. **Every fallback names its reason** (`reason`: `no_names` · `model_rejected_all` · `truncated` · `empty_reply` · `error`) and the screen speaks it in Hebrew — the internal token «empty synthesis» used to be printed inside a Hebrew sentence. The model's `rejected` list comes back on the empty path too, so nobody searches the same names again. A reply is checked for `stop_reason == "max_tokens"` and for empty text; a bare JSON array is accepted; names are matched to the input without geresh/quote marks (the model normalises «ד״ר» to «ד"ר»). `max_tokens` is 4000 — 2000 was tight for four Hebrew cards. **The no-invention rule is enforced in code, not requested in the prompt**: a returned name absent from the inputs is dropped; web names are force-flagged `⚠️ לאמת`; index status/approached/history attach from data. Every failure (no key, bad JSON, empty search) returns `{"fallback": True, "raw": ...}` and the screen renders the raw listing — the page must work without the synthesis.
+The screen used to quote the literal topic into fourteen fixed queries, mine names out of the
+snippets with regex and hand the survivors to ONE curation call — which is why a lesson topic
+made the search narrower instead of wider, and why a topic phrased as a question found nobody.
+Now:
+
+1. **`scout_map(topic, lesson_topic, angle)`** — no tools, `effort: low`, ~1k tokens. Reads the
+   topic as FIELDS: per angle a discipline, the kind of person, 2–4 **broad Hebrew terms — never
+   the topic phrase**, where such people sit, and one line on why the field speaks to the topic.
+   Cached in `session_state["scout_map"]` on `(topic, lesson_topic, angle)`; the trainee edits it
+   (terms as a text line, a checkbox per angle) before anything expensive runs.
+2. **`scout_speakers(topic, lesson, lesson_topic, progress, scout_map_result)`** — the model
+   searches the web itself: `web_search_20260318` (`max_uses = SCOUT_MAX_SEARCHES = 8`,
+   `allowed_callers: ["direct"]`, `user_location` IL/Jerusalem) + `web_fetch_20260318`
+   (`max_uses = 4`, `max_content_tokens = 8000`, free beyond tokens, can only open URLs its own
+   searches returned). Streamed, so every `server_tool_use` becomes a progress line («מחפש: …» /
+   «קורא: …»). `pause_turn` is resumed at most `SCOUT_MAX_CONTINUES = 2` times by sending the
+   assistant message back unchanged (`model_dump(exclude_none=True)` keeps `encrypted_content`),
+   then reported as `truncated`. Usage is summed across the resumptions and carries
+   `searches` / `fetches` — shown on screen, so the «about a shekel» claim is checkable.
+
+**Why `allowed_callers: ["direct"]` and not dynamic filtering.** Direct calls return every
+`web_search_tool_result` block whole; `_harvest_sources` collects every URL the model actually
+retrieved (search results, fetched pages, citations) and **that set is the no-invention rule
+now**: `_ground` keeps a candidate only if one of its links is in it, blanks a foreign `link`,
+drops the rest into `rejected` as `ungrounded`, strips contact fields, force-flags «⚠️ לאמת»,
+and derives confidence from the pages (institutional domain AND a page_age ≥ 2024 → `high`; one →
+`medium`). The old rule — a name is kept only if WE sent it — cannot exist when the model does
+the searching; the anchor moved from names to URLs. Dynamic filtering is the later cost
+optimisation, once we know what the runs really cost.
+
+**Every fallback names its reason** (`no_map` · `no_names` · `model_rejected_all` · `truncated` ·
+`empty_reply` · `search_disabled` — the org has web search off in the Claude Console and the API
+says so with a 400 · `error`), keeps the map and the queries, and the screen offers one manual
+link per term. The index is NOT a source on this screen, but every returned name is checked
+against it: **`_index_memory(name)`** is one line of institutional memory — what the person
+taught here and when (the seed's «(18.9.25)»-dated notes, this season's `lessons.speaker_name`),
+the last outreach with its Mishmar and date, the rating if any — or «אין תיעוד של הזמנה קודמת».
+Never «not in the index» read as a review.
+
+**Every run is saved**, the empty ones included: `slim_for_storage` keeps the map, the queries,
+the candidates without evidence snippets, the rejections, the outcome and the cost (~2–4 KB);
+`dm.mark_search_added` appends the names the pair actually took from it. `speaker_search.py`'s
+discovery (`search_candidates`, `extract_names`) is off the primary path; `verify_speaker` (the
+«אמת» button) and the CLI agents still use it.
 
 ## The prompt
 

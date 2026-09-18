@@ -69,7 +69,9 @@ interview, article). `Bash` / `Read` / `Grep` for READ-ONLY index lookups —
 `python3 -c "import data_manager as dm; print(dm.search_speakers_by_topic('<topic>'))"`, and
 `dm.get_speaker_status(name)` / `dm.get_outreach_for_speaker(id)` for the collision check.
 
-Note: the app's own `ddgs` path is proxy-blocked in sandboxes — use `WebSearch`, not that.
+Note: the app's search screen now works the way you do — `chat_agent.scout_speakers` gives the
+model Anthropic's server web-search tool along a field map (`scout_map`). The `ddgs` path in
+`speaker_search.py` is proxy-blocked in sandboxes and off the app's primary path — use `WebSearch`.
 
 **Never:**
 - **Any write to Supabase.** No `dm.add_new_speaker`, `add_lesson_speaker`, `record_outreach`,

@@ -894,21 +894,30 @@ def mishmar_progress(mishmar_id: Optional[int] = None,
     unclassified task can never silently vanish from every phase.
 
     Phase 1 is complete when the topic is SET — that is the real-world signal,
-    and the נושא tasks are auto-closed by both write paths when it happens. An
-    empty phase counts as complete: there is nothing to do in it.
+    and the נושא tasks are auto-closed by both write paths when it happens.
+
+    An empty phase counts as complete ONLY once it has been reached — every
+    phase before it complete. «Empty means done» used to hold unconditionally,
+    which was harmless while the seed gave every phase a task. Since schema 8
+    retired the generic «סגירת מרצים» rows, phase 2 has no tasks at all until
+    the topic closes and the skeleton creates the per-slot ones — so on every
+    Mishmar without a topic the stepper drew a ✓ on «מרצים ותוכן» and a green
+    bar toward לוגיסטיקה while נושא still read 0/1. Reached-and-empty stays
+    complete, so an empty last phase never becomes the eternal «current».
     """
     m = mishmar or get_mishmar(mishmar_id)
     if tasks is None:
         tasks = get_tasks_for_mishmar(m["id"])
 
-    phases = []
+    phases: list[dict] = []
     for spec in PHASES:
         ts = [t for t in tasks
               if _PHASE_OF_CATEGORY.get(t.get("category") or "תוכן") == spec["key"]]
         done = sum(1 for t in ts if t.get("status") == "DONE")
-        complete = done == len(ts)
+        reached = all(p["complete"] for p in phases)
+        complete = (done == len(ts)) if ts else reached
         if spec["key"] == "topic":
-            complete = bool(m.get("topic")) or (bool(ts) and complete)
+            complete = bool(m.get("topic")) or (bool(ts) and done == len(ts))
         phases.append({**spec, "tasks": ts, "done": done,
                        "total": len(ts), "complete": complete})
 
@@ -2160,15 +2169,93 @@ def backfill_speaker_domains() -> dict:
 def save_search(topic: str, results: dict, mishmar_id: Optional[int] = None,
                 lesson_topic: str = "", angle: str = "",
                 student_id: Optional[int] = None) -> Optional[int]:
-    """Keep a scan. A thorough search costs a minute of network and a model
-    call; without this, coming back to the screen pays it again and a partner
-    cannot see what has already been tried."""
+    """Keep a scan — EVERY scan, the ones that found nothing included.
+
+    A search costs a model call and up to eight web searches; without this,
+    coming back to the screen pays it again and a partner cannot see what has
+    already been tried. And the runs that returned nothing are exactly the
+    ones the instructor learns from: the map shows how the topic was read, the
+    queries show where it went wrong. The caller stores the SLIM record
+    (`chat_agent.slim_for_storage`): map, queries, candidates without their
+    evidence snippets, rejections, outcome, cost — a few KB, never the raw web.
+    Nothing is deleted on a schedule; the instructor has `delete_search`."""
     row = _one(_t("speaker_searches").insert({
         "mishmar_id": mishmar_id, "student_id": student_id,
         "topic": topic, "lesson_topic": lesson_topic or None,
         "angle": angle or None, "results_json": results,
     }).execute())
     return row.get("id") if row else None
+
+
+def get_searches_for(mishmar_ids: list[int], limit: int = 30) -> list[dict]:
+    """A pair's own searches — every Mishmar they own, newest first. The
+    screen used to list the one Mishmar selected in the form, which hid a
+    search saved under another of the pair's evenings (or under none)."""
+    ids = sorted({int(i) for i in mishmar_ids if i is not None})
+    if not ids:
+        return []
+    try:
+        rows = _rows(_t("speaker_searches").select("*")
+                     .in_("mishmar_id", ids).order("id", desc=True).limit(limit).execute())
+    except Exception as exc:
+        if _missing_relation(exc):
+            return []
+        raise
+    return _decode_search_rows(rows)
+
+
+def get_all_searches(limit: int = 200) -> list[dict]:
+    """The season's searches, for the instructor's table — with the trainee's
+    name resolved here (one extra cached read), not per row."""
+    try:
+        rows = _rows(_t("speaker_searches").select("*")
+                     .order("id", desc=True).limit(limit).execute())
+    except Exception as exc:
+        if _missing_relation(exc):
+            return []
+        raise
+    names = {int(s["id"]): s["name"] for s in get_students()}
+    for r in _decode_search_rows(rows):
+        r["student_name"] = names.get(int(r["student_id"]), "") if r.get("student_id") else ""
+    return rows
+
+
+def _decode_search_rows(rows: list[dict]) -> list[dict]:
+    for r in rows:
+        if isinstance(r.get("results_json"), str):
+            try:
+                r["results_json"] = json.loads(r["results_json"])
+            except (ValueError, TypeError):
+                r["results_json"] = {}
+    return rows
+
+
+def mark_search_added(search_id: Optional[int], name: str) -> None:
+    """The one thing about a search that only becomes known later: whether the
+    pair actually took a name from it. Appended once, on the row's own JSON."""
+    if not search_id or not (name or "").strip():
+        return
+    row = _one(_t("speaker_searches").select("id,results_json")
+               .eq("id", int(search_id)).execute())
+    if not row:
+        return
+    data = row.get("results_json") or {}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            data = {}
+    added = list(data.get("added") or [])
+    if name in added:
+        return
+    added.append(name)
+    _t("speaker_searches").update({"results_json": {**data, "added": added}}) \
+        .eq("id", int(search_id)).execute()
+
+
+def delete_search(search_id: int) -> None:
+    """The instructor's «🗑» — there is no retention rule, only a human's call."""
+    _t("speaker_searches").delete().eq("id", int(search_id)).execute()
 
 
 def get_searches(mishmar_id: Optional[int] = None, limit: int = 8) -> list[dict]:
@@ -2182,13 +2269,7 @@ def get_searches(mishmar_id: Optional[int] = None, limit: int = 8) -> list[dict]
         if _missing_relation(exc):
             return []
         raise
-    for r in rows:
-        if isinstance(r.get("results_json"), str):
-            try:
-                r["results_json"] = json.loads(r["results_json"])
-            except (ValueError, TypeError):
-                r["results_json"] = {}
-    return rows
+    return _decode_search_rows(rows)
 
 
 # --------------------------------------------------------------------------
@@ -2557,6 +2638,8 @@ _READS = {
     "get_logistics":            ("logistics_items",),
     "get_teaching_history":     ("lessons", "feedback"),
     "get_searches":             ("speaker_searches",),
+    "get_searches_for":         ("speaker_searches",),
+    "get_all_searches":         ("speaker_searches", "students"),
     # the three the audit found outside the registry: a speaker lookup used
     # by every write path, and the web-search cache — one DB round-trip per
     # _fetch, so a thorough scan paid up to 26 lookups before any network.
@@ -2599,6 +2682,7 @@ _WRITES = {
     "delete_logistics_item": ("logistics_items",),
     "set_invitation": ("mishmarim",),
     "save_search": ("speaker_searches",),
+    "mark_search_added": ("speaker_searches",), "delete_search": ("speaker_searches",),
     "cache_put": ("search_cache",),
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),

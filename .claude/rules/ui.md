@@ -140,6 +140,14 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Per-slot ratings are `st.feedback("stars")`**: returns `0–4` or `None`; the form maps to
   `1–5` and **skips unrated slots** (an unrated slot is not a 4). Probe: `[data-testid=stFeedback]`
   → `[data-testid=stFeedbackButton]`; the icons' `inner_text` is the literal word `star`.
+- **The search screen is a two-step form: «בנה מפה» → editable map cards → «סרוק»** (`_map_step`,
+  keyed `card-map-{angle}-{nonce}`; the nonce bumps per map so the term inputs and checkboxes
+  remount with fresh defaults; `_edited_map` reads them back by key). The map is a cheap
+  model call; «סרוק» is the sanctioned `page` site (long-running, non-fragment screen) beside
+  «אמת»; «מפה מחדש» / «נסו שוב» are `on_click=_clear_map`, never `pop(); st.rerun()`. Every run
+  is saved and listed ABOVE the form, unfolded, for all of the pair's Mishmarim (`_search_history`);
+  the instructor's dashboard has the season's table with «פתח» (`_goto(NAV_SEARCH)`) and «🗑».
+  Probe trap: a Streamlit checkbox's `<input>` sits behind the styled box — click its `label`.
 - **The angle picker is `st.segmented_control`** with short labels (`LESSON_ANGLES`) and the
   explanations in `help` (`ANGLE_HINTS`). Probe: `[data-testid=stButtonGroup]`; it returns `None`
   when nothing is selected, so the code falls back to «בלי המלצה».

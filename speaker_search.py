@@ -4,7 +4,12 @@ speaker_search.py — finding real, living, reachable speakers for a Mishmar.
 This is the hardest and most failure-prone step in building a Mishmar
 (system_rules.md §4), so it is a first-class feature, not a lookup.
 
-TWO PATHS, BOTH PRIMARY — this is the core design decision:
+SINCE THE MAP (chat_agent.scout_map / scout_speakers) the app's search screen no
+longer comes here for discovery: the model searches the web itself along a
+field map. This module now serves the «אמת» button (`verify_speaker`), the
+manual-link fallback (`manual_search_links`) and the CLI agents.
+
+TWO PATHS — the core design decision, as it stood before the map:
 
   1. DISCOVERY (`search_candidates`) — fires broad queries at academic and
      institutional sites and *mines names out of the results*. This is what

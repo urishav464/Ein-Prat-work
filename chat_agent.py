@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Iterator, Optional
 
 import archive
@@ -755,86 +756,211 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 # The in-app speaker scout — the speaker-search screen's synthesis step
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# The scout: map → people → fit
+#
+# Two model calls per search. The FIRST (`scout_map`, no tools, cheap) turns
+# the topic into fields: for each angle, a discipline, the kind of person, a
+# few BROAD Hebrew search terms — never the topic phrase — and where such
+# people sit. The trainee sees the map, edits it, and only then pays for the
+# SECOND (`scout_speakers`): the model searches the web itself, with the
+# server-side web_search and web_fetch tools, reads staff pages and returns
+# names with the angle they answer. The old pipeline quoted the literal topic
+# into fourteen fixed queries and mined names out of snippets with regex —
+# which is why a lesson topic made it narrower instead of wider.
+# --------------------------------------------------------------------------
+
+SCOUT_MAX_SEARCHES = 8      # web searches one run may spend — $10 per 1,000
+SCOUT_MAX_FETCHES = 4       # pages it may open — free beyond their tokens
+SCOUT_MAX_CONTINUES = 2     # pause_turn resumptions before «truncated»
+SCOUT_FETCH_TOKENS = 8000   # cap on a fetched page
+SCOUT_SEARCH_TOOL = "web_search_20260318"
+SCOUT_FETCH_TOOL = "web_fetch_20260318"
+
+ANGLES = {"1": "יסודות", "2": "ערעור / טוויסט", "3": "זווית מפתיעה"}
+
+# Grounding: an evidence URL on one of these is what makes a name «high».
+_INSTITUTIONAL = ("ac.il", "org.il", "hartman", "vanleer", "bac.org", "herzog",
+                  "shazar", "pardes", "alma", "bina", "einprat", "gov.il", "muni.il")
+
+MAP_SYSTEM = """\
+אתה עוזר לצוות של מדרשת עין פרת לתכנן משמר — ערב לימוד של לילה שלם, בנוי
+משלושה שיעורים ושעת חבורות. כל שיעור פונה לנושא הערב מזווית אחרת:
+1. **יסודות** — התחום שהנושא שייך אליו. היסטוריון/ית, חוקר/ת, איש/אשת אקדמיה,
+   לימוד טקסטואלי. מה צריך לדעת כדי לדבר על זה בכלל.
+2. **ערעור / טוויסט** — תחום שמערער על היסודות. פילוסוף/ית, הוגה, מחשבת ישראל,
+   מי שהופך את השאלה.
+3. **זווית מפתיעה** — תחום סמוך שלא היינו חושבים עליו. אמנות, קולנוע, פסיכולוגיה,
+   סוציולוגיה, מדע, מוזיקה, השוואתי.
+
+תקבל נושא של משמר, אולי גם נושא של שיעור בתוכו, ואולי זווית שנבחרה. תפקידך:
+**לתרגם את הנושא לתחומים** ולומר איזה סוג של אדם עוסק בהם — לא למצוא אנשים.
+
+כללים:
+- `terms` הם 2–4 מונחי חיפוש **רחבים** בעברית, כפי שחוקרים בתחום מכנים אותו
+  (למשל «זיכרון קולקטיבי», «היסטוריוגרפיה», «פסיכולוגיה של הזיכרון»). **לעולם
+  לא הביטוי של הנושא עצמו** ולא משפט — הנושא הוא שאלה של ערב; מונח חיפוש הוא
+  שם של שדה מחקר.
+- `where` — 1–3 מוסדות או חוגים בישראל שבהם אנשים כאלה יושבים באמת. אל תמציא
+  חוג שאינך בטוח שקיים; מוסד כללי («האוניברסיטה העברית») עדיף על חוג מומצא.
+- `who` — סוג האדם במילה או שתיים, לא שם של אדם.
+- `why` — משפט אחד: איך התחום הזה מדבר עם הנושא הספציפי.
+- אם נבחרה זווית — החזר רק אותה. אחרת החזר את שלושתן.
+- עברית בלבד, JSON בלבד, בלי הקדמות.
+
+{"reading": "משפט אחד — על מה הנושא באמת, במילים של שדה מחקר",
+ "angles": [{"key": "1", "label": "יסודות", "field": "...", "who": "...",
+             "terms": ["...", "..."], "where": ["..."], "why": "..."}]}
+"""
+
 SCOUT_SYSTEM = """\
-אתה סוקר מועמדים להרצאה במשמר של מדרשת עין פרת. תקבל שמות שנכרו מתוצאות חיפוש
-ברשת, ולכל שם — הכותרות, התקצירים והקישורים שנמצאו עליו, כולל בדיקת עומק.
+אתה סוקר מרצים למשמר של מדרשת עין פרת — ערב לימוד של לילה שלם, שלושה שיעורים
+מזוויות שונות על נושא אחד. תקבל את הנושא ו**מפה**: לכל זווית — תחום, סוג האדם,
+מונחי חיפוש ומוסדות. תפקידך למצוא **אנשים חיים ופעילים בישראל** שעוסקים בתחומים
+האלה ומתאימים לנושא, בעזרת חיפוש ברשת.
 
-בחר את **ארבעת** המועמדים הטובים ביותר לנושא. כללים קשיחים:
-1. **רק שמות שמופיעים בקלט.** אל תמציא שם, תואר, שיוך מוסדי או פרט קשר.
-2. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד —
-   שפינוזה, לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין.
-3. כל שם נושא דגל "⚠️ לאמת" — הוא לא אומת על ידי אדם.
-4. **פרטי קשר לעולם לא.** אין טלפון, אין אימייל, גם אם הם מופיעים בתוצאה.
-   במקום זה — הקישור המוסדי שבו אדם יוכל למצוא אותם.
-5. כל שדה שאי אפשר לבסס על מה שקיבלת — החזר "" ריק. ניחוש הוא המצאה.
-   עדיף שדה ריק על פרט שגוי שחניך יסתמך עליו.
-6. `link` חייב להיות אחד הקישורים שקיבלת בקלט, ורצוי כזה שנוגע לנושא.
-7. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
+השיטה:
+1. חפש לפי **מונחי המפה והמוסדות** — לא לפי ניסוח הנושא. דפים שמכילים את ניסוח
+   הנושא הם מאמרים; אנשים נמצאים בדפי סגל, רשימות עמיתים, תוכניות כנסים, פרקי
+   פודקאסט, ספרים שיצאו לאחרונה, ראיונות.
+2. כשעלה שם מבטיח — פתח דף אחד עליו (עמוד מוסדי, ראיון) כדי לבסס שיוך ופעילות
+   עדכנית. אל תפתח יותר מדף אחד לאדם.
+3. החזר **1–2 שמות לכל זווית** שנשארה במפה, ולא יותר מ-{max} בסך הכל.
+
+כללים קשיחים:
+1. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד — שפינוזה,
+   לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין. ספק — לא להחזיר.
+2. **פרטי קשר לעולם לא.** אין טלפון, אין אימייל, גם אם הם מופיעים בדף. במקום זה —
+   הקישור המוסדי שבו אדם יוכל למצוא אותם.
+3. כל שדה שאינך יכול לבסס על דף שקראת — החזר "" ריק. ניחוש הוא המצאה, ועדיף
+   שדה ריק על פרט שגוי שחניך יסתמך עליו כשהוא מתקשר.
+4. `link` ו-`evidence[].href` חייבים להיות כתובות שהופיעו **בתוצאות החיפוש שלך**.
+   כתובת שלא ראית — אל תכתוב.
+5. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
    מרופדת גרועה מרשימה קצרה וכנה.
-8. ב-`rejected` פרט שמות ששקלת ופסלת ולמה (משפט קצר) — כדי שלא יחפשו אותם שוב.
+6. ב-`rejected` פרט שמות ששקלת ופסלת ולמה (משפט קצר) — כדי שלא יחפשו אותם שוב.
+7. עברית בלבד. JSON בלבד, בלי הקדמה ובלי סיכום אחרי.
 
-החזר JSON בלבד, במבנה:
-{"candidates": [{"name": "...", "title": "ד\"ר/הרב/... או \"\"",
-  "affiliation": "מוסד / מקום עבודה, אם עולה מהתוצאות",
-  "region_hint": "היכן הוא/היא יושב/ת, אם עולה מהתוצאות",
+{"candidates": [{"name": "שם בלי תואר", "title": "ד\\"ר/הרב/פרופ׳ או \\"\\"",
+  "angle": "1|2|3",
+  "affiliation": "מוסד / חוג, אם עולה מהדפים",
+  "region_hint": "עיר או אזור, אם עולה מהדפים",
   "bio": "משפט אחד — מי זה ובמה עוסק/ת",
-  "rationale": "משפט אחד למה מתאים לנושא הזה",
-  "link": "קישור למאמר/ראיון מתוך הקלט שמתקשר לנושא",
-  "evidence": [{"title": "...", "href": "..."}], "flags": ["⚠️ לאמת", ...]}],
+  "fit": "משפט אחד — מה בעבודה שלו/ה נוגע לנושא הזה דווקא",
+  "link": "הקישור הכי רלוונטי לנושא מתוך מה שקראת",
+  "evidence": [{"title": "...", "href": "..."}]}],
  "rejected": [{"name": "...", "why": "..."}]}
 
 --- חומר עזר קבוע (זהה בכל קריאה) ---
 
-המוסדות שהתוכנית מזמינה מהם, לזיהוי שיוך מוסדי בתוצאות: האוניברסיטה העברית,
-בר-אילן, תל אביב, בן-גוריון, חיפה, מכון שלום הרטמן, מכון ון ליר, בית אבי חי,
-בית מורשה, מכללת הרצוג, מרכז זלמן שזר, מכון פרדס, עלמא, בינה, קולות, המדרשה
-באורנים, ישיבת הקיבוץ הדתי, מכון הדר, מדרשת עין פרת עצמה.
+המוסדות שהתוכנית מזמינה מהם, לזיהוי שיוך מוסדי: האוניברסיטה העברית, בר-אילן,
+תל אביב, בן-גוריון, חיפה, מכון שלום הרטמן, מכון ון ליר, בית אבי חי, בית מורשה,
+מכללת הרצוג, מרכז זלמן שזר, מכון פרדס, עלמא, בינה, קולות, המדרשה באורנים,
+ישיבת הקיבוץ הדתי, מכון הדר, מדרשת עין פרת עצמה.
 
 רצועות מרחק מהמדרשה (כפר אדומים) — הערב נגמר ב-02:00, ולכן מרחק שוקל יותר
 מאשר באירוע יום: 🟢 עד ~40 דק׳ — ירושלים · מעלה אדומים · כפר אדומים · גוש
 עציון · אפרת · מבשרת. 🟡 ~1–1.5 שעות — בית שמש · מודיעין · תל אביב · המרכז ·
 רעננה · פתח תקווה · רחובות. 🔴 שעתיים ומעלה — חיפה · הגליל · הגולן · באר שבע ·
-אילת · הנגב · חו״ל. ⚪ לא ידוע מהתוצאות. אל תנחש רצועה — אם אין מקום בתוצאות,
-השאר region_hint ריק.
+אילת · הנגב · חו״ל. אל תנחש רצועה — אם אין מקום בדפים, השאר region_hint ריק.
 
-דוגמה קצרה לרשומה תקינה (השדות ריקים כשאין ביסוס):
-{"name": "רות לוי", "title": "ד\"ר", "affiliation": "החוג למחשבת ישראל, האוניברסיטה העברית",
- "region_hint": "ירושלים", "bio": "חוקרת הגות יהודית מודרנית, מלמדת גם במכון הרטמן",
- "rationale": "מאמרה על תשובה וזיכרון נוגע ישירות בשאלת הערב",
- "link": "https://…/article", "evidence": [{"title": "…", "href": "https://…"}],
- "flags": ["⚠️ לאמת"]}
-
+דוגמה לרשומה תקינה (השדות ריקים כשאין ביסוס):
+{"name": "רות לוי", "title": "ד\\"ר", "angle": "2",
+ "affiliation": "החוג למחשבת ישראל, האוניברסיטה העברית", "region_hint": "ירושלים",
+ "bio": "חוקרת הגות יהודית מודרנית, מלמדת גם במכון הרטמן",
+ "fit": "מאמרה על תשובה וזיכרון נוגע ישירות בשאלת הערב",
+ "link": "https://…/article", "evidence": [{"title": "…", "href": "https://…"}]}
 דוגמה לדחייה נכונה: {"name": "ברוך שפינוזה", "why": "הוגה היסטורי — טקסט ללמוד, לא אדם להזמין"}.
-דוגמה לשדה ריק נכון: affiliation "" כשהתוצאות מזכירות רק את שם המאמר ולא מוסד.
 """
 
 
-def _history_line(name: str) -> Optional[str]:
-    """One line of institutional memory, or None — silence is not a review."""
+def _index_memory(name: str) -> Optional[str]:
+    """One line of institutional memory for a name that is ALREADY in the
+    index, or None when it is not. The index is not searched on this screen —
+    but a name the model brings back must not be presented as new when we have
+    invited the person before, and «when» is the useful part: what they taught
+    here and on which date (the seed's «מה העביר אצלנו» notes carry
+    «(18.9.25)»-style dates), this season's evenings, the last approach in the
+    outreach journal, and the rating if any. Only what exists; silence beyond
+    membership is said as such, never read as a review."""
     try:
-        h = archive.speaker_history(name)
+        rows = dm.get_speaker_status(name)
     except Exception:
         return None
-    if h.get("avg_rating"):
-        return f"⭐ {h['avg_rating']} ({h['times_rated']} דירוגים)"
-    return None
+    if not rows:
+        return None
+    r = rows[0]
+    bits = ["‼️ במאגר"]
+    if len(rows) > 1:
+        bits.append(f"{len(rows)} רשומות עם השם הזה — לבדוק מי מהם")
+    # what the seed remembers: «נושא (18.9.25) · נושא (11.12.25)»
+    dated = []
+    for field in ("notes", "expertise_topics"):
+        for part in re.split(r"\s·\s|;\s*|\n", r.get(field) or ""):
+            if re.search(r"\(\s*\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s*\)", part):
+                dated.append(part.strip())
+    # this season's evenings, by name (lessons.speaker_name)
+    try:
+        hist = dm.get_teaching_history().get(name) or {}
+        dates = {m["id"]: m.get("gregorian_date") for m in dm.get_all_mishmarim()}
+        for l in hist.get("taught") or []:
+            when = dates.get(l.get("mishmar_id"))
+            dated.append(f"{l.get('title') or 'שיעור'} — משמר #{l.get('mishmar_id'):02d}"
+                         + (f" ({when})" if when else ""))
+    except Exception:
+        pass
+    if dated:
+        bits.append("לימד/ה אצלנו: " + " · ".join(dict.fromkeys(dated)))
+    if r.get("has_outreach") and r.get("speaker_id"):
+        try:
+            o = (dm.get_outreach_for_speaker(int(r["speaker_id"])) or [None])[0]
+        except Exception:
+            o = None
+        if o:
+            target = (f" למשמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "")
+            when = f" ({o['gregorian_date']})" if o.get("gregorian_date") else ""
+            who = f" · פנה/תה: {o['student_name']}" if o.get("student_name") else ""
+            bits.append(f"פנייה אחרונה: {o.get('status') or ''}{target}{when}{who}")
+    elif r.get("current_status") and not str(r["current_status"]).startswith("⬜"):
+        bits.append(f"סטטוס במאגר: {r['current_status']}")
+    try:
+        fb = dm.get_feedback_for_speaker(name)
+        ratings = [f["rating"] for f in fb if f.get("rating")]
+        if ratings:
+            bits.append(f"⭐ {sum(ratings) / len(ratings):.1f} ({len(ratings)} דירוגים)")
+    except Exception:
+        pass
+    if len(bits) == 1:
+        return "‼️ במאגר — אין תיעוד של הזמנה קודמת"
+    return " · ".join(bits)
 
 
 _NAME_MARKS = str.maketrans("", "", "׳״'\"")
 
 
-def _norm_name(name: str) -> str:
-    return " ".join((name or "").translate(_NAME_MARKS).split())
-
-
 def _usage_of(resp) -> dict:
     usage = getattr(resp, "usage", None)
+    if not usage:
+        return {}
+    srv = getattr(usage, "server_tool_use", None)
     return {
         "input": getattr(usage, "input_tokens", None),
         "output": getattr(usage, "output_tokens", None),
         "cache_read": getattr(usage, "cache_read_input_tokens", None),
         "cache_write": getattr(usage, "cache_creation_input_tokens", None),
-    } if usage else {}
+        "searches": getattr(srv, "web_search_requests", None) if srv else None,
+        "fetches": getattr(srv, "web_fetch_requests", None) if srv else None,
+    }
+
+
+def _usage_sum(parts: list[dict]) -> dict:
+    """Usage across a paused-and-resumed turn is the sum of its requests."""
+    out: dict = {}
+    for u in parts:
+        for k, v in (u or {}).items():
+            if v is not None:
+                out[k] = (out.get(k) or 0) + v
+    return out
 
 
 def _scout_json(text: str) -> dict:
@@ -854,175 +980,295 @@ def _scout_json(text: str) -> dict:
     return data
 
 
-def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
-                   progress=None) -> dict:
-    """One web search → 5 researched candidates, or a fallback rendered raw.
-
-    Gathers through the throttled discovery path and spends exactly ONE model
-    call to curate. The shared index is NOT searched — the screen is for
-    finding people we do not know yet — but index membership is still checked,
-    because two pairs approaching the same person is the hazard this warns about.
-    Every failure — no API key, refused JSON, empty search — degrades to
-    {"fallback": True, "raw": ...} so the screen keeps working.
-    """
-    raw = ss.search_candidates(topic, lesson=lesson, lesson_topic=lesson_topic,
-                               include_index=False, progress=progress)
-    if raw.get("skipped"):
-        return {"fallback": True, "raw": raw}
-
-    # Compact inputs: the synthesis pays per token, and evidence snippets are
-    # long. Project before sending, exactly like tool results are compacted.
-    # ---- deepen before curating ------------------------------------------
-    # Discovery mines names out of snippets; that is enough to KNOW a name and
-    # nowhere near enough to describe a person. Two extra searches per finalist
-    # (the ⚠️ לאמת checks we already had) buy the institutional page, the recent
-    # activity and the article the card wants — and let us raise confidence on
-    # evidence rather than on a guess.
-    shortlist = (raw.get("web_names") or [])[:ss.ENRICH_TOP_N]
-    for k, e in enumerate(shortlist, 1):
-        if progress:
-            progress(f"מעמיק על {e['name']} ({k}/{len(shortlist)})")
-        try:
-            v = ss.verify_speaker(e["name"], topic=raw.get("subject") or topic, depth=2)
-        except Exception:
-            continue
-        e["evidence"] = (e.get("evidence") or []) + (v.get("evidence") or [])
-        e["checklist"] = v.get("checklist") or {}
-        e["recent_years"] = v.get("recent_years") or []
-        for f in v.get("flags", []):
-            if f not in e.setdefault("flags", []):
-                e["flags"].append(f)
-        # Promotion is evidence-based: an institutional page AND recent activity.
-        blob = " ".join(f"{x.get('title','')} {x.get('body','')} {x.get('href','')}"
-                        for x in e["evidence"])
-        institutional = any(k in blob for k in
-                            ("ac.il", "org.il", "אוניברסיט", "מכון", "מכללה", "הרטמן",
-                             "ון ליר", "בית מורשה", "הרצוג", "אבי חי"))
-        if institutional and e["recent_years"] and e.get("confidence") != "high":
-            e["confidence"] = "high"
-            e["promoted"] = True
-
-    web_part = [{
-        "name": e.get("name"),
-        "confidence": e.get("confidence"),
-        "recent_years": e.get("recent_years") or [],
-        # snippets, not just titles: affiliation and a topical article have to
-        # be GROUNDED in what we send, and one title rarely carries both.
-        # four snippets, trimmed: measured ≈4.9k tokens per call at 5×(140+220),
-        # ≈3.1k at 4×(120+160) — the grounding survives, a third of the bill does not.
-        "evidence": [{"title": (ev.get("title") or "")[:120],
-                      "body": (ev.get("body") or "")[:160],
-                      "href": ev.get("href")} for ev in e.get("evidence", [])[:4]],
-        "flags": e.get("flags", []),
-    } for e in shortlist]
-
-    if not web_part:
-        # nothing that looks like a person — no model call, no charge
-        return {"fallback": True, "raw": raw, "reason": "no_names"}
-
-    payload = json.dumps(
-        {"topic": topic, "lesson_topic": lesson_topic,
-         "lesson": lesson or "לא נבחר — שקול כל זווית",
-         "web_names": web_part},
-        ensure_ascii=False)
-
+def scout_map(topic: str, lesson_topic: str = "", angle: str = "") -> dict:
+    """The cheap first call: the topic read as FIELDS, one entry per angle.
+    Returns {"reading", "angles"} or {"error", "reason"}; never raises."""
+    payload = json.dumps({
+        "topic": topic, "lesson_topic": lesson_topic or "",
+        "angle": (f"{angle} — {ANGLES[angle]}" if angle in ANGLES else "לא נבחרה — שלוש הזוויות"),
+    }, ensure_ascii=False)
     try:
         client = get_client()
-        # The system prompt is the only stable part of this request — the
-        # payload is unique per search. Sonnet 5 caches a prefix only from
-        # 1024 tokens up, which is why SCOUT_SYSTEM carries a fixed reference
-        # block; the 1h TTL fits how searches cluster in one evening. `medium`
-        # effort: curating six names into JSON is not a hard-reasoning task,
-        # and the default `high` spends thinking tokens it does not need.
-        if progress:
-            progress("מסנן ומדרג — ארבעה שמות שנבדקו")
         resp = client.messages.create(
-            model=MODEL,
-            max_tokens=4000,
-            system=[{"type": "text", "text": SCOUT_SYSTEM,
-                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
-            output_config={"effort": "medium"},
+            model=MODEL, max_tokens=1200,
+            system=MAP_SYSTEM,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": payload}],
         )
-        usage_out = _usage_of(resp)
-        # Each failure names itself: the screen used to print the internal
-        # token inside a Hebrew sentence, and a truncated reply, an empty one
-        # and a malformed one all looked the same.
-        if getattr(resp, "stop_reason", None) == "max_tokens":
-            return {"fallback": True, "raw": raw, "reason": "truncated",
-                    "error": "max_tokens", "usage": _usage_of(resp)}
         text = "".join(getattr(b, "text", "") for b in (resp.content or [])
                        if getattr(b, "type", None) == "text")
-        if not text.strip():
-            return {"fallback": True, "raw": raw, "reason": "empty_reply",
-                    "error": "empty reply", "usage": _usage_of(resp)}
         data = _scout_json(text)
-        candidates = data.get("candidates") or []
-        rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
     except Exception as exc:                     # noqa: BLE001 — named, not hidden
-        return {"fallback": True, "raw": raw, "reason": "error",
-                "error": f"{type(exc).__name__}: {exc}"}
-
-    # The no-invention rule, enforced and not just requested: a candidate
-    # whose name matches nothing we sent is dropped. Matched WITHOUT the
-    # geresh/quote marks — the model normalises «ד״ר» to «ד"ר» and a real
-    # candidate used to fall out of the list for a punctuation mark.
-    known_web = {_norm_name(w["name"]): w["name"] for w in web_part if w.get("name")}
-    known_links = {ev["href"] for w in web_part for ev in w["evidence"] if ev.get("href")}
-    vetted = []
-    for c in candidates[:MAX_SCOUT_CANDIDATES]:
-        if not isinstance(c, dict):
+        return {"error": f"{type(exc).__name__}: {exc}", "reason": "error",
+                "angles": []}
+    angles = []
+    for a in data.get("angles") or []:
+        if not isinstance(a, dict) or str(a.get("key")) not in ANGLES:
             continue
-        name = known_web.get(_norm_name(c.get("name") or ""))
-        if not name:
-            continue                       # a name we never sent is invented
-        c["name"] = name
-        c["source"] = "web"
-        if "⚠️ לאמת" not in (c.get("flags") or []):
-            c.setdefault("flags", []).append("⚠️ לאמת")
-        # A link we did not supply is invented too — drop it rather than send a
-        # trainee to a URL nobody has seen.
-        if c.get("link") and c["link"] not in known_links:
-            c["link"] = ""
-        # Contact details are never carried, whatever the model returned.
-        for banned in ("contact", "phone", "email", "טלפון"):
+        key = str(a["key"])
+        if angle in ANGLES and key != angle:
+            continue
+        terms = [str(x).strip() for x in (a.get("terms") or []) if str(x).strip()]
+        if not terms:
+            continue
+        angles.append({
+            "key": key, "label": ANGLES[key],
+            "field": str(a.get("field") or "").strip(),
+            "who": str(a.get("who") or "").strip(),
+            "terms": terms[:4],
+            "where": [str(x).strip() for x in (a.get("where") or []) if str(x).strip()][:3],
+            "why": str(a.get("why") or "").strip(),
+            "on": True,
+        })
+    if not angles:
+        return {"error": "the map came back without angles", "reason": "empty_reply",
+                "angles": []}
+    angles.sort(key=lambda a: a["key"])
+    return {"reading": str(data.get("reading") or "").strip(), "angles": angles,
+            "usage": _usage_of(resp)}
+
+
+def _scout_tools() -> list[dict]:
+    return [
+        {"type": SCOUT_SEARCH_TOOL, "name": "web_search",
+         "max_uses": SCOUT_MAX_SEARCHES,
+         # direct, not dynamic filtering: every result block then comes back
+         # whole, and the harvested URLs are what grounds the names (below)
+         "allowed_callers": ["direct"],
+         "user_location": {"type": "approximate", "country": "IL",
+                           "city": "Jerusalem", "timezone": "Asia/Jerusalem"}},
+        {"type": SCOUT_FETCH_TOOL, "name": "web_fetch",
+         "max_uses": SCOUT_MAX_FETCHES, "max_content_tokens": SCOUT_FETCH_TOKENS},
+    ]
+
+
+def _harvest_sources(content, sources: dict, queries: list[str]) -> None:
+    """Every URL the model actually saw, from the response's own blocks —
+    search results, fetched pages and citations — plus the queries it ran."""
+    for b in content or []:
+        kind = getattr(b, "type", None) or (b.get("type") if isinstance(b, dict) else None)
+        get = (lambda o, k: getattr(o, k, None)) if not isinstance(b, dict) else (lambda o, k: o.get(k))
+        if kind == "server_tool_use":
+            inp = get(b, "input") or {}
+            q = inp.get("query") if isinstance(inp, dict) else None
+            u = inp.get("url") if isinstance(inp, dict) else None
+            if q:
+                queries.append(f"🔎 {q}")
+            elif u:
+                queries.append(f"📄 {u}")
+        elif kind == "web_search_tool_result":
+            items = get(b, "content")
+            for it in (items if isinstance(items, list) else []):
+                url = getattr(it, "url", None) if not isinstance(it, dict) else it.get("url")
+                if url:
+                    sources[url] = {
+                        "title": getattr(it, "title", None) if not isinstance(it, dict) else it.get("title"),
+                        "page_age": getattr(it, "page_age", None) if not isinstance(it, dict) else it.get("page_age"),
+                    }
+        elif kind == "web_fetch_tool_result":
+            res = get(b, "content")
+            url = getattr(res, "url", None) if not isinstance(res, dict) else (res or {}).get("url")
+            if url:
+                doc = getattr(res, "content", None) if not isinstance(res, dict) else res.get("content")
+                title = getattr(doc, "title", None) if not isinstance(doc, dict) else (doc or {}).get("title")
+                sources.setdefault(url, {"title": title, "page_age": None})
+        elif kind == "text":
+            for c in get(b, "citations") or []:
+                url = getattr(c, "url", None) if not isinstance(c, dict) else c.get("url")
+                if url:
+                    sources.setdefault(url, {
+                        "title": getattr(c, "title", None) if not isinstance(c, dict) else c.get("title"),
+                        "page_age": None})
+
+
+def _confidence(urls: list[str], sources: dict) -> str:
+    """high = an institutional page AND recent activity in the evidence;
+    medium = one of the two; low = neither. The same promotion rule the old
+    scout applied to mined snippets, applied to the pages the model read."""
+    institutional = any(any(k in (u or "").lower() for k in _INSTITUTIONAL) for u in urls)
+    years = []
+    for u in urls:
+        years += [int(y) for y in re.findall(r"20\d\d", str((sources.get(u) or {}).get("page_age") or ""))]
+    recent = any(y >= 2024 for y in years)
+    if institutional and recent:
+        return "high"
+    if institutional or recent:
+        return "medium"
+    return "low"
+
+
+def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
+    """The no-invention rule, enforced in code: a candidate is kept only when
+    at least one of its links is a page the model actually retrieved; a link
+    outside that set is blanked; contact fields are stripped whatever came
+    back; every name is «⚠️ לאמת». The old scout kept a name only if it was
+    among the names WE sent — with the model doing the searching, the
+    anchor moves from names to URLs."""
+    out = []
+    for c in candidates[:MAX_SCOUT_CANDIDATES * 2]:
+        if not isinstance(c, dict) or not (c.get("name") or "").strip():
+            continue
+        name = " ".join(str(c["name"]).split())
+        ev = [e for e in (c.get("evidence") or []) if isinstance(e, dict) and e.get("href")]
+        kept_ev = [e for e in ev if e["href"] in sources]
+        link = c.get("link") if c.get("link") in sources else ""
+        urls = [e["href"] for e in kept_ev] + ([link] if link else [])
+        if not urls:
+            rejected.append({"name": name, "why": "לא נתמך בדף שהחיפוש הביא — נזרק (ungrounded)"})
+            continue
+        for e in kept_ev:
+            e.setdefault("title", (sources.get(e["href"]) or {}).get("title") or "")
+        for banned in ("contact", "phone", "email", "טלפון", "מייל"):
             c.pop(banned, None)
-        # The collision warning survives dropping the index SEARCH: what matters
-        # is whether another pair is already talking to this person.
-        try:
-            status_rows = dm.get_speaker_status(name)
-        except Exception:
-            status_rows = []
-        cur = status_rows[0] if status_rows else {}
-        c["index_status"] = cur.get("current_status")
-        c["already_approached"] = bool(cur.get("has_outreach"))
-        c["history"] = _history_line(name) if cur else None
-        if cur:
-            c.setdefault("flags", []).append("‼️ כבר במאגר")
-        vetted.append(c)
+        angle = str(c.get("angle") or "")
+        out.append({
+            "name": name, "title": str(c.get("title") or "").strip(),
+            "angle": angle if angle in ANGLES else "",
+            "affiliation": str(c.get("affiliation") or "").strip(),
+            "region_hint": str(c.get("region_hint") or "").strip(),
+            "bio": str(c.get("bio") or "").strip(),
+            "fit": str(c.get("fit") or "").strip(),
+            "rationale": str(c.get("rationale") or c.get("fit") or "").strip(),
+            "link": link or (kept_ev[0]["href"] if kept_ev else ""),
+            "evidence": [{"title": e.get("title") or "", "href": e["href"]} for e in kept_ev][:4],
+            "flags": ["⚠️ לאמת"], "source": "web",
+            "confidence": _confidence(urls, sources),
+        })
+        if len(out) >= MAX_SCOUT_CANDIDATES:
+            break
+    return out
 
-    if not vetted:
-        # the model ran and rejected everything — an honest answer, and the
-        # reasons go to the screen so nobody searches the same names again
-        return {"fallback": True, "raw": raw, "reason": "model_rejected_all",
-                "error": "empty synthesis", "rejected": rejected,
-                "usage": _usage_of(resp)}
 
-    # Carry the mined confidence and the travel band onto each card, and report
-    # honestly how many are genuinely strong — the screen must never present
-    # four weak names as though the target was met.
-    by_name = {e["name"]: e for e in shortlist}
+def _search_disabled(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "web search" in s or "web_search" in s
+
+
+def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
+                   progress=None, scout_map_result: Optional[dict] = None) -> dict:
+    """The expensive call: the model searches the web along the map and comes
+    back with grounded names. `progress` gets one Hebrew line per search and
+    per page opened. Every failure degrades to {"fallback": True, "reason":…}
+    with the map and the queries kept, so the screen can still hand the pair
+    one manual link per term. `lesson` is kept for the saved-search columns."""
+    smap = scout_map_result or {}
+    angles = [a for a in (smap.get("angles") or []) if a.get("on", True)]
+    if not angles:
+        return {"fallback": True, "reason": "no_map", "map": smap, "queries": [],
+                "rejected": [], "usage": {}}
+    payload = json.dumps({
+        "topic": topic, "lesson_topic": lesson_topic or "",
+        "reading": smap.get("reading") or "",
+        "angles": [{k: a[k] for k in ("key", "label", "field", "who", "terms", "where", "why")}
+                   for a in angles],
+        "max_candidates": min(MAX_SCOUT_CANDIDATES, 2 * len(angles)),
+    }, ensure_ascii=False)
+
+    sources: dict = {}
+    queries: list[str] = []
+    usages: list[dict] = []
+    messages: list[dict] = [{"role": "user", "content": payload}]
+    text = ""
+    try:
+        client = get_client()
+        for attempt in range(SCOUT_MAX_CONTINUES + 1):
+            with client.messages.stream(
+                model=MODEL, max_tokens=5000,
+                system=[{"type": "text",
+                         "text": SCOUT_SYSTEM.replace("{max}", str(MAX_SCOUT_CANDIDATES)),
+                         "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                output_config={"effort": "medium"},
+                tools=_scout_tools(),
+                messages=messages,
+            ) as stream:
+                seen_blocks = 0
+                for event in stream:
+                    if getattr(event, "type", None) != "content_block_stop":
+                        continue
+                    snap = stream.current_message_snapshot
+                    blocks = list(snap.content or [])
+                    for b in blocks[seen_blocks:]:
+                        seen_blocks += 1
+                        if getattr(b, "type", None) == "server_tool_use" and progress:
+                            inp = getattr(b, "input", None) or {}
+                            if inp.get("query"):
+                                progress(f"מחפש: {inp['query']}")
+                            elif inp.get("url"):
+                                progress(f"קורא: {inp['url'][:90]}")
+                msg = stream.get_final_message()
+            usages.append(_usage_of(msg))
+            _harvest_sources(msg.content, sources, queries)
+            text += "".join(getattr(b, "text", "") for b in (msg.content or [])
+                            if getattr(b, "type", None) == "text")
+            if getattr(msg, "stop_reason", None) == "pause_turn" and attempt < SCOUT_MAX_CONTINUES:
+                if progress:
+                    progress("ממשיך את החיפוש…")
+                messages.append({"role": "assistant",
+                                 "content": [b.model_dump(exclude_none=True) for b in msg.content]})
+                text = ""            # the final answer comes after the resumption
+                continue
+            break
+        usage = _usage_sum(usages)
+        stop = getattr(msg, "stop_reason", None)
+        if stop == "max_tokens" or stop == "pause_turn":
+            return {"fallback": True, "reason": "truncated", "error": stop, "map": smap,
+                    "queries": queries, "rejected": [], "usage": usage}
+        if not text.strip():
+            return {"fallback": True, "reason": "empty_reply", "error": "empty reply",
+                    "map": smap, "queries": queries, "rejected": [], "usage": usage}
+        if progress:
+            progress("מסנן ומבסס — רק שמות שנתמכים בדף שנקרא")
+        data = _scout_json(text)
+    except ChatUnavailable as exc:
+        return {"fallback": True, "reason": "error", "error": str(exc), "map": smap,
+                "queries": queries, "rejected": [], "usage": {}}
+    except Exception as exc:                     # noqa: BLE001 — named, not hidden
+        reason = "search_disabled" if _search_disabled(exc) else "error"
+        return {"fallback": True, "reason": reason, "map": smap,
+                "error": f"{type(exc).__name__}: {exc}",
+                "queries": queries, "rejected": [], "usage": _usage_sum(usages)}
+
+    rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
+    vetted = _ground(data.get("candidates") or [], sources, rejected)
     for c in vetted:
-        src = by_name.get(c["name"], {})
-        c["confidence"] = src.get("confidence") or "low"
-        c["promoted"] = bool(src.get("promoted"))
-        c["recent_years"] = src.get("recent_years") or []
         c["region_flag"] = dm.region_flag(c.get("region_hint"), c.get("affiliation"))
+        c["memory"] = _index_memory(c["name"])
+        c["already_approached"] = bool(c["memory"] and "פנייה אחרונה" in c["memory"])
+        if c["memory"]:
+            c["flags"].append("‼️ כבר במאגר")
+    if not vetted:
+        return {"fallback": True, "reason": "model_rejected_all" if data.get("candidates") else "no_names",
+                "map": smap, "queries": queries, "rejected": rejected[:8], "usage": usage,
+                "sources": len(sources)}
     strong = sum(1 for c in vetted if c["confidence"] == "high")
-    return {"fallback": False, "candidates": vetted, "raw": raw,
-            "rejected": [r for r in rejected if isinstance(r, dict)][:6],
-            "strong": strong, "target": ss.MIN_STRONG_CANDIDATES,
-            "usage": usage_out}
+    return {"fallback": False, "candidates": vetted, "rejected": rejected[:6],
+            "strong": strong, "target": ss.MIN_STRONG_CANDIDATES, "usage": usage,
+            "queries": queries, "map": smap, "sources": len(sources)}
+
+
+def slim_for_storage(result: dict) -> dict:
+    """What a search leaves behind: the map, the queries, the names with the
+    fields that describe a person, the rejections, the outcome and the cost.
+    Never evidence snippets or raw pages. A few KB, so every run is kept."""
+    smap = result.get("map") or {}
+    return {
+        "fallback": bool(result.get("fallback")),
+        "reason": result.get("reason"),
+        "error": (result.get("error") or "")[:200] or None,
+        "map": {"reading": smap.get("reading") or "",
+                "angles": [{k: a.get(k) for k in ("key", "label", "field", "who", "terms", "where", "why", "on")}
+                           for a in (smap.get("angles") or [])]},
+        "queries": list(result.get("queries") or [])[:20],
+        "candidates": [{k: c.get(k) for k in
+                        ("name", "title", "angle", "affiliation", "region_hint", "region_flag",
+                         "bio", "fit", "rationale", "link", "evidence", "flags", "confidence",
+                         "memory", "already_approached")}
+                       for c in (result.get("candidates") or [])],
+        "rejected": list(result.get("rejected") or [])[:8],
+        "strong": result.get("strong", 0), "target": result.get("target", ss.MIN_STRONG_CANDIDATES),
+        "usage": result.get("usage") or {},
+        "added": list(result.get("added") or []),
+    }
 
 
 # --------------------------------------------------------------------------
