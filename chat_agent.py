@@ -882,9 +882,18 @@ def _index_memory(name: str) -> Optional[str]:
     here and on which date (the seed's «מה העביר אצלנו» notes carry
     «(18.9.25)»-style dates), this season's evenings, the last approach in the
     outreach journal, and the rating if any. Only what exists; silence beyond
-    membership is said as such, never read as a review."""
+    membership is said as such, never read as a review.
+
+    Reads only the SEASON-WIDE cached lists — `get_speakers_with_status`,
+    `get_all_outreach`, `get_teaching_history`, `get_all_mishmarim` — and looks
+    the name up in Python, so five candidates cost the same as one and a
+    second search in the same two minutes costs nothing. Per-name readers here
+    were the index page's 46-round-trip regression over again."""
+    norm = dm.normalize_name(name)
+    if not norm:
+        return None
     try:
-        rows = dm.get_speaker_status(name)
+        rows = [r for r in dm.get_speakers_with_status() if norm in (r.get("name_norm") or "")]
     except Exception:
         return None
     if not rows:
@@ -899,7 +908,8 @@ def _index_memory(name: str) -> Optional[str]:
         for part in re.split(r"\s·\s|;\s*|\n", r.get(field) or ""):
             if re.search(r"\(\s*\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s*\)", part):
                 dated.append(part.strip())
-    # this season's evenings, by name (lessons.speaker_name)
+    # this season's evenings (lessons.speaker_name) and the ratings, one grouped read
+    hist = {}
     try:
         hist = dm.get_teaching_history().get(name) or {}
         dates = {m["id"]: m.get("gregorian_date") for m in dm.get_all_mishmarim()}
@@ -911,25 +921,23 @@ def _index_memory(name: str) -> Optional[str]:
         pass
     if dated:
         bits.append("לימד/ה אצלנו: " + " · ".join(dict.fromkeys(dated)))
+    o = None
     if r.get("has_outreach") and r.get("speaker_id"):
         try:
-            o = (dm.get_outreach_for_speaker(int(r["speaker_id"])) or [None])[0]
+            o = next((x for x in dm.get_all_outreach()
+                      if x.get("speaker_id") == r["speaker_id"]), None)   # newest first
         except Exception:
             o = None
-        if o:
-            target = (f" למשמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "")
-            when = f" ({o['gregorian_date']})" if o.get("gregorian_date") else ""
-            who = f" · פנה/תה: {o['student_name']}" if o.get("student_name") else ""
-            bits.append(f"פנייה אחרונה: {o.get('status') or ''}{target}{when}{who}")
+    if o:
+        target = (f" למשמר #{o['mishmar_id']:02d}" if o.get("mishmar_id") else "")
+        when = f" ({o['gregorian_date']})" if o.get("gregorian_date") else ""
+        who = f" · פנה/תה: {o['student_name']}" if o.get("student_name") else ""
+        bits.append(f"פנייה אחרונה: {o.get('status') or ''}{target}{when}{who}")
     elif r.get("current_status") and not str(r["current_status"]).startswith("⬜"):
         bits.append(f"סטטוס במאגר: {r['current_status']}")
-    try:
-        fb = dm.get_feedback_for_speaker(name)
-        ratings = [f["rating"] for f in fb if f.get("rating")]
-        if ratings:
-            bits.append(f"⭐ {sum(ratings) / len(ratings):.1f} ({len(ratings)} דירוגים)")
-    except Exception:
-        pass
+    ratings = [f["rating"] for f in (hist.get("feedback") or []) if f.get("rating")]
+    if ratings:
+        bits.append(f"⭐ {sum(ratings) / len(ratings):.1f} ({len(ratings)} דירוגים)")
     if len(bits) == 1:
         return "‼️ במאגר — אין תיעוד של הזמנה קודמת"
     return " · ".join(bits)

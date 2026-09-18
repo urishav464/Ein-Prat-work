@@ -2095,8 +2095,15 @@ def _map_step(held: dict) -> None:
 
 
 def _clear_map() -> None:
-    """on_click: forget the map and any result under it."""
-    st.session_state.pop("scout_map", None)
+    """on_click: forget the map, any result under it — and the nonce-keyed
+    widget entries the map's cards created, or every «מפה מחדש» leaves six
+    dead session_state keys behind for the life of the browser session (the
+    task editor's nonce cleanup, for the same reason)."""
+    held = st.session_state.pop("scout_map", None) or {}
+    nonce = held.get("nonce")
+    for a in (held.get("map") or {}).get("angles") or []:
+        st.session_state.pop(f"map-terms-{a['key']}-{nonce}", None)
+        st.session_state.pop(f"map-on-{a['key']}-{nonce}", None)
     st.session_state.pop("scout_result", None)
 
 
