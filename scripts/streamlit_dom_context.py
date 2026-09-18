@@ -41,6 +41,15 @@ FACTS = """
 - `st.caption` → `stCaptionContainer` (NOT `stMarkdownContainer`); `st.feedback` →
   `stFeedback` / `stFeedbackButton`; `st.segmented_control` and `st.pills` → `stButtonGroup`
   (labels via DynamicButtonLabel, not markdown — need their own RTL rule).
+- **`stButtonGroup` is the whole widget and is `display: block`** — the label plus ONE child
+  `div` that is the actual button row (`flex`, `nowrap`, `overflow: auto hidden`, no gap). Layout
+  rules belong on that child; `justify-content` on the group is a no-op. Its buttons carry NO
+  testid of their own — the bundle builds theirs as `stBaseButton-${{kind}}`
+  (`stBaseButton-segmented_control` / `-segmented_controlActive`), a template string, so they
+  never appear in the list above: another blind spot for a testid-only audit, like `data-baseweb`
+  and `role`. Streamlit rounds the row's END corners by DOM order and gives every button but the
+  last `margin-inline-start: -1px` to collapse adjacent borders — both are physical-direction
+  assumptions that land backwards under RTL.
 - Material icons are ligature text: a `<span translate="no">` whose text is the icon NAME. The
   bundle sets `translate: no` in exactly two places, both icon components, and only some carry
   `stIconMaterial` — the status widget's tick is `stExpanderIconCheck`. A font override that
