@@ -327,7 +327,7 @@ TOOLS: list[dict] = [
         "name": "save_lesson",
         "description": (
             "שומר או מעדכן מקטע בלוז הערב. slot_order הוא 1,2,3... "
-            "השעות נגזרות מהמשכים אוטומטית מ-20:00 — אל תקבע שעות ידנית. "
+            "השעות נגזרות מהמשכים אוטומטית, משעת ההתחלה של המשמר — אל תקבע שעות ידנית. "
             "הפסקות הן משבצות לוז רגילות עם is_break."
         ),
         "input_schema": {
@@ -531,11 +531,12 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
             out: dict[str, Any] = {"ok": True, "topic": topic,
                                    "tasks_marked_done": closed}
             # The structure appears the moment the topic closes — same as the
-            # form path: the 20:00 skeleton, only if the evening is empty.
+            # form path: the skeleton from the evening's own start time, only
+            # if the evening is empty.
             created = dm.create_default_timeline(mishmar_id)
             if created:
                 out["timeline_created"] = (
-                    f"נבנה שלד ערב: {created} משבצות מ-20:00 — שלושה שיעורים, "
+                    f"נבנה שלד ערב: {created} משבצות מ-{dm.mishmar_start(mishmar_id)} — שלושה שיעורים, "
                     "הפסקות, ושעת חבורות. הכותרות ריקות ומחכות לתוכן."
                 )
             progress = dm.mishmar_progress(mishmar_id=mishmar_id)

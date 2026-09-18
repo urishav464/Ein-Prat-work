@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim built by pairs of trainees. Two halves: a **Streamlit web app** (9 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout (`chat_agent.scout_speakers`), one model call per search.
+The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim built by pairs of trainees. Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout (`chat_agent.scout_speakers`), one model call per search.
 
 **Stack:** Python · Streamlit · Supabase (PostgreSQL over PostgREST) · Anthropic API (Sonnet 5).
 
@@ -64,11 +64,13 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   whole-app run, so the task editor is a popover), and the three evening panels are wrapped in
   `_safe()` so one broken panel cannot blank a column.
 - **The season's data starts as Markdown.** `students_tasks.md` seeds a first run against an empty
-  Supabase — the nine trainees from its index table, the 21 evenings, their tasks — and
-  `app_meta.seeded` guards it forever after. A database seeded *before* the real names landed
-  in that file is fixed from the instructor's dashboard (`dm.apply_trainee_roster`, behind a
-  two-step dialog) or with `migrations/2026-09-assign-trainees.sql` — same mapping;
-  `scripts/assign_trainees.py` regenerates the SQL and the Markdown together.
+  Supabase — the trainees from its index table, the 21 evenings, their tasks — and
+  `app_meta.seeded` guards it forever after. **The file stays the source of the roster after
+  that too**: `dm.roster_drift()` diffs it against the live tables by name, and the dashboard's
+  always-present «👥 חניכים ושיבוץ» panel applies the difference (`dm.apply_trainee_roster`,
+  behind a two-step dialog) — a trainee leaving and the pairs being re-drawn, not just the first
+  time the names arrived. `migrations/2026-09-assign-trainees.sql` is the same mapping for the SQL
+  Editor; `scripts/assign_trainees.py` regenerates it and the Markdown together.
 
 ## Where the detailed knowledge lives
 

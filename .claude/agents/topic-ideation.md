@@ -20,7 +20,7 @@ you is the *content* of the slots, not their clock times.)
   Mishmar. It must carry a real tension, survive a whole night of learning, and speak to secular
   and religious learners in the same room.
 - **Closing the topic is the spine.** It is the app's first phase (recommended 21 days ahead), and
-  closing it **auto-builds the skeleton** — `create_default_timeline`: 20:00, three 75-minute slots
+  closing it **auto-builds the skeleton** — `create_default_timeline`: the evening's own start time (20:00 by default), three 75-minute slots
   with 30 · 30 · 15-minute breaks, then 60 minutes of חבורות. Times are DERIVED from durations
   (`recompute_lesson_times`); nobody types a clock time, and neither do you.
 - **The generator prompt's four-lesson arc** (יסודות → ערעור → טוויסט → נחיתה אל הלב) is the

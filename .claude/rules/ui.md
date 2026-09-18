@@ -333,5 +333,21 @@ More probe traps that produced false test results here: **input placeholders nev
 - Sanctioned off-scale values: the sidebar nav card padding (`0.6rem 0.9rem`) and the phone
   button paddings (`.25rem .55rem`) are deliberate fine-tuning — an audit may list them, not fail
   on them.
-- `[data-testid="stButtonGroup"]` (`segmented_control`, `st.pills`) labels through
-  `DynamicButtonLabel`, not markdown — it needs its own RTL rule (added), like `stCaptionContainer`.
+- **`[data-testid="stButtonGroup"]` is the WHOLE widget, and it is `display: block`.**
+  (`segmented_control`, `st.pills`.) Its labels go through `DynamicButtonLabel`, not markdown, so
+  it needs its own RTL rule, like `stCaptionContainer` — but the buttons live one level down, in
+  the group's child `div`, and that is where every layout rule belongs: `justify-content` on the
+  group itself was a no-op for three releases. The children have no `data-testid` of their own
+  (the bundle builds them as `stBaseButton-${kind}`), which is why they are invisible to a
+  testid-only audit — the same blind spot as `data-baseweb` and `role`.
+  **Three things measured on 1.64 broke the angle picker under RTL** (reported from a phone):
+  the row is `flex; nowrap; overflow: auto hidden` with no gap, so four Hebrew labels adding up to
+  408px inside a 404px row simply scrolled out of sight — 76px of it clipped away at 390px;
+  Streamlit rounds the END corners by DOM order, so «בלי המלצה» carried the LEFT radii while
+  sitting at the RIGHT edge; and every button but the last carries
+  `margin-inline-start: -1px` to collapse adjacent borders, which under RTL is the right side and
+  pushed the first button 1px PAST the row — the «box sitting on the border» in the report.
+  The fix refuses to mirror any of it: `flex-wrap: wrap` + `gap: var(--sp-1)` + `overflow: visible`
+  on the row, and `border-radius: 8px; margin: 0` on the buttons, which turns joined segments into
+  pills and retires the whole first/last-child question. Measured after, at 1500px and 390px:
+  every button inside the row, symmetric corners, two lines on a phone, no scroll anywhere.

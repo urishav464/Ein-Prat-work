@@ -143,8 +143,30 @@ RTL_CSS = """
   [data-testid="stExpander"] summary { direction: rtl; text-align: right; }
   [data-testid="stProgress"] { direction: rtl; }
   /* segmented_control and st.pills label through DynamicButtonLabel, not markdown —
-     the markdown RTL rule never reaches them (the stCaptionContainer lesson again) */
-  [data-testid="stButtonGroup"] { direction: rtl; justify-content: flex-start; }
+     the markdown RTL rule never reaches them (the stCaptionContainer lesson again).
+     stButtonGroup is the WHOLE widget and it is `display: block` — label plus one
+     child div that holds the buttons — so `justify-content` on it was always a
+     no-op, and the layout rules belong on that child.
+     Measured on 1.64 at 1500px: the row is `flex; nowrap; overflow: auto hidden`
+     with no gap, the four Hebrew labels add up to 408px inside a 404px row, and
+     Streamlit rounds the end corners by DOM order — so under RTL «בלי המלצה» got
+     the LEFT corners while sitting at the RIGHT edge, with its box ending 1px
+     past the row's own, and at 390px 76px of the group was clipped away outright.
+     Wrapping, a gap and a symmetric radius on every button retire the whole
+     first/last-child question instead of trying to mirror it. */
+  [data-testid="stButtonGroup"] { direction: rtl; }
+  [data-testid="stButtonGroup"] > div {
+      flex-wrap: wrap;
+      gap: var(--sp-1);
+      overflow: visible;
+      justify-content: flex-start;
+  }
+  /* and `margin-inline-start: -1px` on every button but the last — Streamlit
+     collapsing adjacent borders into one. Under RTL inline-start is the RIGHT,
+     so it drags the first button 1px past the row's own edge: precisely the
+     «box sitting on the border» in the report. With a real gap between the
+     pills there is no shared border left to collapse. */
+  [data-testid="stButtonGroup"] > div > button { border-radius: 8px; margin: 0; }
   [data-testid="stChatInput"] textarea { direction: rtl; text-align: right; }
 
   /* ---- Sidebar: warm ground, and the nav radio restyled as cards.
@@ -980,22 +1002,22 @@ def _dashboard_body() -> None:
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
     owners = dm.get_owners_by_mishmar()
-    # A database seeded before the real names landed still says «חניך N» on
-    # every card. The SQL migration was the first answer; the second is this
-    # button, which applies the same mapping from the Markdown under the
-    # instructor's confirmation — the only way a human can fix data here
-    # without an SQL editor.
+    # The roster in the database and the roster in students_tasks.md drift
+    # apart every time the season changes — a trainee leaves, the pairs are
+    # re-drawn. This card is the loud half of the answer (see the always-there
+    # «חניכים ושיבוץ» panel at the foot of this screen for the quiet half):
+    # it applies the same mapping as migrations/2026-09-assign-trainees.sql,
+    # under the instructor's confirmation and without an SQL editor.
     placeholders = dm.roster_placeholders()
     unowned = not any(owners.get(m["id"]) for m in mishmarim
                       if m["id"] not in dm.STAFF_BUILT_MISHMARIM)
-    if placeholders or unowned:
+    drift = dm.roster_drift()
+    if placeholders or unowned or drift["mishmarim"] or drift["added"] or drift["removed"]:
         with st.container(border=True, key="card-roster"):
-            st.markdown("**👥 שמות החניכים והשיבוץ עוד לא הוחלו במסד.**")
-            st.caption(
-                (f"{len(placeholders)} שורות עדיין נקראות «חניך N». " if placeholders else
-                 "אף משמר אינו משובץ לחניכים. ")
-                + "הלחיצה מחליפה את השמות ואת זוגות #03–#21 לפי `students_tasks.md` — "
-                  "אותו שינוי שעושה `migrations/2026-09-assign-trainees.sql`, בלי SQL Editor.")
+            st.markdown("**👥 השיבוץ במסד שונה מהקובץ.**")
+            st.caption(_roster_drift_line(placeholders, unowned, drift)
+                       + " הלחיצה מיישרת את השמות ואת זוגות #03–#21 לפי `students_tasks.md` — "
+                         "אותו שינוי שעושה `migrations/2026-09-assign-trainees.sql`.")
             if st.button("👥 החל את השמות והשיבוץ מהקובץ", key="roster-open", type="primary"):
                 _roster_dialog()
     # Two season-wide reads, shared with «מה דורש התערבות» below.
@@ -1052,6 +1074,72 @@ def _dashboard_body() -> None:
             )
         else:
             _empty("עוד לא התקיים משמר.", "הטבלה תתמלא אחרי הערב הראשון.")
+
+    # The evening's opening hour. It lives here and only here: the whole clock
+    # of a Mishmar derives from it, so it is the instructor's call, not a field
+    # a pair can nudge from inside their own workfile.
+    with st.expander("🕗 שעת ההתחלה של הערב"):
+        st.caption(
+            "כל שעות המקטעים נגזרות מהשעה הזו ומהמשכים — שינוי כאן מזרים מחדש את כל הערב. "
+            f"ברירת המחדל של העונה היא {dm.EVENING_START}."
+        )
+        moved = [m for m in mishmarim
+                 if (m.get("start_time") or dm.EVENING_START) != dm.EVENING_START]
+        st.caption(
+            ("משמרים בשעה אחרת: "
+             + " · ".join(f"#{m['id']:02d} ב-{m['start_time']}" for m in moved))
+            if moved else f"כל המשמרים מתחילים ב-{dm.EVENING_START}."
+        )
+        labels = {m["id"]: f"#{m['id']:02d} · {_fmt_date(m['gregorian_date'])}"
+                  for m in mishmarim}
+        # quarter hours around the real range; the value is stored as text,
+        # exactly like lessons.start_time
+        slots = [f"{h:02d}:{q:02d}" for h in range(18, 22) for q in (0, 15, 30, 45)]
+        first = (upcoming or mishmarim)[0]
+        now_at = (first.get("start_time") or dm.EVENING_START)
+        with st.form("start-time"):
+            s1, s2 = st.columns([1.4, 1])
+            s1.selectbox("איזה משמר?", list(labels), key="start-mid",
+                         format_func=lambda i: labels[i],
+                         index=list(labels).index(first["id"]))
+            # only the FIRST render honours index — after that the instructor's
+            # own choice is in session_state, which is what a form should do
+            s2.selectbox("שעת ההתחלה", slots, key="start-hhmm",
+                         index=slots.index(now_at) if now_at in slots else
+                         slots.index(dm.EVENING_START))
+            st.checkbox("להחיל על כל המשמרים שטרם התקיימו", key="start-all")
+            st.form_submit_button(
+                "💾 שמור שעה", type="primary", on_click=_save_start_time_clicked,
+                args=([m["id"] for m in upcoming],))
+
+    # The quiet half of the roster answer. The loud card above only shows when
+    # the two disagree — which meant that once it had been used it vanished,
+    # and the NEXT change to the pairs had no way into the database at all.
+    # A control that can only be used once is a control that cannot be used.
+    with st.expander("👥 חניכים ושיבוץ"):
+        st.caption(
+            "המקור הוא `students_tasks.md` — נוצר על ידי `scripts/assign_trainees.py`. "
+            "כאן רואים מה יש במסד מול מה שכתוב בקובץ, ומיישרים ביניהם. "
+            "המשימות, המרצים ומבנה הערבים לא נוגעים."
+        )
+        st.markdown(f"**מה שונה כרגע:** {_roster_drift_line(placeholders, unowned, drift)}")
+        rows = []
+        for m in mishmarim:
+            if m["id"] in dm.STAFF_BUILT_MISHMARIM:
+                continue
+            rows.append({
+                "בקובץ": " + ".join(drift["file_pairs"].get(m["id"], [])) or "—",
+                "במסד": " + ".join(owners.get(m["id"], [])) or "—",
+                "תאריך": _fmt_date(m["gregorian_date"]),
+                "משמר": f"#{m['id']:02d}",
+            })
+        st.dataframe(rows, width="stretch", hide_index=True)
+        # a plain `if`, like the other dialog openers: opening a dialog is a
+        # rerun anyway, so on_click buys nothing
+        if st.button("👥 החל את השמות והשיבוץ מהקובץ", key="roster-open-panel",
+                     disabled=not (placeholders or unowned or drift["mishmarim"]
+                                   or drift["added"] or drift["removed"])):
+            _roster_dialog()
 
     if auth_configured():
         with st.expander("🔗 שיוך חשבונות"):
@@ -1183,6 +1271,22 @@ def _save_emails_clicked(student_ids: list[int]) -> None:
     st.toast(f"נשמרו {n} שיוכים")
 
 
+def _save_start_time_clicked(all_upcoming: list[int]) -> None:
+    """on_click of «💾 שמור שעה»: writes the start time (and reflows every
+    slot behind it) before the fragment run that follows the submit."""
+    mid = st.session_state.get("start-mid")
+    stamp = st.session_state.get("start-hhmm")
+    if not mid or not stamp:
+        return
+    targets = all_upcoming if st.session_state.get("start-all") else [mid]
+    ok = [t for t in targets if dm.set_mishmar_start_time(t, stamp)]
+    if not ok:
+        st.toast("השעה לא נשמרה — פורמט לא תקין")
+        return
+    st.toast(f"{len(ok)} משמרים מתחילים ב-{stamp} · שעות המקטעים חושבו מחדש"
+             if len(ok) > 1 else f"משמר #{ok[0]:02d} מתחיל ב-{stamp}")
+
+
 def _close_topic_clicked(mid: int) -> None:
     """on_click of «🎯 סגור את הנושא»: topic, its tasks and the default
     timeline in one callback, one fragment run after."""
@@ -1195,7 +1299,7 @@ def _close_topic_clicked(mid: int) -> None:
             dm.update_task_status(t["id"], "DONE")
     # The structure appears the moment the topic closes.
     created = dm.create_default_timeline(mid)
-    st.toast(f"הנושא נסגר! נבנה שלד ערב של {created} משבצות מ-20:00")
+    st.toast(f"הנושא נסגר! נבנה שלד ערב של {created} משבצות מ-{dm.mishmar_start(mid)}")
 
 
 def _update_topic_clicked(mid: int) -> None:
@@ -1491,12 +1595,27 @@ def _countdown_chip(m: dict) -> str:
     return _chip(f"בעוד {days} ימים", kind)
 
 
-def _next_mishmar_hero(m: dict, progress: dict) -> None:
-    """The trainee's ONE place to answer "what now?" — Mishmar identity,
-    the phase stepper, and only the current phase's open tasks."""
+def _partner_chip(owners: list[str], me: str) -> str:
+    """Who the trainee is building this evening WITH. The pair is the unit of
+    work here, so the one name that is news is the other one — «👥 עם X»,
+    not the pair, which would spend half the chip telling them their own name.
+    A staff-built evening, or one the database has no pair for, says «צוות»."""
+    partners = [n for n in owners if n != me]
+    if not partners:
+        return _owners_chip([])
+    return _chip("👥 עם " + " · ".join(partners), "blue")
+
+
+def _next_mishmar_hero(m: dict, progress: dict,
+                       owners: Optional[list[str]] = None, me: str = "") -> None:
+    """The trainee's ONE place to answer "what now?" — Mishmar identity, who
+    they are building it with, the phase stepper, and only the current phase's
+    open tasks."""
     cur = progress["phases"][progress["current"]]
     with st.container(border=True, key=f"card-hero-{m['id']}"):
         chips = [_countdown_chip(m)]
+        if not m.get("is_staff_built"):
+            chips.append(_partner_chip(owners or [], me))
         if m.get("mishmar_type"):
             chips.append(_chip(m["mishmar_type"], "gold"))
         st.markdown(
@@ -1575,11 +1694,11 @@ def _mini_mishmar_card(m: dict, progress: dict,
 
 def show_student_view(student_name: str) -> None:
     st.title(f"שלום, {student_name}")
-    _student_body(st.session_state.student_id)
+    _student_body(st.session_state.student_id, student_name)
 
 
 @st.fragment
-def _student_body(student_id: int) -> None:
+def _student_body(student_id: int, student_name: str = "") -> None:
     """The trainee's home under the greeting, as ONE fragment: ✓ / ▶ / ↩ on a
     task card used to restart the whole app for a status flip on the same
     screen. The hero, its stepper and the cards all read the same task list,
@@ -1614,8 +1733,13 @@ def _student_body(student_id: int) -> None:
         _card_grid(sorted(overdue, key=lambda t: str(t.get("due_date") or "9999")),
                    "ovd", link=True)
 
+    # One read for the hero AND the strip below it — the hero used to be drawn
+    # before this line existed, which is why it never named the partner.
+    owners = dm.get_owners_by_mishmar()
+
     st.markdown("#### המשמר הבא שלי")
-    _next_mishmar_hero(hero, progress[hero["id"]])
+    _next_mishmar_hero(hero, progress[hero["id"]],
+                       owners.get(hero["id"], []), student_name)
 
     # by the PARSED date, not by id — the hero already learned that lesson
     others = sorted((m for m in mine if m["id"] != hero["id"]),
@@ -1623,7 +1747,6 @@ def _student_body(student_id: int) -> None:
     if others:
         st.markdown("#### שאר המשמרים שלי")
         st.caption("הם מחכים בתור — כל אחד ייפתח כשיגיע זמנו. קובץ העבודה פתוח לכולם תמיד.")
-        owners = dm.get_owners_by_mishmar()
         # A wrapping flex row, not st.columns. Dealt round-robin into three
         # columns, a phone STACKED column 0 (#07, #21) before column 1 (#09) —
         # February before November. In a flex row the DOM order is the order
@@ -2513,7 +2636,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
     if lessons is None:
         lessons = dm.get_lessons(mid)
     if not lessons:
-        st.button("✨ צור את שלד הערב (20:00, שלושה שיעורים + חבורות)",
+        st.button(f"✨ צור את שלד הערב ({dm.mishmar_start(mid)}, שלושה שיעורים + חבורות)",
                   type="primary", width="stretch",
                   on_click=dm.create_default_timeline, args=(mid,))
         return
@@ -2866,26 +2989,67 @@ def _logistics_panel(mid: int, m: dict,
                               on_click=_upload_invitation_clicked, args=(mid, ukey))
 
 
+def _roster_drift_line(placeholders: list[dict], unowned: bool, drift: dict) -> str:
+    """One sentence naming exactly what the file says and the database does not.
+    «N שורות שונות» told the instructor nothing he could check; the Mishmar
+    numbers and the names do."""
+    if drift.get("error"):
+        return drift["error"]
+    bits = []
+    if placeholders:
+        bits.append(f"{len(placeholders)} שורות עדיין נקראות «חניך N»")
+    if unowned:
+        bits.append("אף משמר אינו משובץ לחניכים")
+    if drift["mishmarim"]:
+        shown = " · ".join(f"#{m:02d}" for m in drift["mishmarim"][:8])
+        more = f" ועוד {len(drift['mishmarim']) - 8}" if len(drift["mishmarim"]) > 8 else ""
+        bits.append(f"{len(drift['mishmarim'])} משמרים עם זוג אחר ({shown}{more})")
+    if drift["added"]:
+        bits.append("חניכים חדשים בקובץ: " + " · ".join(drift["added"]))
+    if drift["removed"]:
+        bits.append("ירדו מהרשימה: " + " · ".join(drift["removed"]))
+    return " · ".join(bits) if bits else "שום דבר — המסד והקובץ זהים."
+
+
 @st.dialog("👥 שמות החניכים והשיבוץ")
 def _roster_dialog() -> None:
     """Apply students_tasks.md to `students` + `assignments`. Two steps, like
-    the reset: it renames rows, deletes placeholder rows past the roster, and
-    replaces the pairs of every trainee Mishmar. Idempotent, so a second run
-    is harmless — but it is still the instructor's call, not the app's."""
+    the reset: it adds missing names, REMOVES a trainee the file no longer
+    lists, and replaces the pairs of every trainee Mishmar. Idempotent, so a
+    second run is harmless — but it is still the instructor's call, not the
+    app's, and a deletion is not something to discover afterwards, so the
+    dialog names every change before the checkbox."""
+    drift = dm.roster_drift()
     st.markdown(
-        "מעדכן את שמות החניכים לפי טבלת האינדקס ב-`students_tasks.md`, מוחק שורות "
-        "placeholder שנותרו מעבר לרשימה («חניך 10»), ומשבץ מחדש את משמרים #03–#21 "
-        "לפי שורות «אחראים». **משמרי הצוות (#01–#02) לא נוגעים.** "
+        "מעדכן את שמות החניכים לפי טבלת האינדקס ב-`students_tasks.md` ומשבץ מחדש את "
+        "משמרים #03–#21 לפי שורות «אחראים». **משמרי הצוות (#01–#02) לא נוגעים.** "
         "משימות, מרצים ומבנה הערבים נשארים כפי שהם."
     )
+    if drift.get("error"):
+        st.error(drift["error"])
+        return
+    if drift["mishmarim"]:
+        st.markdown("**משמרים שישתנו:** "
+                    + " · ".join(f"#{m:02d}" for m in drift["mishmarim"]))
+    if drift["added"]:
+        st.markdown("**ייווספו:** " + " · ".join(drift["added"]))
+    if drift["removed"]:
+        st.warning(
+            "**יימחקו מהמסד:** " + " · ".join(drift["removed"])
+            + " — השם יורד מרשימת החניכים ומכל השיבוצים, והכניסה שלו לאפליקציה נסגרת. "
+              "מה שהוא כתב (פניות למרצים, משוב) נשאר, בלי שם הכותב."
+        )
+    if not (drift["mishmarim"] or drift["added"] or drift["removed"]):
+        st.success("המסד והקובץ כבר זהים — אין מה להחיל.")
     ok = st.checkbox("אני מבין/ה — להחיל את השמות והשיבוץ", key="roster-ok")
     if st.button("👥 החל", key="roster-apply", type="primary", disabled=not ok):
         res = dm.apply_trainee_roster()
         if res.get("error"):
             st.error(res["error"])
             return
-        st.toast(f"{res['names']} שמות · שונו {res['renamed']} · נוספו {res['created']} · "
-                 f"נמחקו {res['deleted']} · {res['assignments']} שיבוצים")
+        gone = (" · הוסרו: " + " · ".join(res["removed"])) if res["removed"] else ""
+        st.toast(f"{res['names']} שמות · נוספו {res['created']} · נמחקו {res['deleted']}"
+                 f"{gone} · {res['assignments']} שיבוצים")
         st.rerun()   # closes the dialog; the cards read the new names
 
 

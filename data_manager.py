@@ -223,7 +223,7 @@ def _now_iso() -> str:
 # check a database one version behind looks perfectly healthy and then throws a
 # redacted APIError deep inside a screen — which is exactly how a missing
 # `logistics_items` blanked the whole workfile instead of saying «run the SQL».
-REQUIRED_SCHEMA_VERSION = 8
+REQUIRED_SCHEMA_VERSION = 9
 
 
 def _missing_relation(exc: Exception) -> bool:
@@ -699,6 +699,26 @@ def set_mishmar_topic(mishmar_id: int, topic: str) -> bool:
     return bool(_rows(resp))
 
 
+_RE_HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def set_mishmar_start_time(mishmar_id: int, hhmm: str) -> bool:
+    """Move the evening's opening hour, and reflow every slot behind it.
+
+    Stored as text in `HH:MM`, exactly like `lessons.start_time`, and refused
+    outright if it is not — a start time that does not parse would silently
+    fall back to 20:00 inside `recompute_lesson_times` and the instructor would
+    see the change "work" and do nothing."""
+    stamp = (hhmm or "").strip()
+    m = _RE_HHMM.match(stamp)
+    if not m:
+        return False
+    stamp = f"{int(m.group(1)):02d}:{m.group(2)}"
+    _t("mishmarim").update({"start_time": stamp}).eq("id", mishmar_id).execute()
+    recompute_lesson_times(mishmar_id, stamp)
+    return True
+
+
 def get_students() -> list[dict]:
     return _rows(_t("students").select("*").order("id").execute())
 
@@ -1147,11 +1167,22 @@ BREAK_DEFAULT_MINUTES = 30
 EVENING_START = "20:00"
 
 
+def mishmar_start(mishmar_id: int) -> str:
+    """When this evening opens — `mishmarim.start_time`, EVENING_START when the
+    row says nothing. Everything about the evening's clock derives from it, so
+    anything that wants to print or compute the hour asks here rather than
+    reaching for the season's default."""
+    row = get_mishmar(mishmar_id) or {}
+    return (row.get("start_time") or "").strip() or EVENING_START
+
+
 def create_default_timeline(mishmar_id: int) -> int:
-    """The real evening skeleton: 20:00 · three 75-minute lessons with 30-minute
-    breaks · a 15-minute break · one hour of חבורות. Titles, roles and formats
-    stay EMPTY by design — the skeleton is time, the pair pours the content.
-    Returns the number of rows created; refuses (0) if any lessons exist."""
+    """The real evening skeleton: three 75-minute lessons with 30-minute
+    breaks · a 15-minute break · one hour of חבורות, starting at the Mishmar's
+    own start time (20:00 unless the instructor moved it). Titles, roles and
+    formats stay EMPTY by design — the skeleton is time, the pair pours the
+    content. Returns the number of rows created; refuses (0) if any lessons
+    exist."""
     if get_lessons(mishmar_id):
         return 0
     slots = [
@@ -1171,14 +1202,20 @@ def create_default_timeline(mishmar_id: int) -> int:
     return len(slots)
 
 
-def recompute_lesson_times(mishmar_id: int, first_start: str = EVENING_START) -> None:
-    """Start times are DERIVED: 20:00 plus the cumulative durations before each
-    slot. Editing a duration reflows the whole evening — nobody hand-types
-    times that then silently overlap."""
+def recompute_lesson_times(mishmar_id: int, first_start: Optional[str] = None) -> None:
+    """Start times are DERIVED: the evening's own start time plus the cumulative
+    durations before each slot. Editing a duration reflows the whole evening —
+    nobody hand-types times that then silently overlap.
+
+    `first_start` defaults to the MISHMAR's start time, not to the season's
+    20:00. That default is the whole of the start-time feature: every caller
+    that reflows the clock after a duration edit, a new slot or a deletion —
+    six of them — then works from the hour this evening actually begins,
+    without any of them knowing the column exists."""
     _invalidate(('lessons',))          # the caller may have just inserted rows
     rows = get_lessons(mishmar_id)
     try:
-        h, m = (int(x) for x in (first_start or EVENING_START).split(":"))
+        h, m = (int(x) for x in (first_start or mishmar_start(mishmar_id)).split(":"))
     except ValueError:
         h, m = 20, 0
     minutes = h * 60 + m
@@ -1939,44 +1976,92 @@ def roster_placeholders() -> list[dict]:
             if s.get("role") == "student" and (s.get("name") or "").startswith("חניך")]
 
 
+def roster_drift() -> dict:
+    """What students_tasks.md says that the database does not — by NAME, so it
+    survives the ids.
+
+    `roster_placeholders` only ever caught a database seeded before the names
+    existed. But the roster keeps changing after that: a trainee leaves, the
+    pairs are re-drawn. Without this the dashboard had nothing to notice, the
+    «apply» card disappeared the moment it was first used, and a later change
+    to the Markdown had no way into the database at all.
+
+    Returns `mishmarim` (the evenings whose pair differs), `added` (in the file,
+    not in the database), `removed` (in the database, not in the file) and
+    `file_pairs` (what the file says, for showing beside what the database
+    says). Empty everywhere means the two agree."""
+    parsed = parse_tasks_md(TASKS_MD)
+    names = parsed["students"]
+    if not names:
+        return {"error": "students_tasks.md carries no trainee names",
+                "mishmarim": [], "added": [], "removed": [], "file_pairs": {}}
+    live = {s["name"] for s in get_students() if s.get("role") == "student"}
+    want: dict[int, set[str]] = {}
+    for mid, nm in parsed["assignments"]:
+        if mid not in STAFF_BUILT_MISHMARIM and nm in names:
+            want.setdefault(mid, set()).add(nm)
+    have: dict[int, set[str]] = {}
+    for mid, owners in get_owners_by_mishmar().items():
+        if mid not in STAFF_BUILT_MISHMARIM:
+            have[mid] = set(owners)
+    return {
+        "mishmarim": sorted(mid for mid in set(want) | set(have)
+                            if want.get(mid, set()) != have.get(mid, set())),
+        "added": sorted(n for n in names if n not in live),
+        "removed": sorted(live - set(names)),
+        "file_pairs": {mid: sorted(who) for mid, who in want.items()},
+    }
+
+
 def apply_trainee_roster() -> dict:
     """Bring `students` and `assignments` in line with students_tasks.md —
     the same mapping the SQL migration applies, done by the app under the
-    instructor's confirmation for a database seeded with placeholders.
+    instructor's confirmation.
 
-    Names go onto ids 1..N in the index table's order; placeholder rows past
-    N are deleted (assignments cascade, other student_id refs go NULL); the
-    trainee Mishmarim's pairs are replaced from the «אחראים» lines. Idempotent:
-    a second run changes nothing. Staff-built evenings are never touched."""
+    **Matched by name, not by position.** This used to write the names onto
+    ids 1..N in the index table's order, which could only ever express «the
+    placeholders got their names»: it could not say that a trainee had left
+    (id 4 now), and with a retired id in the middle it would have renumbered
+    everybody — renaming every row in a live database, and silently moving
+    each person's outreach and feedback history onto a different human.
+    So: a row whose name is in the file stays exactly where it is, a name with
+    no row is inserted on the next free id, and a trainee row whose name is
+    absent from the file is deleted (`assignments` cascade, every other
+    `student_id` reference goes NULL by the FK). Then the trainee Mishmarim's
+    pairs are replaced from the «אחראים» lines. Idempotent: a second run
+    changes nothing. Staff-built evenings are never touched."""
     parsed = parse_tasks_md(TASKS_MD)
     names = parsed["students"]
     if not names:
         return {"error": "students_tasks.md carries no trainee names"}
     _invalidate(("students", "assignments"))
-    existing = [s for s in get_students() if s.get("role") == "student"]
-    by_id = {int(s["id"]): s for s in existing}
-    renamed = created = deleted = 0
-    for i, n in enumerate(names, 1):
-        if i in by_id:
-            if by_id[i].get("name") != n:
-                _t("students").update({"name": n}).eq("id", i).execute()
-                renamed += 1
-        else:
-            _t("students").insert({"id": i, "name": n, "role": "student"}).execute()
-            created += 1
-    for s in existing:
-        if int(s["id"]) > len(names) and (s.get("name") or "").startswith("חניך"):
-            _t("students").delete().eq("id", int(s["id"])).execute()
-            deleted += 1
-    name_to_id = {n: i for i, n in enumerate(names, 1)}
+    everyone = get_students()
+    existing = [s for s in everyone if s.get("role") == "student"]
+    by_name = {s["name"]: int(s["id"]) for s in existing}
+    taken = {int(s["id"]) for s in everyone}
+    created = deleted = 0
+    name_to_id: dict[str, int] = {}
+    for n in names:
+        if n in by_name:
+            name_to_id[n] = by_name[n]
+            continue
+        new_id = next(i for i in range(1, 1000) if i not in taken)
+        _t("students").insert({"id": new_id, "name": n, "role": "student"}).execute()
+        taken.add(new_id)
+        name_to_id[n] = new_id
+        created += 1
+    gone = [s for s in existing if s["name"] not in names]
+    for s in gone:
+        _t("students").delete().eq("id", int(s["id"])).execute()
+        deleted += 1
     links = sorted({(mid, name_to_id[nm]) for mid, nm in parsed["assignments"]
                     if nm in name_to_id and mid not in STAFF_BUILT_MISHMARIM})
     for mid in sorted({mid for mid, _ in links}):
         _t("assignments").delete().eq("mishmar_id", mid).execute()
     if links:
         _t("assignments").insert([{"mishmar_id": m, "student_id": s} for m, s in links]).execute()
-    return {"names": len(names), "renamed": renamed, "created": created,
-            "deleted": deleted, "assignments": len(links)}
+    return {"names": len(names), "created": created, "deleted": deleted,
+            "removed": [s["name"] for s in gone], "assignments": len(links)}
 
 
 def reset_mishmar(mishmar_id: int) -> dict:
@@ -2465,6 +2550,9 @@ _READS = {
     "find_mishmarim_by_topic":  ("mishmarim",),
     "get_chat_history":         ("chat_messages",),
     "get_owners_by_mishmar":    ("assignments", "students"),
+    # reads the two tables AND students_tasks.md; the file is deployed with the
+    # code, so the tables are what can change under it
+    "roster_drift":             ("assignments", "students"),
     "get_budget_rows":          ("budget",),
     "get_logistics":            ("logistics_items",),
     "get_teaching_history":     ("lessons", "feedback"),
@@ -2481,6 +2569,8 @@ _WRITES = {
     "edit_task": ("tasks",), "delete_task": ("tasks",),
     "link_task_to_lesson": ("tasks",),
     "set_mishmar_topic": ("mishmarim",), "set_student_email": ("students",),
+    # the column lives on mishmarim, and every slot's clock is derived from it
+    "set_mishmar_start_time": ("mishmarim", "lessons"),
     "upsert_lesson": ("lessons", "speaker_outreach", "speakers"),
     "delete_lesson": ("lessons", "tasks"),          # tasks: ON DELETE SET NULL
     "create_default_timeline": ("lessons", "tasks"), "recompute_lesson_times": ("lessons",),

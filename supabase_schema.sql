@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS mishmarim (
     topic           text,                         -- NULL = טרם נסגר. אף פעם לא ניחוש.
     note            text,
     workfile_path   text,
-    is_staff_built  boolean NOT NULL DEFAULT false
+    is_staff_built  boolean NOT NULL DEFAULT false,
+    start_time      text NOT NULL DEFAULT '20:00'   -- שעת פתיחת הערב; שעות המקטעים נגזרות ממנה
 );
 
 CREATE TABLE IF NOT EXISTS students (
@@ -259,6 +260,12 @@ END $$;
 -- כי יש בדיוק אחת לכל ערב.
 ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS invitation_text text;
 ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS invitation_url  text;
+
+-- גרסה 9 — שעת ההתחלה של הערב. כל שעות המקטעים נגזרות ממנה
+-- (recompute_lesson_times), וקודם היא הייתה קבועה בקוד על 20:00, כך שערב
+-- שמתחיל ב-20:30 פשוט לא היה ניתן לביטוי. ברירת המחדל היא השעה של העונה,
+-- ולכן מסד קיים לא משנה אף שורה. רק המדריך משנה אותה, מלוח הבקרה.
+ALTER TABLE mishmarim ADD COLUMN IF NOT EXISTS start_time text NOT NULL DEFAULT '20:00';
 
 -- תחומים רחבים לסינון המאגר. 46 מרצים עם 33 תגיות חופשיות פירושו שכל תגית
 -- מתאימה לאדם אחד — סינון חסר תועלת. העמודה נגזרת מהתגיות הקיימות ב-
@@ -518,5 +525,5 @@ REVOKE ALL ON speaker_searches FROM anon, authenticated;
 
 -- מסמן שהסכימה הותקנה, כדי שהאפליקציה תוכל לומר משהו מועיל אם לא.
 INSERT INTO app_meta (key, value)
-VALUES ('schema_version', '8')
+VALUES ('schema_version', '9')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
