@@ -30,8 +30,12 @@ from datetime import date
 
 # The eight trainees of תשפ״ז. איתי בן יהודה left the programme in September;
 # his four evenings were redistributed and his row is deleted from the database.
+# Later in September יעל שם טוב left too, and טליה קור took her four evenings
+# unchanged. **טליה sits in יעל's list position on purpose — do not re-sort.**
+# `rng.sample(NAMES, 2)` and the pool order read the index, so an in-place swap
+# keeps the seeded draw identical and no other pair moves.
 NAMES = ["איתי בן מנחם", "אלה מאיר", "זואה כהן", "יותם ספיר",
-         "יעל שם טוב", "כליל בלאוקופף", "רוני פרנקל", "רותם דרור"]
+         "טליה קור", "כליל בלאוקופף", "רוני פרנקל", "רותם דרור"]
 
 # name → students.id. FROZEN, never re-derived: these ids are already the live
 # database's truth (and `students.id` is referenced by assignments, outreach,
@@ -40,13 +44,19 @@ NAMES = ["איתי בן מנחם", "אלה מאיר", "זואה כהן", "יות
 # trainee gets a new id, never his.
 STUDENT_IDS = {
     "זואה כהן": 1, "אלה מאיר": 2, "רוני פרנקל": 3, "איתי בן מנחם": 5,
-    "יותם ספיר": 6, "רותם דרור": 7, "יעל שם טוב": 8, "כליל בלאוקופף": 9,
+    "יותם ספיר": 6, "רותם דרור": 7, "כליל בלאוקופף": 9,
 }
-# Rows to remove, each guarded by the NAME we expect to find on it. The guard
-# matters: `apply_trainee_roster` in the app hands a brand-new trainee the
-# first FREE id, which may well be one of these — an unguarded DELETE would
-# then quietly remove a person who had just joined.
-RETIRED_ROWS = {4: "איתי בן יהודה", 10: "חניך 10"}
+# Trainees who joined after the ids were frozen. They have no id here: the SQL
+# inserts them BY NAME on MAX(id)+1 — exactly the id `apply_trainee_roster`
+# gives them in the app — so the two paths agree whichever one runs first.
+# A replacement is a new row, never a rename of the leaver's: the row carries
+# the leaver's Google email (their login) and their outreach/search history.
+NEW_TRAINEES = ("טליה קור",)
+# Rows to remove, each guarded by the NAMES we expect to find on it (the
+# person, or the «חניך N» placeholder of a database seeded before the names),
+# so a DELETE can never take out a person who happens to sit on that id now.
+RETIRED_ROWS = {4: ("איתי בן יהודה", "חניך 4"), 8: ("יעל שם טוב", "חניך 8"),
+                10: ("חניך 10",)}
 
 STAFF = (1, 2)
 MISHMARIM = list(range(3, 22))          # #03–#21
@@ -62,23 +72,23 @@ AWAY = {"אלה מאיר": {3, 4}}             # abroad until the day before 8.1
 # Trainees who must share exactly one evening.
 TOGETHER = ("אלה מאיר", "זואה כהן")
 
-# The pairing we were aiming at before איתי בן יהודה left: the committed
-# schedule with the approved #04↔#13 exchange applied, minus him. It is not a
-# constraint — it is the draw's preference, so that the evenings the pairs
-# have already been told about survive wherever the rules allow. Frozen here
-# rather than read back out of schedule.md, so this script stays a pure
-# function of its constants and a second run cannot drift.
+# The pairs the trainees have been told (round F, with טליה קור in יעל שם
+# טוב's place). Not a constraint — the draw's preference, so that whatever
+# the rules allow stays where the pairs expect it; `kept` prints how many of
+# the 38 slots survived, and 38/38 is the proof that a change moved nobody.
+# Frozen here rather than read back out of schedule.md, so this script stays
+# a pure function of its constants and a second run cannot drift.
 PREFERRED = {
-    3:  ("יותם ספיר", "רותם דרור"),      4:  ("כליל בלאוקופף",),
-    5:  ("זואה כהן", "יעל שם טוב"),      6:  ("איתי בן מנחם", "רותם דרור"),
-    7:  ("רוני פרנקל", "יותם ספיר"),     8:  ("אלה מאיר", "כליל בלאוקופף"),
-    9:  ("זואה כהן", "יותם ספיר"),       10: ("רותם דרור", "כליל בלאוקופף"),
-    11: ("יעל שם טוב",),                 12: ("רוני פרנקל", "איתי בן מנחם"),
-    13: ("זואה כהן", "אלה מאיר"),        14: ("רוני פרנקל",),
-    15: ("איתי בן מנחם", "יעל שם טוב"),  16: ("אלה מאיר", "יותם ספיר"),
-    17: ("זואה כהן", "רותם דרור"),       18: ("אלה מאיר", "איתי בן מנחם"),
-    19: ("יעל שם טוב", "כליל בלאוקופף"), 20: ("רוני פרנקל", "רותם דרור"),
-    21: ("יותם ספיר",),
+    3:  ("יותם ספיר", "רותם דרור"),      4:  ("זואה כהן", "כליל בלאוקופף"),
+    5:  ("אלה מאיר", "טליה קור"),        6:  ("איתי בן מנחם", "רותם דרור"),
+    7:  ("יותם ספיר", "רוני פרנקל"),     8:  ("אלה מאיר", "כליל בלאוקופף"),
+    9:  ("איתי בן מנחם", "זואה כהן"),    10: ("רוני פרנקל", "רותם דרור"),
+    11: ("טליה קור", "כליל בלאוקופף"),   12: ("איתי בן מנחם", "יותם ספיר"),
+    13: ("אלה מאיר", "זואה כהן"),        14: ("כליל בלאוקופף", "רוני פרנקל"),
+    15: ("איתי בן מנחם", "טליה קור"),    16: ("אלה מאיר", "יותם ספיר"),
+    17: ("זואה כהן", "רותם דרור"),       18: ("איתי בן מנחם", "כליל בלאוקופף"),
+    19: ("טליה קור", "רוני פרנקל"),      20: ("אלה מאיר", "רותם דרור"),
+    21: ("זואה כהן", "יותם ספיר"),
 }
 
 
@@ -174,21 +184,39 @@ def main():
         gaps = [(y - x).days for x, y in zip(days, days[1:])]
         assert all(g >= MIN_BUILD_DAYS for g in gaps), (n, gaps)
     assert any(set(p) == set(TOGETHER) for p in pairs.values()), TOGETHER
-    assert set(STUDENT_IDS) == set(NAMES), "STUDENT_IDS and NAMES disagree"
+    assert set(STUDENT_IDS) | set(NEW_TRAINEES) == set(NAMES), "STUDENT_IDS/NEW_TRAINEES and NAMES disagree"
+    assert not set(STUDENT_IDS) & set(NEW_TRAINEES), "a trainee is both frozen and new"
+    assert not {w for who in RETIRED_ROWS.values() for w in who} & set(NAMES), \
+        "a retired row carries a current name"
     # ---- SQL ----
     sql = [f"-- The season's {len(NAMES)} trainees and the evenings they build.",
            "-- Generated by scripts/assign_trainees.py (seed %d). Idempotent: run as often as needed." % SEED,
            "BEGIN;"]
     for n in NAMES:
-        sql.append(f"UPDATE students SET name = '{n}' WHERE id = {STUDENT_IDS[n]};")
+        if n in STUDENT_IDS:
+            sql.append(f"UPDATE students SET name = '{n}' WHERE id = {STUDENT_IDS[n]};")
+    # New trainees before the DELETEs — the app inserts before it deletes too,
+    # so MAX(id)+1 is the same number on both paths.
+    # The MAX sits in a subquery on purpose: an aggregate with no GROUP BY
+    # returns one row even when WHERE filters out every row, so the flat
+    # «SELECT MAX(id)+1 … WHERE NOT EXISTS» inserts id 1 on the second run.
+    for n in NEW_TRAINEES:
+        sql.append("INSERT INTO students (id, name, role) SELECT top.id + 1, "
+                   f"'{n}', 'student' FROM (SELECT COALESCE(MAX(id), 0) AS id FROM students) top "
+                   f"WHERE NOT EXISTS (SELECT 1 FROM students WHERE name = '{n}');")
     for dead, who in sorted(RETIRED_ROWS.items()):
-        sql.append(f"DELETE FROM students WHERE id = {dead} AND name = '{who}';"
+        names_in = ", ".join(f"'{w}'" for w in who)
+        sql.append(f"DELETE FROM students WHERE id = {dead} AND name IN ({names_in});"
                    "   -- assignments cascade; other student_id refs go NULL")
     sql.append(f"DELETE FROM assignments WHERE mishmar_id BETWEEN {MISHMARIM[0]} AND {MISHMARIM[-1]};")
     for mid in MISHMARIM:
         for n in pairs[mid]:
-            sql.append("INSERT INTO assignments (mishmar_id, student_id) VALUES "
-                       f"({mid}, {STUDENT_IDS[n]}) ON CONFLICT DO NOTHING;")
+            if n in STUDENT_IDS:
+                sql.append("INSERT INTO assignments (mishmar_id, student_id) VALUES "
+                           f"({mid}, {STUDENT_IDS[n]}) ON CONFLICT DO NOTHING;")
+            else:
+                sql.append("INSERT INTO assignments (mishmar_id, student_id) "
+                           f"SELECT {mid}, id FROM students WHERE name = '{n}' ON CONFLICT DO NOTHING;")
     sql.append("COMMIT;")
     (ROOT / "migrations").mkdir(exist_ok=True)
     (ROOT / "migrations/2026-09-assign-trainees.sql").write_text("\n".join(sql) + "\n", encoding="utf-8")
@@ -276,7 +304,7 @@ def main():
         "   (‎21 יום לפני הערב), ולכן אף זוג לא בונה משמר מתוך השבוע האחרון של המשמר הקודם שלו.\n"
         "5. **אילוצים אישיים** — נרשמים ב-`AWAY` וב-`TOGETHER` בראש הסקריפט, ונבדקים בהרצה.\n",
         encoding="utf-8")
-    print("student ids:", {n: STUDENT_IDS[n] for n in NAMES})
+    print("student ids:", {n: STUDENT_IDS.get(n, "MAX+1") for n in NAMES})
     print(f"kept {kept(pairs)}/{total} slots from the previous pairing")
     for mid in MISHMARIM:
         moved = " *" if set(pairs[mid]) != set(PREFERRED[mid]) else "  "

@@ -168,13 +168,22 @@ panel instead of on a slot.
   `students` + `assignments` **by name**, returning the evenings whose pair differs, the names the
   file added, the names it dropped, and the file's pairs for showing side by side.
   `apply_trainee_roster()` then brings the two in line — **matched by name, not by position**: a
-  row whose name is in the file stays on its id, a missing name is inserted on the next free id,
+  row whose name is in the file stays on its id, a missing name is inserted on **MAX(id)+1 — never
+  on a gap**, because a gap is a retired id and the migration's name-guarded DELETE of that id is
+  then all that protects the newcomer (the migration inserts new trainees by name on the same
+  MAX(id)+1, so the two paths agree on the id),
   and a `role='student'` row absent from the file is **deleted** (assignments cascade, every other
   `student_id` ref goes NULL). The old positional version could only ever say «the placeholders got
   their names»: it could not express a departure, and with a retired id in the middle it would have
   renumbered everyone — renaming every row in a live database and silently moving one person's
   outreach and feedback onto another human. The trainee Mishmarim's pairs are replaced; staff
   evenings untouched; idempotent; identical result to the SQL migration.
+  **A replacement is a delete plus an insert, never a rename** (יעל שם טוב → טליה קור, same four
+  evenings): the leaver's row carries their Google `email` — renaming it would let the leaver log
+  in as the newcomer — and their outreach and search history, which is not the newcomer's. The
+  newcomer's email is linked afterwards in the dashboard's accounts form. In the script a
+  replacement keeps the leaver's list position in `NAMES` (the seeded draw reads the index), so
+  `kept` prints 38/38 and nobody else moves.
   **The dashboard shows it twice on purpose**: a loud card when there is drift, naming the
   Mishmarim and the people, *and* an always-present «👥 חניכים ושיבוץ» expander holding the same
   button. The card alone was the bug — it was gated on `placeholders or unowned`, so it vanished

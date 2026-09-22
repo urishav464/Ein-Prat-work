@@ -2034,11 +2034,19 @@ def apply_trainee_roster() -> dict:
     everybody — renaming every row in a live database, and silently moving
     each person's outreach and feedback history onto a different human.
     So: a row whose name is in the file stays exactly where it is, a name with
-    no row is inserted on the next free id, and a trainee row whose name is
+    no row is inserted on MAX(id)+1 — never on a gap, because a gap is a
+    retired id (a leaver's), and the migration's guarded DELETE of that id is
+    then all that stands between the newcomer and removal; the SQL migration
+    inserts on the same MAX(id)+1, so both paths hand out the same id — and a
+    trainee row whose name is
     absent from the file is deleted (`assignments` cascade, every other
     `student_id` reference goes NULL by the FK). Then the trainee Mishmarim's
     pairs are replaced from the «אחראים» lines. Idempotent: a second run
-    changes nothing. Staff-built evenings are never touched."""
+    changes nothing. Staff-built evenings are never touched.
+
+    A trainee replaced by another is a delete plus an insert, never a rename:
+    the leaver's row carries their Google email (their login) and their
+    outreach and search history, none of which belongs to the newcomer."""
     parsed = parse_tasks_md(TASKS_MD)
     names = parsed["students"]
     if not names:
@@ -2054,7 +2062,7 @@ def apply_trainee_roster() -> dict:
         if n in by_name:
             name_to_id[n] = by_name[n]
             continue
-        new_id = next(i for i in range(1, 1000) if i not in taken)
+        new_id = max(taken, default=0) + 1
         _t("students").insert({"id": new_id, "name": n, "role": "student"}).execute()
         taken.add(new_id)
         name_to_id[n] = new_id

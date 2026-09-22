@@ -5,19 +5,20 @@ UPDATE students SET name = 'איתי בן מנחם' WHERE id = 5;
 UPDATE students SET name = 'אלה מאיר' WHERE id = 2;
 UPDATE students SET name = 'זואה כהן' WHERE id = 1;
 UPDATE students SET name = 'יותם ספיר' WHERE id = 6;
-UPDATE students SET name = 'יעל שם טוב' WHERE id = 8;
 UPDATE students SET name = 'כליל בלאוקופף' WHERE id = 9;
 UPDATE students SET name = 'רוני פרנקל' WHERE id = 3;
 UPDATE students SET name = 'רותם דרור' WHERE id = 7;
-DELETE FROM students WHERE id = 4 AND name = 'איתי בן יהודה';   -- assignments cascade; other student_id refs go NULL
-DELETE FROM students WHERE id = 10 AND name = 'חניך 10';   -- assignments cascade; other student_id refs go NULL
+INSERT INTO students (id, name, role) SELECT top.id + 1, 'טליה קור', 'student' FROM (SELECT COALESCE(MAX(id), 0) AS id FROM students) top WHERE NOT EXISTS (SELECT 1 FROM students WHERE name = 'טליה קור');
+DELETE FROM students WHERE id = 4 AND name IN ('איתי בן יהודה', 'חניך 4');   -- assignments cascade; other student_id refs go NULL
+DELETE FROM students WHERE id = 8 AND name IN ('יעל שם טוב', 'חניך 8');   -- assignments cascade; other student_id refs go NULL
+DELETE FROM students WHERE id = 10 AND name IN ('חניך 10');   -- assignments cascade; other student_id refs go NULL
 DELETE FROM assignments WHERE mishmar_id BETWEEN 3 AND 21;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (3, 6) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (3, 7) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (4, 1) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (4, 9) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (5, 2) ON CONFLICT DO NOTHING;
-INSERT INTO assignments (mishmar_id, student_id) VALUES (5, 8) ON CONFLICT DO NOTHING;
+INSERT INTO assignments (mishmar_id, student_id) SELECT 5, id FROM students WHERE name = 'טליה קור' ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (6, 5) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (6, 7) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (7, 6) ON CONFLICT DO NOTHING;
@@ -28,7 +29,7 @@ INSERT INTO assignments (mishmar_id, student_id) VALUES (9, 5) ON CONFLICT DO NO
 INSERT INTO assignments (mishmar_id, student_id) VALUES (9, 1) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (10, 3) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (10, 7) ON CONFLICT DO NOTHING;
-INSERT INTO assignments (mishmar_id, student_id) VALUES (11, 8) ON CONFLICT DO NOTHING;
+INSERT INTO assignments (mishmar_id, student_id) SELECT 11, id FROM students WHERE name = 'טליה קור' ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (11, 9) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (12, 5) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (12, 6) ON CONFLICT DO NOTHING;
@@ -37,14 +38,14 @@ INSERT INTO assignments (mishmar_id, student_id) VALUES (13, 1) ON CONFLICT DO N
 INSERT INTO assignments (mishmar_id, student_id) VALUES (14, 9) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (14, 3) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (15, 5) ON CONFLICT DO NOTHING;
-INSERT INTO assignments (mishmar_id, student_id) VALUES (15, 8) ON CONFLICT DO NOTHING;
+INSERT INTO assignments (mishmar_id, student_id) SELECT 15, id FROM students WHERE name = 'טליה קור' ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (16, 2) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (16, 6) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (17, 1) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (17, 7) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (18, 5) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (18, 9) ON CONFLICT DO NOTHING;
-INSERT INTO assignments (mishmar_id, student_id) VALUES (19, 8) ON CONFLICT DO NOTHING;
+INSERT INTO assignments (mishmar_id, student_id) SELECT 19, id FROM students WHERE name = 'טליה קור' ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (19, 3) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (20, 2) ON CONFLICT DO NOTHING;
 INSERT INTO assignments (mishmar_id, student_id) VALUES (20, 7) ON CONFLICT DO NOTHING;
