@@ -40,7 +40,7 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
 
 ## The ideas that explain most of the code
 
-- **One renderer, one seam.** `app.py` (~3.1k lines) only renders; `data_manager.py` (~2.3k) is the
+- **One renderer, one seam.** `app.py` (~3.7k lines) only renders; `data_manager.py` (~2.7k) is the
   only module that talks to storage. Anything needing a join or an aggregate is a **view** in
   `supabase_schema.sql` — `v_tasks_full`, `v_speaker_status`, `v_overdue_tasks`, `v_mishmar_budget`,
   `v_outreach_full`, `v_student_progress` — because PostgREST cannot express one.
@@ -69,7 +69,9 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   that too**: `dm.roster_drift()` diffs it against the live tables by name, and the dashboard's
   always-present «👥 חניכים ושיבוץ» panel applies the difference (`dm.apply_trainee_roster`,
   behind a two-step dialog) — a trainee leaving and the pairs being re-drawn, not just the first
-  time the names arrived. `migrations/2026-09-assign-trainees.sql` is the same mapping for the SQL
+  time the names arrived. **A replacement is a delete plus an insert, never a rename** — the
+  leaver's row carries their Google `email` (their login) and their history — and a new trainee
+  gets `MAX(id)+1` on both paths, never a retired id. `migrations/2026-09-assign-trainees.sql` is the same mapping for the SQL
   Editor; `scripts/assign_trainees.py` regenerates it and the Markdown together.
 
 ## Where the detailed knowledge lives
@@ -81,7 +83,7 @@ Path-scoped rules load automatically when their files enter context:
 - `.claude/rules/pedagogy.md` — what a Mishmar is, ideal vs. real format, the content rules (dead-thinker trap, ⚠️ לאמת, no invented contacts), the archive's traps, speaker-search throttling, the image workflow.
 - `.claude/rules/streamlit-dom.md` — **generated** from the installed Streamlit bundle: every
   `data-testid` it contains plus the measured structural facts (what is portaled outside the RTL
-  root, what a selectbox really is in 1.62, the negative markdown margin). A selector absent from
+  root, that a selectbox is react-aria not BaseWeb, the negative markdown margin). A selector absent from
   it is a dead rule. Regenerate after a Streamlit upgrade; `design-review` and `app-reviewer` read
   it instead of guessing.
 - `.claude/rules/chat-agent.md` — the dormant chat loop and the live scout: the Mishmar-scoping rule and the four cost ceilings that keep a turn flat.
@@ -96,7 +98,7 @@ app.py                 # Streamlit UI (render only; phase-driven; chat behind CH
 data_manager.py        # the ONLY data seam — Supabase REST, seeding, phase model
 chat_agent.py          # Anthropic client + the scout (live); the 13-tool chat loop (dormant)
 chat_panel.py          # the chat UI — imported only when app.CHAT_ENABLED is True
-speaker_search.py      # discovery (mines names) + verification, throttled
+speaker_search.py      # verification («אמת»), throttling, manual search links — discovery is the scout's now
 archive.py             # cross-year memory over 2025-26 work-files
 supabase_schema.sql    # tables, views, RLS + GRANTs — run in Supabase SQL Editor
 .streamlit/config.toml # brand theme (navy/parchment) — deploys with the app
