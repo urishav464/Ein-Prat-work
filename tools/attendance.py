@@ -67,9 +67,13 @@ def load_leaders(date):
 
 
 def load_staff(date):
-    """אנשי צוות השבת — מי שמסומן «צוות שבת» = כן."""
+    """אנשי צוות השבת שנוכחים השבת: הצוות הקבוע (עמודת «צוות שבת» ב-students.csv),
+    ובנוסף מי שסומן «צוות שבת» בקובץ הנוכחות של השבוע."""
     rows = _rows(date) or []
-    return [r["שם"] for r in rows if (r.get("צוות שבת") or "").strip() == "כן"]
+    present = {r["שם"] for r in rows}
+    standing = [s["שם"] for s in roster.read_students() if (s.get("צוות שבת") or "").strip() == "כן"]
+    weekly = [r["שם"] for r in rows if (r.get("צוות שבת") or "").strip() == "כן"]
+    return [n for n in dict.fromkeys(standing + weekly) if n in present]
 
 
 def load_havurot(date):

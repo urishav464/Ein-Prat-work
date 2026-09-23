@@ -8,7 +8,8 @@ and RTL. Work happens on the `Shabbat` branch. See `README.md` for the user-faci
 ## Commands
 
 ```bash
-python3 tools/shabbat.py 2026-09-25              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
+python3 tools/guide.py                           # docs/מדריך לאחראי שבת.pdf|png (student checklist)
+python3 tools/shabbat.py 2026-10-16              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
 python3 tools/build_workbook.py                  # data/*.csv → shabbat-planner.xlsx (only when the schema changes)
 python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-09-18.xlsx
 python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx   # carry last week's edits forward
@@ -22,9 +23,16 @@ python3 tools/fetch_fonts.py                     # refill assets/fonts/ (already
 There is no test suite and no linter. `tools/shabbat.py` runs the standing checks after every
 pipeline run and exits 1 on any problem; see also "Verifying changes".
 
-**Weekly input** is `טופס שבת.md` (root): the user fills it in chat, and it maps onto exactly two
-files — `data/attendance/<date>.csv` and `data/catering.csv`. Everything else (schedule rules,
-tasks, groups, points) is standing data that changes only when the user asks for a change.
+**Weekly input** comes from the student leaders: `docs/מדריך לאחראי שבת.png` (checklist, rendered by
+`tools/guide.py`) and `טופס שבת.md` (what they send). It maps onto `data/attendance/<date>.csv`,
+`data/preps/<date>.csv` (the Friday preps they chose — one row per task), `data/menu/<date>.csv`
+(what is served per «meal»: catering, prep leftovers, cake split) and a row in `data/weeks.csv`
+(`שבת משותפת`). Staff is standing (`צוות שבת` column in `data/students.csv`). Schedule rules,
+standing tasks and groups change only when the user asks.
+
+**Per-date files keep old Shabbatot reproducible** — never edit another date's preps/menu to
+change this week. `bw.task_rows(date)` / `bw.plan_rows(date)` compose standing + weekly data;
+`new_shabbat.py` writes them into the Shabbat file, so `build_workbook` stays date-free.
 
 ## Architecture
 
@@ -77,7 +85,7 @@ script writes, grey = computed.
   («אנשים»), and the assigned names. Group size is *derived*: the peak number of people
   needed simultaneously (`peak`/`slots_of` in `assign_groups.py`). A task with no hour
   means the whole group.
-- **Three stages** (`bw.STAGES`) order the work. A person takes at most one group per
+- **Four stages** (`bw.STAGES`, the last is תורנות מוצ"ש) order the work. A person takes at most one group per
   stage and at most `--max-stages` stages overall, and `assign_all` additionally blocks
   any candidate whose already-assigned `(day, hour)` slots collide with the new group's —
   that is what keeps the 08:00 Friday preps and the 08:00 בית מדרש duty disjoint.
@@ -87,16 +95,24 @@ script writes, grey = computed.
 - **Per-Shabbat overrides** all live in `data/attendance/<date>.csv`: `זמין לתורנות`,
   `לא זמין בשלב` (stage exclusions, `;`-separated), `שיבוץ ידני` (pins, `;`-separated),
   `אחראי על` (pin + this group's אחראי/ת, student or staff — suppresses the automatic
-  staff pick for that group), `צוות שבת` (staff who become the group's אחראי/ת, counted
-  inside the group size and kept out of ordinary slots unless pinned). A pin or leader
+  staff pick for that group), `צוות שבת` (extra staff for that week; standing staff is the
+  `צוות שבת` column of `students.csv` — staff become a group's אחראי/ת, count inside the group
+  size and stay out of ordinary slots unless pinned). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
   silently defeat a pin. Elul students are spread across groups by ratio.
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
-- **Catering placeholders.** Task text in `data/task_library.csv` may contain `{ארוחה}`;
-  `build_workbook.expand_catering` replaces it with that meal's dishes from `data/catering.csv`
-  (one row per dish). An unknown placeholder prints a warning and stays visible, and
-  `shabbat.py` fails its checks on any leftover `{`.
+- **Weekly preps** (`data/preps/<date>.csv`): a prep name that is not a standing group becomes a
+  new group (stage הכנות שישי, `PREP_POINTS`), listed before the standing groups; a row for a
+  standing group *replaces* that group's standing task at the same `(day, hour)` (that is how
+  the Motzash dinner menu or cleaning sizes change). Defaults: day שישי, hour 08:00, text
+  «הכנה — כמות». `עזרה מבית המדרש = N` adds a 10:00 בית מדרש task, placed right after the
+  standing בית מדרש rows. `אחראי` becomes the group's leader (merged with attendance `אחראי על`).
+- **Menu placeholders.** Task text may contain `{ארוחה}` or `{ארוחה|ברירת מחדל}`;
+  `build_workbook.expand_catering` joins that meal's rows from `data/menu/<date>.csv`, falls back to
+  the default, and otherwise warns and leaves the braces (which `shabbat.py` fails on).
+  Notes prefixed `[משותפת]` survive only when `weeks.csv` marks the Shabbat shared; shared
+  Shabbatot also get `PREP_NOTE` on Friday prep rows.
 
 ### Rendering
 

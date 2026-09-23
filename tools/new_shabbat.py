@@ -77,6 +77,25 @@ def reset_people(wb):
     # «היסטוריה» לא מתאפסת — זה הזיכרון של המערכת
 
 
+def write_week(wb, date):
+    """המשימות, הקבוצות והתפריט של השבת הזו: הקבועים + מה שהאחראים בחרו לשבוע
+    (data/preps, data/menu, data/weeks.csv). מצייני המקום מתמלאים כאן."""
+    rows, plan, menu = bw.task_rows(date), bw.plan_rows(date), bw.read_week(date)["menu"]
+    if len(rows) > bw.TASK_ROWS or len(plan) > bw.GROUP_ROWS or len(menu) > bw.CATERING_ROWS:
+        raise SystemExit("יותר מדי שורות לגיליון: {} משימות, {} קבוצות, {} מנות".format(
+            len(rows), len(plan), len(menu)))
+    ws = wb[bw.SH_TASKS]
+    for i in range(bw.TASK_ROWS):
+        bw.write_task_row(ws, bw.TASK_FIRST_ROW + i, rows[i] if i < len(rows) else None)
+    ws = wb[bw.SH_GROUPS]
+    for i in range(bw.GROUP_ROWS):
+        bw.write_group_row(ws, bw.GROUP_FIRST_ROW + i, plan[i] if i < len(plan) else None)
+    ws = wb[bw.SH_CATERING]
+    for i in range(bw.CATERING_ROWS):
+        bw.write_menu_row(ws, 3 + i, menu[i] if i < len(menu) else None)
+    return rows, plan
+
+
 def main():
     ap = argparse.ArgumentParser(description="הפקת קובץ שבת")
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-11")
@@ -97,6 +116,9 @@ def main():
     wb = load_workbook(out)
     parasha, candle, havdalah = reset_schedule(wb, date)
     reset_people(wb)
+    if not args.source:                  # --from שומר את המשימות של השבת הקודמת כמו שהן
+        rows, plan = write_week(wb, date)
+        print("  {} משימות · {} קבוצות".format(len(rows), len(plan)))
     wb.save(out)
     shown = out.relative_to(ROOT) if out.resolve().is_relative_to(ROOT) else out
     print("נוצר: {}  ({}, {})".format(shown, date.strftime("%d/%m/%Y"), parasha or "—"))

@@ -60,11 +60,15 @@ H_DATE, H_NAME, H_STAGE, H_GROUP, H_POINTS = range(1, 6)
 # עמודות בגיליון «לוז»
 L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST, L_TASKS = range(1, 8)
 
-STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת"]
+STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת", "תורנות מוצ\"ש"]
 DAYS = "חמישי,שישי,שבת,מוצאי שבת"
 RECIPE_KINDS = "מאפים,עוגות,סלטים,בישול,ארוחת צהריים שישי"
 MEALS = "ארוחת ערב,ארוחת צהריים,סלטים,קידוש,סעודה שלישית"
-PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
+PLACEHOLDER = re.compile(r"\{([^{}|]+)(?:\|([^{}]*))?\}")      # {ארוחה} או {ארוחה|ברירת מחדל}
+SHARED_TAG = "[משותפת]"            # הערה שרלוונטית רק בשבת משותפת עם שנה א'
+PREP_NOTE = "בסיום — לרשום «שנה ב'» על הנייר כסף / השקית"
+PREP_POINTS = 3
+DEFAULT_ANCHOR = {"חמישי": "ערב חמישי", "שישי": "תחילת עבודה", "מוצאי שבת": 'ניקיונות מוצ"ש'}
 
 # --- צבעים ------------------------------------------------------------------
 INK, MUTED, LINE, BAND = "1F2430", "6B7280", "C9CFD8", "EDF1F6"
@@ -157,26 +161,164 @@ def read_csv(name):
         return list(csv.DictReader(fh))
 
 
-def read_catering():
-    """תפריט הקייטרינג של השבוע: שורה לכל מנה (ארוחה, מנה, כמות, הערה)."""
-    return read_csv("catering.csv") if (DATA / "catering.csv").exists() else []
+def read_week(date=None):
+    """מה שמשתנה משבת לשבת, מתוך שלושה מקומות:
+
+      data/preps/<תאריך>.csv — ההכנות שהאחראים בחרו (שורה = משימה)
+      data/menu/<תאריך>.csv  — מה מוגש בכל ארוחה: קייטרינג וחלוקת העוגות
+      data/weeks.csv          — שורה לכל שבת: האם היא משותפת עם שנה א'
+
+    בלי תאריך (התבנית) — הכול ריק ושבת «רק אנחנו»."""
+    week = {"preps": [], "menu": [], "shared": False}
+    if date is None:
+        return week
+    iso = date.isoformat()
+    for key, sub in (("preps", "preps"), ("menu", "menu")):
+        path = DATA / sub / "{}.csv".format(iso)
+        if path.exists():
+            with path.open(encoding="utf-8-sig", newline="") as fh:
+                week[key] = [r for r in csv.DictReader(fh) if any((v or "").strip() for v in r.values())]
+    if (DATA / "weeks.csv").exists():
+        for r in read_csv("weeks.csv"):
+            if (r.get("תאריך") or "").strip() == iso:
+                week["shared"] = (r.get("שבת משותפת") or "").strip() == "כן"
+    return week
 
 
-def expand_catering(text, catering):
-    """מחליף {ארוחה} בטקסט של משימה ברשימת המנות של אותה ארוחה מ-catering.csv.
+def expand_catering(text, menu, warn=True):
+    """מחליף {ארוחה} ברשימת המנות של אותה ארוחה בתפריט השבוע.
 
-    התפריט משתנה כל שבוע ומופיע בכמה משימות; כך הוא נרשם במקום אחד. ארוחה שאין לה
-    מנות משאירה את הסוגריים גלויים ומדפיסה אזהרה — כדי ששום דבר לא ייעלם בשקט."""
+    {ארוחה|ברירת מחדל} — אם אין לארוחה מנות, נכתבת ברירת המחדל («חימום {טיש|העוגות}»).
+    בלי ברירת מחדל ובלי מנות — הסוגריים נשארים גלויים ומודפסת אזהרה, כדי ששום דבר
+    לא ייעלם בשקט (ו-shabbat.py נכשל עליהם)."""
     if not text or "{" not in text:
         return text
     def sub(m):
-        dishes = [r["מנה"].strip() for r in catering
-                  if r["ארוחה"].strip() == m.group(1).strip() and r["מנה"].strip()]
-        if not dishes:
-            print("⚠ אין מנות ל«{}» ב-catering.csv — המשימה: {}".format(m.group(1), text[:50]))
-            return m.group(0)
-        return ", ".join(dishes)
+        meal, default = m.group(1).strip(), m.group(2)
+        dishes = [r["מנה"].strip() for r in menu
+                  if (r.get("ארוחה") or "").strip() == meal and (r.get("מנה") or "").strip()]
+        if dishes:
+            return ", ".join(dishes)
+        if default is not None:
+            return default
+        if warn:
+            print("⚠ אין בתפריט מנות ל«{}» — המשימה: {}".format(meal, text[:50]))
+        return m.group(0)
     return PLACEHOLDER.sub(sub, text)
+
+
+def _note(note, shared):
+    """הערה שמתחילה ב-[משותפת] נשארת רק בשבת משותפת."""
+    note = (note or "").strip()
+    if note.startswith(SHARED_TAG):
+        return note[len(SHARED_TAG):].strip() if shared else ""
+    return note
+
+
+def _hour(text):
+    text = (text or "").strip()
+    return "{:02d}:{}".format(int(text.split(":")[0]), text.split(":")[1]) if text else ""
+
+
+def plan_rows(date=None):
+    """הקבוצות לשבת: קבוצות ההכנה של השבוע (לפי סדר הופעתן), ואחריהן הקבוצות הקבועות."""
+    standing = read_csv("group_plan.csv")
+    known = {r["קבוצה"] for r in standing}
+    new = []
+    for p in read_week(date)["preps"]:
+        name = (p.get("הכנה") or "").strip()
+        if name and name not in known and name not in [g["קבוצה"] for g in new]:
+            new.append({"קבוצה": name, "שלב": STAGES[0], "ניקוד": str(PREP_POINTS),
+                        "אחראי מצוות": "", "מוביל/ה": "", "חברים קבועים": ""})
+    return new + standing
+
+
+def week_leaders(date=None):
+    """{הכנה: אחראי/ת} מקובץ ההכנות — השורה הראשונה שיש בה שם."""
+    leaders = {}
+    for p in read_week(date)["preps"]:
+        name, who = (p.get("הכנה") or "").strip(), (p.get("אחראי") or "").strip()
+        if name and who:
+            leaders.setdefault(name, who)
+    return leaders
+
+
+def task_rows(date=None):
+    """כל משימות השבת: ההכנות של השבוע, ואחריהן המשימות הקבועות מ-task_library.csv.
+
+    שורת הכנה של קבוצה קבועה מחליפה את המשימה הקבועה שלה באותו (יום, שעה).
+    «עזרה מבית המדרש = N» מוסיף לבית המדרש משימה ב-10:00, מיד אחרי המשימות שלו.
+    מצייני המקום מתמלאים מהתפריט, והערות [משותפת] נשארות רק בשבת משותפת."""
+    week = read_week(date)
+    stage_of = {r["קבוצה"]: r["שלב"] for r in read_csv("group_plan.csv")}
+    preps, helpers, taken = [], [], set()
+    for p in week["preps"]:
+        name = (p.get("הכנה") or "").strip()
+        if not name:
+            continue
+        day = (p.get("יום") or "").strip() or "שישי"
+        hour = _hour(p.get("שעה")) or ("08:00" if day == "שישי" else "")
+        stage = stage_of.get(name, STAGES[0])
+        qty = (p.get("כמות") or "").strip()
+        note = (p.get("הערה") or "").strip()
+        if week["shared"] and stage == STAGES[0] and day == "שישי":
+            note = " · ".join(x for x in (PREP_NOTE, note) if x)
+        preps.append({"שלב": stage, "יום": day, "שעה": hour, "קבוצה": name,
+                      "משימה": (p.get("משימה") or "").strip() or ("{} — {}".format(name, qty) if qty else name),
+                      "אנשים": (p.get("אנשים") or "").strip(), "מתכון": (p.get("מתכון") or "").strip(),
+                      "עוגן": (p.get("עוגן") or "").strip() or DEFAULT_ANCHOR.get(day, ""), "הערה": note})
+        taken.add((name, day, hour))
+        helpers_n = (p.get("עזרה מבית המדרש") or "").strip()
+        if helpers_n and helpers_n != "0":
+            helpers.append({"שלב": STAGES[1], "יום": "שישי", "שעה": "10:00", "קבוצה": "בית מדרש",
+                            "משימה": "עזרה בהכנת {}".format(name), "אנשים": helpers_n,
+                            "מתכון": "", "עוגן": "תחילת עבודה", "הערה": ""})
+
+    standing = []
+    for r in read_csv("task_library.csv"):
+        if (r["קבוצה"], r["יום"], _hour(r["שעה"])) in taken:
+            continue
+        standing.append(dict(r, הערה=_note(r.get("הערה"), week["shared"])))
+    last_bm = max((i for i, r in enumerate(standing) if r["קבוצה"] == "בית מדרש"), default=len(standing) - 1)
+    rows = preps + standing[:last_bm + 1] + helpers + standing[last_bm + 1:]
+    for r in rows:
+        r["משימה"] = expand_catering(r["משימה"], week["menu"], warn=date is not None)
+    return rows
+
+
+def write_task_row(ws, r, row):
+    """שורה בגיליון «משימות» — גם בתבנית וגם בקובץ השבת."""
+    get = lambda k: (row.get(k) or None) if row else None
+    data_cell(ws, r, T_STAGE, get("שלב"), center=True)
+    data_cell(ws, r, T_DAY, get("יום"), center=True)
+    data_cell(ws, r, T_HOUR, as_time(row["שעה"]) if row and row.get("שעה") else None,
+              center=True, bold=True, fmt="hh:mm")
+    data_cell(ws, r, T_GROUP, get("קבוצה"))
+    data_cell(ws, r, T_TASK, get("משימה"), wrap=True)
+    data_cell(ws, r, T_PEOPLE, int(row["אנשים"]) if row and row.get("אנשים") else None, center=True)
+    names = data_cell(ws, r, T_NAMES, None, wrap=True)
+    names.fill = fill(SCRIPT_BG)
+    data_cell(ws, r, T_RECIPE, get("מתכון"))
+    data_cell(ws, r, T_ANCHOR, get("עוגן"))
+    data_cell(ws, r, T_NOTE, get("הערה"), wrap=True)
+    if row and row.get("יום"):
+        ws.cell(row=r, column=T_DAY).fill = fill(DAY_FILLS.get(row["יום"], BAND))
+    ws.row_dimensions[r].height = 30 if row else 18
+
+
+def write_group_row(ws, r, row):
+    data_cell(ws, r, G_NAME, row["קבוצה"] if row else None, bold=True)
+    data_cell(ws, r, G_STAGE, (row["שלב"] or None) if row else None, center=True)
+    data_cell(ws, r, G_POINTS, int(row["ניקוד"]) if row and row.get("ניקוד") else None, center=True)
+    ws.row_dimensions[r].height = 30 if row else 18
+
+
+def write_menu_row(ws, r, row):
+    get = lambda k: (row.get(k) or None) if row else None
+    data_cell(ws, r, 1, get("ארוחה"), center=True)
+    data_cell(ws, r, 2, get("מנה"))
+    data_cell(ws, r, 3, get("כמות"), center=True)
+    data_cell(ws, r, 4, get("הערה"), wrap=True)
 
 
 def as_time(text):
@@ -186,7 +328,8 @@ def as_time(text):
 
 def data_cell(ws, row, col, value=None, editable=True, wrap=False, center=False,
               bold=False, size=11, fmt=None):
-    c = ws.cell(row=row, column=col, value=value)
+    c = ws.cell(row=row, column=col)
+    c.value = value                  # גם None — ws.cell(value=None) לא מוחק ערך קיים
     c.border = box()
     c.alignment = align(h="center" if center else "right", wrap=wrap, v="top" if wrap else "center")
     c.font = f(size, bold=bold)
@@ -427,27 +570,9 @@ def build_tasks(wb):
     title_row(ws, 1, "משימות השבת — מי עושה מה ומתי", span="A:J", size=18)
     header_row(ws, 2, ["שלב", "יום", "שעה", "קבוצה", "משימה", "אנשים", "שמות", "מתכון", "עוגן בלו\"ז", "הערה"])
 
-    library = read_csv("task_library.csv")
-    catering = read_catering()
+    rows = task_rows()
     for i in range(TASK_ROWS):
-        r = TASK_FIRST_ROW + i
-        row = library[i] if i < len(library) else None
-        get = lambda k: (row.get(k) or None) if row else None
-        data_cell(ws, r, T_STAGE, get("שלב"), center=True)
-        data_cell(ws, r, T_DAY, get("יום"), center=True)
-        data_cell(ws, r, T_HOUR, as_time(row["שעה"]) if row and row["שעה"] else None,
-                  center=True, bold=True, fmt="hh:mm")
-        data_cell(ws, r, T_GROUP, get("קבוצה"))
-        data_cell(ws, r, T_TASK, expand_catering(get("משימה"), catering), wrap=True)
-        data_cell(ws, r, T_PEOPLE, int(row["אנשים"]) if row and row["אנשים"] else None, center=True)
-        names = data_cell(ws, r, T_NAMES, None, wrap=True)
-        names.fill = fill(SCRIPT_BG)
-        data_cell(ws, r, T_RECIPE, get("מתכון"))
-        data_cell(ws, r, T_ANCHOR, get("עוגן"))
-        data_cell(ws, r, T_NOTE, get("הערה"), wrap=True)
-        if row and row["יום"]:
-            ws.cell(row=r, column=T_DAY).fill = fill(DAY_FILLS.get(row["יום"], BAND))
-        ws.row_dimensions[r].height = 30 if row else 18
+        write_task_row(ws, TASK_FIRST_ROW + i, rows[i] if i < len(rows) else None)
 
     last = TASK_FIRST_ROW + TASK_ROWS - 1
     span = lambda col: "{c}{a}:{c}{b}".format(c=col_letter(col), a=TASK_FIRST_ROW, b=last)
@@ -474,13 +599,11 @@ def build_groups(wb):
     title_row(ws, 1, "קבוצות העבודה השבת", span="A:G", size=18)
     header_row(ws, 2, ["קבוצה", "שלב", "ניקוד", "אחראי/ת", "חניכים", "גודל", "משימות"])
 
-    plan = read_csv("group_plan.csv")
+    plan = plan_rows()
     for i in range(GROUP_ROWS):
         r = GROUP_FIRST_ROW + i
         row = plan[i] if i < len(plan) else None
-        data_cell(ws, r, G_NAME, row["קבוצה"] if row else None, bold=True)
-        data_cell(ws, r, G_STAGE, (row["שלב"] or None) if row else None, center=True)
-        data_cell(ws, r, G_POINTS, int(row["ניקוד"]) if row and row.get("ניקוד") else None, center=True)
+        write_group_row(ws, r, row)
         leader = data_cell(ws, r, G_LEADER, None)
         leader.fill = fill(SCRIPT_BG)
         members = data_cell(ws, r, G_MEMBERS, None, wrap=True)
@@ -608,20 +731,13 @@ def build_catering(wb):
     widths(ws, {"A": 18, "B": 34, "C": 12, "D": 44})
     title_row(ws, 1, "קייטרינג — מה מגיע לכל ארוחה", span="A:D", size=18)
     header_row(ws, 2, ["ארוחה", "מנה", "כמות", "הערה"])
-    catering = read_catering()
     for i in range(CATERING_ROWS):
-        r = 3 + i
-        row = catering[i] if i < len(catering) else None
-        get = lambda k: (row.get(k) or None) if row else None
-        data_cell(ws, r, 1, get("ארוחה"), center=True)
-        data_cell(ws, r, 2, get("מנה"))
-        data_cell(ws, r, 3, get("כמות"), center=True)
-        data_cell(ws, r, 4, get("הערה"), wrap=True)
+        write_menu_row(ws, 3 + i, None)
     dv_list(ws, '"{}"'.format(MEALS), "A3:A{}".format(2 + CATERING_ROWS))
     ws.freeze_panes = "A3"
     note_row(ws, CATERING_ROWS + 4,
-             "המקור הוא data/catering.csv. משימה שכתוב בה {ארוחת ערב}, {ארוחת צהריים} או {סלטים} "
-             "מקבלת את רשימת המנות של אותה ארוחה — כך התפריט מתעדכן בכל המשימות בבת אחת.", last_col=4)
+             "המקור הוא data/menu/<תאריך>.csv. משימה שכתוב בה {ארוחת ערב}, {סלטים}, {טיש|העוגות} וכו' "
+             "מקבלת את מה שמוגש באותה ארוחה — כך התפריט וחלוקת העוגות מתעדכנים בכל המשימות בבת אחת.", last_col=4)
     return ws
 
 

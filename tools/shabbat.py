@@ -4,10 +4,12 @@
     python3 tools/shabbat.py 2026-09-25
     python3 tools/shabbat.py 2026-09-25 --check      # רק בדיקות ו-zip, על מה שכבר קיים
 
-לפני ההרצה צריך שני קבצים לשבת הזו (הטופס «טופס שבת.md» מפרט מה נכנס לכל אחד):
-  data/attendance/<תאריך>.csv — נוכחים, צוות שבת, מי לא בשישי, אחראים, הצמדות
-  data/catering.csv           — תפריט הקייטרינג של השבוע
-את השאר — לו"ז, משימות, קבוצות וניקוד — המערכת כבר יודעת.
+לפני ההרצה צריך שלושה קבצים לשבת הזו (הטופס «טופס שבת.md» מפרט מה נכנס לכל אחד):
+  data/attendance/<תאריך>.csv — נוכחים, מי לא בשישי / במוצ"ש, הצמדות
+  data/preps/<תאריך>.csv      — מה מכינים, כמה, כמה אנשים ומי אחראי
+  data/menu/<תאריך>.csv       — הקייטרינג, חלוקת העוגות ומה מוגש מההכנות
+ושורה ב-data/weeks.csv אם השבת משותפת עם שנה א'. הצוות, הלו"ז והתורנויות הקבועות
+כבר במערכת.
 """
 import argparse
 import subprocess
@@ -71,7 +73,7 @@ def checks(date, workbook, out_dir):
             if not t["names"]:
                 problems.append("משימה בלי שמות: «{}» [{}]".format(t["task"][:40], g["name"]))
 
-    needs = {g["name"] for g in assign_groups.read_plan() if g["needs_staff"]}
+    needs = {g["name"] for g in assign_groups.read_plan(date) if g["needs_staff"]}
     for g in data["groups"]:                             # לכל קבוצה שדורשת אחראי — יש
         if g["name"] in needs and not g["leader"]:
             problems.append("ל«{}» אין אחראי/ת".format(g["name"]))
@@ -98,10 +100,14 @@ def main():
     workbook = ROOT / "shabbatot" / "{}.xlsx".format(date.isoformat())
     out_dir = ROOT / "shabbatot" / date.isoformat()
 
-    if not attendance.path_for(date).exists():
-        raise SystemExit("✗ אין קובץ נוכחות לשבת הזו: {}\n  "
-                         "ממלאים את «טופס שבת.md» — רשימת הנוכחים היא הקלט היחיד שחובה."
-                         .format(attendance.path_for(date).relative_to(ROOT)))
+    needed = [(attendance.path_for(date), "רשימת הנוכחים"),
+              (ROOT / "data" / "preps" / "{}.csv".format(date.isoformat()), "ההכנות של שישי"),
+              (ROOT / "data" / "menu" / "{}.csv".format(date.isoformat()), "התפריט")]
+    missing = [(p, what) for p, what in needed if not p.exists()]
+    if missing:
+        raise SystemExit("✗ חסר לשבת הזו:\n" + "\n".join(
+            "   · {} — {}".format(what, p.relative_to(ROOT)) for p, what in missing) +
+            "\n  ממלאים מתוך «טופס שבת.md» שהאחראים שלחו.")
 
     if not args.check:
         run("build_workbook.py")

@@ -10,13 +10,13 @@
 אדם עושה כמה משימות בשעות שונות, ואף אחד לא מופיע בשתי משימות באותה שעה. משימה
 בלי שעה = כל הקבוצה.
 
-השיבוץ רץ שלב אחרי שלב (הכנות שישי ← תורנות שישי ← תורנות שבת): בכל שלב חניך
+השיבוץ רץ שלב אחרי שלב (הכנות שישי ← תורנות שישי ← תורנות שבת ← תורנות מוצ"ש): בכל שלב חניך
 יכול להיות בקבוצה אחת, אבל הוא יכול להופיע בכמה שלבים (עד --max-stages) כל עוד
 השעות לא מתנגשות. מי שצבר פחות ניקוד — בהיסטוריה ובשבת הזו — נבחר קודם; חניכי
 אלול מתפזרים יחסית.
 
 הצמדות ידניות ב-data/attendance/<תאריך>.csv («שיבוץ ידני», כמה קבוצות מופרדות
-ב-;) נשמרות גם אם הקבוצה גדולה מהשיא. המבנה הקבוע ב-data/group_plan.csv.
+ב-;) נשמרות גם אם הקבוצה גדולה מהשיא. המבנה הקבוע ב-data/group_plan.csv, וההכנות של השבוע ב-data/preps/<תאריך>.csv.
 """
 import argparse
 import csv
@@ -36,27 +36,26 @@ import roster
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-PLAN = DATA / "group_plan.csv"
 DUTY = DATA / "duty_history.csv"
 DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
 
 
 # ---------------------------------------------------------------------------
-def read_plan():
-    with PLAN.open(encoding="utf-8-sig", newline="") as fh:
-        plan = []
-        for row in csv.DictReader(fh):
-            if not (row.get("קבוצה") or "").strip():
-                continue
-            plan.append({
-                "name": row["קבוצה"].strip(),
-                "stage": (row.get("שלב") or "").strip() or bw.STAGES[-1],
-                "points": int(row.get("ניקוד") or 1),
-                "needs_staff": (row.get("אחראי מצוות") or "").strip() == "כן",
-                "leader": (row.get("מוביל/ה") or "").strip(),
-                "fixed": [x.strip() for x in (row.get("חברים קבועים") or "").split(";") if x.strip()],
-                "size": 0,
-            })
+def read_plan(date=None):
+    """הקבוצות לשבת: ההכנות שהאחראים בחרו לשבוע הזה + הקבוצות הקבועות (bw.plan_rows)."""
+    plan = []
+    for row in bw.plan_rows(date):
+        if not (row.get("קבוצה") or "").strip():
+            continue
+        plan.append({
+            "name": row["קבוצה"].strip(),
+            "stage": (row.get("שלב") or "").strip() or bw.STAGES[-1],
+            "points": int(row.get("ניקוד") or 1),
+            "needs_staff": (row.get("אחראי מצוות") or "").strip() == "כן",
+            "leader": (row.get("מוביל/ה") or "").strip(),
+            "fixed": [x.strip() for x in (row.get("חברים קבועים") or "").split(";") if x.strip()],
+            "size": 0,
+        })
     return plan
 
 
@@ -395,10 +394,10 @@ def main():
     pins = {n: [g.strip() for g in v.split(";") if g.strip()] for n, v in attendance_mod.load_pins(date).items()}
     staff = attendance_mod.load_staff(date)
     blocked = attendance_mod.load_blocked(date)
-    leaders = attendance_mod.load_leaders(date)
+    leaders = dict(bw.week_leaders(date), **attendance_mod.load_leaders(date))
     havurot = attendance_mod.load_havurot(date)
 
-    plan = read_plan()
+    plan = read_plan(date)
     tasks = read_tasks(path)
     known = {g["name"] for g in plan}
     for t in tasks:
