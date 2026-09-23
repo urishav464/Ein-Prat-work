@@ -2018,6 +2018,18 @@ def show_speaker_search() -> None:
         if not held:
             st.info("הזינו נושא — של המשמר, של השיעור, או שניהם — ולחצו «בנה מפה».")
         return
+    _results_panel(result)
+
+
+@st.fragment
+def _results_panel(result: dict) -> None:
+    """The candidate cards and «אמת» as ONE fragment. «➕ הוסף כמועמד» is a
+    callback, but on this page-level screen the run after it was a whole-app
+    run — sidebar, login gate, map, every card — for a three-row write
+    (measured: 1 app run, 229 ms, and the page dimmed). Scoped here it is one
+    fragment run of 12 ms. «בנה מפה» / «סרוק את הרשת» stay page-level: they
+    change what this panel receives. The history list above does not redraw
+    after an add — the toast confirms it, and the next full run catches up."""
     st.divider()
     if result.get("fallback"):
         _scout_fallback(result)

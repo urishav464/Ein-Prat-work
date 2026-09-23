@@ -157,8 +157,8 @@ More probe traps that produced false test results here: **input placeholders nev
 - **The search screen is a two-step form: «בנה מפה» → editable map cards → «סרוק»** (`_map_step`,
   keyed `card-map-{angle}-{nonce}`; the nonce bumps per map so the term inputs and checkboxes
   remount with fresh defaults; `_edited_map` reads them back by key). The map is a cheap
-  model call; «סרוק» is the sanctioned `page` site (long-running, non-fragment screen) beside
-  «אמת»; «מפה מחדש» / «נסו שוב» are `on_click=_clear_map`, never `pop(); st.rerun()`. Every run
+  model call; «סרוק» is the sanctioned `page` site (long-running, non-fragment screen); the
+  results under it are the `_results_panel` fragment; «מפה מחדש» / «נסו שוב» are `on_click=_clear_map`, never `pop(); st.rerun()`. Every run
   is saved and listed ABOVE the form, unfolded, for all of the pair's Mishmarim (`_search_history`);
   the instructor's dashboard has the season's table with «פתח» (`_goto(NAV_SEARCH)`) and «🗑».
   Probe trap: a Streamlit checkbox's `<input>` sits behind the styled box — click its `label`.
@@ -339,9 +339,14 @@ More probe traps that produced false test results here: **input placeholders nev
   `form-submit`, `rerun` (legitimate only after a submit, to close a dialog, or for nav/auth).
   `bare` (no callback, outside a form — changing it reruns its scope; the sidebar nav radio is
   one). Exit 1 only on a `DOUBLE RUN`; `page` sites are listed for review. It is the static map —
-  `app-reviewer` pairs it with the harness trace, which sees the runtime causes the AST cannot. The search screen's «אמת» / «הוסף למאגר» are the
-  sanctioned `page` sites: the screen is not a fragment and each runs a long verify — noted, not
-  hidden.
+  `app-reviewer` pairs it with the harness trace, which sees the runtime causes the AST cannot. The search screen's «סרוק את הרשת» is the one
+  sanctioned `page` site (it changes what the results panel receives, and its own model call
+  dwarfs a boundary). **Everything under the results is the `_results_panel` fragment** — the
+  cards, «➕ הוסף כמועמד», «אמת». Found by `app-reviewer` on the harness: adding a candidate was a
+  whole-app run (sidebar, login gate, map, every card — the page dimmed) for a three-row write;
+  scoped, the run after the callback is 12 ms instead of 229, and 5 queries instead of 6. What is
+  left (~0.8 s) is the callback's own five round-trips. The history list above the form does not
+  redraw after an add — the toast confirms it and the next full run catches up.
 - **Dashboard ✓ / ▶ and the trainee home's ✓ / ▶ / ↩ are fragment runs** (`_dashboard_body`,
   `_student_body`): the pipeline chips, the metrics and the hero's stepper read the same task list
   as the cards, and they all sit inside the same fragment, so one body run keeps them in step.
