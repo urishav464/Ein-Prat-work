@@ -31,7 +31,7 @@ CHROME_CANDIDATES = [
     "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
     "chromium", "chromium-browser", "google-chrome",
 ]
-DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
+DAY_ORDER = bw.DAY_ORDER
 SCHEDULE_DAY = {"חמישי": "חמישי", "שישי": "שישי", "שבת": "שבת", "מוצאי שבת": "שבת"}   # מוצ"ש יושב בלו"ז תחת שבת
 NO_ANCHOR = "ללא עוגן"
 
@@ -74,6 +74,7 @@ def read_workbook(path):
         if value == shabbat_date:
             parasha, candle, havdalah = cell(zm, r, 2), as_time(cell(zm, r, 3)), as_time(cell(zm, r, 4))
             break
+    title = sched[bw.SCHED_TITLE].value or ""          # «שבת סטודנטים» — ריק בקבצים ישנים
 
     events, day = [], None
     for r in range(bw.SCHED_FIRST_ROW, sched.max_row + 1):
@@ -113,7 +114,7 @@ def read_workbook(path):
                              "ingredients": cell(ws, r, 4), "steps": cell(ws, r, 5), "note": cell(ws, r, 6)}
 
     return {"date": shabbat_date, "parasha": parasha, "candle": candle, "havdalah": havdalah,
-            "events": events, "tasks": tasks, "groups": groups, "recipes": recipes}
+            "title": str(title).strip(), "events": events, "tasks": tasks, "groups": groups, "recipes": recipes}
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,8 @@ def hebrew_date_range(d):
 
 def when_line(data):
     when = "שבת {}".format(hebrew_date_range(data["date"])) if data["date"] else "שבת"
+    if data.get("title"):
+        when = "{} · {}".format(data["title"], when)
     if data["parasha"]:
         when += " · פרשת {}".format(data["parasha"])
     if data["candle"] and data["havdalah"]:
@@ -480,6 +483,15 @@ def chrome_binary():
     raise SystemExit("לא נמצא דפדפן Chromium להפקת ה-PDF")
 
 
+def shot_binary():
+    """הדפדפן לצילומי PNG. ב-chrome המלא חלון בגובה 1123 מצייר רק כ-1036px (תחתית העמוד —
+    שורות אחרונות ופוטר — נעלמת מהתמונה); headless_shell מצייר את כל החלון, ולכן הוא קודם."""
+    for candidate in CHROME_CANDIDATES:
+        if "headless_shell" in candidate and Path(candidate).exists():
+            return candidate
+    return chrome_binary()
+
+
 def measure_page(html_text):
     """מריץ עמוד (לו"ז צל או פלייר) ב-Chromium ומחזיר (מקדם התאמה לעמוד אחד, גובה
     פנוי, גובה הכותרת והפוטר, גובה כל שורת טבלה). 1.0 = נכנס לעמוד."""
@@ -516,7 +528,7 @@ def render(html_text, out_pdf=None, out_png=None, png_pages=None):
                            check=True, capture_output=True, timeout=180)
         if out_png:
             pages = png_pages or (pdf_pages(out_pdf) if out_pdf else 1)
-            subprocess.run(common + ["--window-size=794,{}".format(1123 * pages),
+            subprocess.run([shot_binary()] + common[1:] + ["--window-size=794,{}".format(1123 * pages),
                                      "--force-device-scale-factor=2",
                                      "--screenshot={}".format(out_png), source.as_uri()],
                            check=True, capture_output=True, timeout=180)

@@ -23,7 +23,7 @@ import roster
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "attendance"
 LINE_NOISE = re.compile(r"^\s*(?:[-•*]|\d+[.)]?)\s*")
-FIELDS = ["שם", "תוכנית", "חבורה", "זמין לתורנות", "לא זמין בשלב",
+FIELDS = ["שם", "תוכנית", "חבורה", "זמין לתורנות", "לא זמין בשלב", "לא בקבוצה",
           "צוות שבת", "שיבוץ ידני", "אחראי על", "הערה"]
 
 
@@ -87,6 +87,13 @@ def load_blocked(date):
     rows = _rows(date) or []
     return {r["שם"]: {x.strip() for x in r["לא זמין בשלב"].split(";") if x.strip()}
             for r in rows if (r.get("לא זמין בשלב") or "").strip()}
+
+
+def load_group_blocks(date):
+    """קבוצות שחניך לא ישובץ אליהן: {שם: {קבוצה, ...}} — למשל מעבירי החבורות לא בצהריים שבת."""
+    rows = _rows(date) or []
+    return {r["שם"]: {x.strip() for x in r["לא בקבוצה"].split(";") if x.strip()}
+            for r in rows if (r.get("לא בקבוצה") or "").strip()}
 
 
 def load_available(date):

@@ -5,10 +5,10 @@
     python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx
 
 ברירת המחדל: עותק של shabbat-planner.xlsx. עם --from מתחילים מקובץ של שבת קודמת —
-כך עריכות שנעשו במשימות, במתכונים ובקייטרינג עוברות הלאה; רק השמות, הקבוצות
-והשעות מתאפסים. בשני המקרים התאריך נכתב ב«לוז», ועמודת «שעה» מתמלאת בערכים
-סטטיים לפי data/schedule_template.csv (ההצעה בגיליון היא נוסחה, והייצוא לא
-יכול לקרוא נוסחאות — לכן השעות נכתבות כאן כמספרים).
+כך עריכות שנעשו במשימות, במתכונים ובקייטרינג עוברות הלאה; רק השמות והקבוצות
+מתאפסים. בשני המקרים «לוז» נכתב מחדש לגמרי מ-bw.schedule_rows (גם אירועים שהוספו
+ידנית בקובץ הקודם יורדים — מוסיפים אותם ב-data/schedule/<תאריך>.csv), עם שעות
+סטטיות (ההצעה בגיליון היא נוסחה, והייצוא לא יכול לקרוא נוסחאות).
 """
 import argparse
 import shutil
@@ -43,24 +43,25 @@ def find_row(ws, date):
 
 
 def reset_schedule(wb, date):
+    """הלו"ז של השבת — כל השורות נכתבות מחדש מ-bw.schedule_rows (תבנית לפי סוג השבת + קובץ
+    הלו"ז של השבוע), עם שעות סטטיות. הזמנים נלקחים מ-bw.zmanim_for (אתר ישיבה לשבתות שלנו)
+    ונכתבים לשורת השבת ב«זמנים», כך שהייצוא והנוסחאות קוראים אותם זמנים."""
     zm, ws = wb[bw.SH_ZMAN], wb[bw.SH_SCHED]
-    row = find_row(zm, date)
-    if row is None:
-        raise SystemExit("התאריך {} אינו מופיע בגיליון «זמנים». הריצו קודם tools/zmanim.py"
+    z, row = bw.zmanim_for(date), find_row(zm, date)
+    if z is None or row is None:
+        raise SystemExit("התאריך {} אינו מופיע בלוח הזמנים. הריצו קודם tools/zmanim.py ו-build_workbook.py"
                          .format(date.strftime("%d/%m/%Y")))
-    candle, havdalah = zm.cell(row=row, column=3).value, zm.cell(row=row, column=4).value
+    candle, havdalah = bw.as_time(z["כניסת שבת"]), bw.as_time(z["צאת שבת"])
+    zm.cell(row=row, column=3).value, zm.cell(row=row, column=4).value = candle, havdalah
+    if zm.cell(row=2, column=5).value == "מקור":          # בקבצים ישנים E היא עמודת הערה ממוזגת
+        zm.cell(row=row, column=5).value = z["מקור"]
     ws[bw.SCHED_DATE] = zm.cell(row=row, column=1).value
+    ws[bw.SCHED_TITLE] = bw.read_shabbat(date).get("שם") or None
 
-    times = bw.event_times(candle, havdalah)
-    day = None
-    for r in range(bw.SCHED_FIRST_ROW, bw.SCHED_FIRST_ROW + bw.SCHED_ROWS):
-        day = ws.cell(row=r, column=bw.L_DAY).value or day
-        event = ws.cell(row=r, column=bw.L_EVENT).value
-        if (day, event) in times:
-            ws.cell(row=r, column=bw.L_HOUR).value = times[(day, event)]
-        elif event:
-            clear(ws, r, bw.L_HOUR)      # אירוע שאורי הוסיף — השעה שלו נקבעת ידנית
-    return zm.cell(row=row, column=2).value, candle, havdalah, times
+    rows = bw.schedule_rows(date, candle, havdalah)
+    bw.write_schedule(ws, rows)
+    times = {(r["יום"], r["אירוע"]): r["שעה"] for r in rows}
+    return z["פרשה"], candle, havdalah, times
 
 
 def reset_people(wb):
@@ -78,8 +79,8 @@ def reset_people(wb):
 
 
 def write_week(wb, date, times=None):
-    """המשימות, הקבוצות והתפריט של השבת הזו: הקבועים + מה שהאחראים בחרו לשבוע
-    (data/preps, data/menu, data/weeks.csv). מצייני המקום מתמלאים כאן."""
+    """המשימות, הקבוצות, התפריט והמתכונים של השבת הזו: הקבועים + מה שהאחראים בחרו לשבוע
+    (data/preps, data/menu, data/recipes, data/weeks.csv). מצייני המקום מתמלאים כאן."""
     rows, plan, menu = bw.task_rows(date, times), bw.plan_rows(date), bw.read_week(date)["menu"]
     if len(rows) > bw.TASK_ROWS or len(plan) > bw.GROUP_ROWS or len(menu) > bw.CATERING_ROWS:
         raise SystemExit("יותר מדי שורות לגיליון: {} משימות, {} קבוצות, {} מנות".format(
@@ -93,6 +94,7 @@ def write_week(wb, date, times=None):
     ws = wb[bw.SH_CATERING]
     for i in range(bw.CATERING_ROWS):
         bw.write_menu_row(ws, 3 + i, menu[i] if i < len(menu) else None)
+    bw.write_recipes(wb[bw.SH_RECIPES], bw.recipe_rows(date))
     return rows, plan
 
 

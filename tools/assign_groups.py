@@ -37,7 +37,7 @@ import roster
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 DUTY = DATA / "duty_history.csv"
-DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
+DAY_ORDER = bw.DAY_ORDER
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +149,14 @@ def shrink_to_fit(plan, tasks, budget, fixed_sizes):
 
 
 # ---------------------------------------------------------------------------
-def assign(plan, available, programs, score, seed, pins=None):
+def assign(plan, available, programs, score, seed, pins=None, group_blocks=None):
     """משבץ חניכים לקבוצות של שלב אחד לפי גודל (g["size"]).
 
     סדר הקדימויות: הצמדות ידניות ← מובילים וחברים קבועים ← כל השאר לפי ניקוד
-    (מי שצבר פחות נבחר קודם), כשחניכי אלול מתפזרים בין הקבוצות.
+    (מי שצבר פחות נבחר קודם), כשחניכי אלול מתפזרים בין הקבוצות. group_blocks = {שם: {קבוצה}}
+    — קבוצות שחניך לא נכנס אליהן בדירוג (הצמדה ידנית גוברת).
     """
+    group_blocks = group_blocks or {}
     rng = random.Random(seed)
     groups = {g["name"]: [] for g in plan}
     taken = set()
@@ -181,9 +183,11 @@ def assign(plan, available, programs, score, seed, pins=None):
     ranked.sort(key=lambda n: score.get(n, 0))
     elul_in = {g["name"]: sum(programs.get(m) == "אלול" for m in groups[g["name"]]) for g in plan}
     for name in ranked:
-        candidates = [g for g in plan if open_slots(g) > 0]
-        if not candidates:
+        if not any(open_slots(g) > 0 for g in plan):
             break
+        candidates = [g for g in plan if open_slots(g) > 0 and g["name"] not in group_blocks.get(name, ())]
+        if not candidates:
+            continue
         if programs.get(name) == "אלול":
             target = min(candidates, key=lambda g: ((elul_in[g["name"]] + 1) / g["size"], -g["size"]))
             elul_in[target["name"]] += 1
@@ -227,10 +231,11 @@ def pick_staff(slots, staff, used, score, busy, pool):
 
 
 def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
-               staff=(), blocked=None, leaders=None):
+               staff=(), blocked=None, leaders=None, group_blocks=None):
     """מריץ את השיבוץ שלב אחרי שלב ומחזיר (קבוצות, שמות למשימה, הקטנות)."""
     blocked = blocked or {}
     leaders = leaders or {}
+    group_blocks = group_blocks or {}
     groups, task_names, shrunk = {}, {}, []
     week_points, stages_of, busy = Counter(), Counter(), {}
     stages = [s for s in bw.STAGES if any(g["stage"] == s for g in plan)]
@@ -278,11 +283,14 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
                     used_here.add(match)
             elif g["name"] in leaders:
                 print("⚠ האחראי/ת «{}» ל«{}» לא זמין/ה בשלב".format(leaders[g["name"]], g["name"]))
-        for g in stage_plan:
+        eligible = lambda g: [n for n in staff if g["name"] not in group_blocks.get(n, ())]
+        # הקבוצה עם הכי מעט אנשי צוות אפשריים בוחרת ראשונה — כך מעביר/ת חבורה מהצוות לא «תופס/ת»
+        # את הארוחה ומשאיר/ה את ארוחת הצהריים בלי אחראי (בלי חסימות — הסדר נשאר כמו שהיה)
+        for g in sorted(stage_plan, key=lambda g: len(eligible(g))):
             if not g["needs_staff"] or g["leader"]:
                 continue
-            chosen = pick_staff(timed_slots(tasks, g["name"]), staff, used_here,
-                                score_now, busy, pool)
+            chosen = pick_staff(timed_slots(tasks, g["name"]), eligible(g),  # לא מי שהקבוצה חסומה לו/ה
+                                used_here, score_now, busy, pool)
             if chosen:
                 g["leader"] = chosen
                 used_here.add(chosen)
@@ -302,7 +310,7 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
             g["size"] = max(peak(tasks, g["name"]), fixed.get(g["name"], 0))
 
         score = {n: past.get(n, 0) + week_points[n] + committed[n] for n in pool}
-        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins)
+        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins, group_blocks=group_blocks)
         groups.update(result)
         done.update(stage_names)
         for g in stage_plan:
@@ -394,6 +402,7 @@ def main():
     pins = {n: [g.strip() for g in v.split(";") if g.strip()] for n, v in attendance_mod.load_pins(date).items()}
     staff = attendance_mod.load_staff(date)
     blocked = attendance_mod.load_blocked(date)
+    group_blocks = attendance_mod.load_group_blocks(date)
     leaders = dict(bw.week_leaders(date), **attendance_mod.load_leaders(date))
     havurot = attendance_mod.load_havurot(date)
 
@@ -412,7 +421,7 @@ def main():
     groups, task_names, shrunk = assign_all(
         plan, tasks, available, programs, past, pins,
         args.seed if args.seed is not None else date.toordinal(), args.max_stages,
-        staff=staff, blocked=blocked, leaders=leaders)
+        staff=staff, blocked=blocked, leaders=leaders, group_blocks=group_blocks)
 
     on_duty = {m for v in groups.values() for m in v}
     print("שבת {} · {} נוכחים · {} זמינים · {} תורנים · {} קבוצות".format(

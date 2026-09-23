@@ -69,6 +69,20 @@ SHARED_TAG = "[משותפת]"            # הערה שרלוונטית רק בש
 PREP_NOTE = "בסיום — לרשום «שנה ב'» על הנייר כסף / השקית"
 PREP_POINTS = 3
 DEFAULT_ANCHOR = {"חמישי": "ערב חמישי", "שישי": "תחילת עבודה", "מוצאי שבת": 'ניקיונות מוצ"ש'}
+DAY_ORDER = {"חמישי": 0, "שישי": 1, "שבת": 2, "מוצאי שבת": 3}
+SCHED_DAY = {"מוצאי שבת": "שבת"}                   # מוצ"ש יושב בלו"ז תחת שבת
+SCHED_TITLE_LABEL, SCHED_TITLE = "E4", "F4"         # שם השבת («שבת סטודנטים»), מ-shabbatot.csv
+
+# סוג השבת: משותפת/נפרדת, ובמשותפת — חלון התנורים של שנה ב' (weeks.csv «תנורים»)
+OVENS_EARLY, OVENS_LATE = "עד 11:00", "מ-11:00"
+FRIDAY_DINING = "ניקיון חדר האוכל בשישי"
+FRIDAY_LUNCH = "ארוחת צהריים שישי"
+# מי מצטרף להכנות ובאיזו שעה — הכלל הראשון שהתגית שלו בשבוע («» = תמיד)
+HELP_RULES = [("תנורים " + OVENS_LATE, FRIDAY_DINING, "+0"),
+              ("נפרדת", "בית מדרש", "08:45"),
+              ("", "בית מדרש", "10:00")]
+# כשהתנורים שלנו מ-11:00 ההכנות זזות ל-11:00, אבל הבישול לארוחת הצהריים מתחיל ב-9:00
+LUNCH_RULES = {"תנורים " + OVENS_LATE: ("09:00", "ארוחת צהריים")}
 
 # --- צבעים ------------------------------------------------------------------
 INK, MUTED, LINE, BAND = "1F2430", "6B7280", "C9CFD8", "EDF1F6"
@@ -161,36 +175,167 @@ def read_csv(name):
         return list(csv.DictReader(fh))
 
 
-def read_week(date=None):
-    """מה שמשתנה משבת לשבת, מתוך שלושה מקומות:
+def read_shabbat(date):
+    """השורה של השבת ב-data/shabbatot.csv (השבתות שסגרנו): שם, אנשי צוות, ספר וזמני האתר — או {}."""
+    if date is None or not (DATA / "shabbatot.csv").exists():
+        return {}
+    for r in read_csv("shabbatot.csv"):
+        if (r.get("תאריך") or "").strip() == date.isoformat():
+            return {k: (v or "").strip() for k, v in r.items()}
+    return {}
 
-      data/preps/<תאריך>.csv — ההכנות שהאחראים בחרו (שורה = משימה)
-      data/menu/<תאריך>.csv  — מה מוגש בכל ארוחה: קייטרינג וחלוקת העוגות
-      data/weeks.csv          — שורה לכל שבת: האם היא משותפת עם שנה א'
+
+def read_week(date=None):
+    """מה שמשתנה משבת לשבת:
+
+      data/preps/<תאריך>.csv    — ההכנות שהאחראים בחרו (שורה = משימה)
+      data/menu/<תאריך>.csv     — מה מוגש בכל ארוחה: קייטרינג, סלטים וחלוקת העוגות
+      data/schedule/<תאריך>.csv — שינויים בלו"ז: מי מעביר, אירועים אופציונליים, מקומות
+      data/recipes/<תאריך>.csv  — המתכונים של השבוע (גוברים על recipes.csv)
+      data/weeks.csv             — שורה לכל שבת: משותפת עם שנה א', וחלון התנורים שלנו
+      data/shabbatot.csv         — שם השבת, אנשי הצוות, הספר וזמני האתר
 
     בלי תאריך (התבנית) — הכול ריק ושבת «רק אנחנו»."""
-    week = {"preps": [], "menu": [], "shared": False}
+    week = {"preps": [], "menu": [], "schedule": [], "recipes": [], "shared": False, "ovens": "", "info": {}}
     if date is None:
         return week
     iso = date.isoformat()
-    for key, sub in (("preps", "preps"), ("menu", "menu")):
-        path = DATA / sub / "{}.csv".format(iso)
+    for key in ("preps", "menu", "schedule", "recipes"):
+        path = DATA / key / "{}.csv".format(iso)
         if path.exists():
             with path.open(encoding="utf-8-sig", newline="") as fh:
-                week[key] = [r for r in csv.DictReader(fh) if any((v or "").strip() for v in r.values())]
+                week[key] = [{k: v for k, v in r.items() if k} for r in csv.DictReader(fh)
+                             if any((v or "").strip() for v in r.values() if isinstance(v, str))]
     if (DATA / "weeks.csv").exists():
         for r in read_csv("weeks.csv"):
             if (r.get("תאריך") or "").strip() == iso:
                 week["shared"] = (r.get("שבת משותפת") or "").strip() == "כן"
+                week["ovens"] = (r.get("תנורים") or "").strip()
+    week["info"] = read_shabbat(date)
     return week
 
 
-def expand_catering(text, menu, warn=True):
+# ---------------------------------------------------------------------------
+# סוג השבת — תגיות, ועמודת «תנאי» בתבנית הלו"ז, בספריית המשימות ובקבוצות
+# ---------------------------------------------------------------------------
+def tags_for(shared, ovens="", on=(), optional=()):
+    """התגיות של שבוע: משותפת/נפרדת, חלון התנורים, ולכל אירוע אופציונלי — שמו או «בלי <שם>».
+
+    «תנורים כל היום» = שבת נפרדת, או משותפת שלא נקבע בה חלון (כמו 18.9)."""
+    tags = {"משותפת" if shared else "נפרדת"}
+    ovens = (ovens or "").strip() if shared else ""
+    tags.add("תנורים " + ovens if ovens in (OVENS_EARLY, OVENS_LATE) else "תנורים כל היום")
+    for name in optional:
+        tags.add(name if name in on else "בלי " + name)
+    return tags
+
+
+def applies(cond, tags):
+    """«תנאי» ריק = תמיד; אחרת רשימה מופרדת ב-; ומספיק שאחת מהתגיות מתקיימת."""
+    parts = [c.strip() for c in (cond or "").split(";") if c.strip()]
+    return not parts or any(c in tags for c in parts)
+
+
+def prep_day(p):
+    return (p.get("יום") or "").strip() or "שישי"
+
+
+def prep_anchor(p, tags=()):
+    """העוגן של שורת הכנה: המפורש, ואם אין — לפי היום (ארוחת צהריים שישי לפי LUNCH_RULES)."""
+    explicit = (p.get("עוגן") or "").strip()
+    if explicit:
+        return explicit
+    day = prep_day(p)
+    if (p.get("הכנה") or "").strip() == FRIDAY_LUNCH and day == "שישי" and not (p.get("שעה") or "").strip():
+        for tag, (_, anchor) in LUNCH_RULES.items():
+            if tag in tags:
+                return anchor
+    return DEFAULT_ANCHOR.get(day, "")
+
+
+def _optional(template):
+    return [(r["יום"], r["אירוע"]) for r in template if (r.get("אופציונלי") or "").strip() == "כן"]
+
+
+def week_schedule(week):
+    """שורות data/schedule/<תאריך>.csv לפי סדר ההחלה: קודם של הטופס («מקור=טופס»), ואז הידניות —
+    כך שורה שאורי הוסיף גוברת על הטופס; ו-{(יום, אירוע)} שבוטלו («פעולה=בטל») — ביטול גובר תמיד."""
+    rows = [{k: (v or "").strip() for k, v in w.items() if isinstance(v, str)} for w in week["schedule"]]
+    rows = [w for w in rows if w.get("יום") and w.get("אירוע")]
+    rows = [w for w in rows if w.get("מקור") == "טופס"] + [w for w in rows if w.get("מקור") != "טופס"]
+    cancelled = {(w["יום"], w["אירוע"]) for w in rows if w.get("פעולה") == "בטל"}
+    return rows, cancelled
+
+
+def _optional_on(week, template, all_on=False):
+    """האירועים האופציונליים שפעילים השבוע: מופיעים בקובץ הלו"ז של השבוע, או שהכנה מעוגנת אליהם
+    — ולא בוטלו."""
+    opt = _optional(template)
+    if all_on:
+        return set(opt)
+    rows, cancelled = week_schedule(week)
+    listed = {(w["יום"], w["אירוע"]) for w in rows}
+    anchored = {(SCHED_DAY.get(prep_day(p), prep_day(p)), prep_anchor(p)) for p in week["preps"]
+                if (p.get("הכנה") or "").strip()}
+    return {k for k in opt if (k in listed or k in anchored) and k not in cancelled}
+
+
+def week_tags(date=None, week=None, all_optional=False):
+    week = read_week(date) if week is None else week
+    template = read_schedule_template()
+    on = {name for _, name in _optional_on(week, template, all_optional)}
+    return tags_for(week["shared"], week["ovens"], on, [name for _, name in _optional(template)])
+
+
+# ---------------------------------------------------------------------------
+# מתכונים
+# ---------------------------------------------------------------------------
+RECIPE_FIELDS = ["קטגוריה", "מנה", "כמות", "מרכיבים", "הוראות", "הערה"]
+
+
+def recipe_rows(date=None):
+    """recipes.csv, כשגרסת השבוע (data/recipes/<תאריך>.csv) של מנה מחליפה אותה במקומה."""
+    base = read_csv("recipes.csv") if (DATA / "recipes.csv").exists() else []
+    week = {r["מנה"].strip(): r for r in read_week(date)["recipes"] if (r.get("מנה") or "").strip()}
+    rows = [week.pop(r["מנה"].strip(), r) for r in base if (r.get("מנה") or "").strip()]
+    rows += list(week.values())
+    if len(rows) > RECIPE_ROWS:
+        raise SystemExit("✗ {} מתכונים — יותר מ-{} שורות בגיליון «מתכונים». להגדיל את RECIPE_ROWS."
+                         .format(len(rows), RECIPE_ROWS))
+    return rows
+
+
+def match_recipe(name, names):
+    """שם המנה כפי שמופיע במתכונים: זהה, או הכלה יחידה («סלט כרוב» → «סלט כרוב מרענן»)."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    if name in names:
+        return name
+    hits = [n for n in names if name in n or n in name]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _recipe_list(text, names, warn):
+    """«א;ב» → רק מנות שיש להן מתכון השבוע (השאר נשארות בטקסט המשימה)."""
+    out = []
+    for dish in (d.strip() for d in (text or "").split(";")):
+        if not dish:
+            continue
+        match = match_recipe(dish, names)
+        if match:
+            out.append(match)
+        elif warn:
+            print("⚠ אין מתכון ל«{}» — הפלייר יוצג בלי המצרכים שלו".format(dish))
+    return ";".join(dict.fromkeys(out))
+
+
+def expand_catering(text, menu, warn=True, sep=", "):
     """מחליף {ארוחה} ברשימת המנות של אותה ארוחה בתפריט השבוע.
 
     {ארוחה|ברירת מחדל} — אם אין לארוחה מנות, נכתבת ברירת המחדל («חימום {טיש|העוגות}»).
     בלי ברירת מחדל ובלי מנות — הסוגריים נשארים גלויים ומודפסת אזהרה, כדי ששום דבר
-    לא ייעלם בשקט (ו-shabbat.py נכשל עליהם)."""
+    לא ייעלם בשקט (ו-shabbat.py נכשל עליהם). בעמודת המתכון sep=";"."""
     if not text or "{" not in text:
         return text
     def sub(m):
@@ -198,13 +343,20 @@ def expand_catering(text, menu, warn=True):
         dishes = [r["מנה"].strip() for r in menu
                   if (r.get("ארוחה") or "").strip() == meal and (r.get("מנה") or "").strip()]
         if dishes:
-            return ", ".join(dishes)
+            return sep.join(dishes)
         if default is not None:
             return default
         if warn:
             print("⚠ אין בתפריט מנות ל«{}» — המשימה: {}".format(meal, text[:50]))
         return m.group(0)
     return PLACEHOLDER.sub(sub, text)
+
+
+def expand_info(text, info):
+    """{ספר} / {שם} בלו"ז — מהשורה של השבת ב-shabbatot.csv (ברירת המחדל אחרי |, או ריק)."""
+    if not text or "{" not in text:
+        return text
+    return PLACEHOLDER.sub(lambda m: info.get(m.group(1).strip()) or (m.group(2) or ""), text)
 
 
 def _note(note, shared):
@@ -223,15 +375,22 @@ def _hour(text):
 
 
 def plan_rows(date=None):
-    """הקבוצות לשבת: קבוצות ההכנה של השבוע (לפי סדר הופעתן), ואחריהן הקבוצות הקבועות."""
+    """הקבוצות לשבת: קבוצות ההכנה של השבוע (לפי סדר הופעתן), ואחריהן הקבוצות הקבועות
+    שפעילות בסוג השבת הזה («תנאי») ויש להן משימות השבוע."""
+    week = read_week(date)
+    tags = week_tags(date, week)
     standing = read_csv("group_plan.csv")
     known = {r["קבוצה"] for r in standing}
     new = []
-    for p in read_week(date)["preps"]:
+    for p in week["preps"]:
         name = (p.get("הכנה") or "").strip()
         if name and name not in known and name not in [g["קבוצה"] for g in new]:
             new.append({"קבוצה": name, "שלב": STAGES[0], "ניקוד": str(PREP_POINTS),
                         "אחראי מצוות": "", "מוביל/ה": "", "חברים קבועים": ""})
+    standing = [r for r in standing if applies(r.get("תנאי"), tags)]
+    if date is not None:
+        used = {r["קבוצה"] for r in task_rows(date, warn=False)}
+        standing = [r for r in standing if r["קבוצה"] in used]
     return new + standing
 
 
@@ -245,50 +404,99 @@ def week_leaders(date=None):
     return leaders
 
 
-def task_rows(date=None, times=None):
+def _task_key(group, day, hour, anchor):
+    return (group, day, _hour(hour), anchor)
+
+
+def task_rows(date=None, times=None, warn=True):
     """כל משימות השבת: ההכנות של השבוע, ואחריהן המשימות הקבועות מ-task_library.csv.
 
-    שורת הכנה של קבוצה קבועה מחליפה את המשימה הקבועה שלה באותו (יום, שעה).
-    «עזרה מבית המדרש = N» מוסיף לבית המדרש משימה ב-10:00, מיד אחרי המשימות שלו.
-    מצייני המקום מתמלאים מהתפריט, והערות [משותפת] נשארות רק בשבת משותפת.
+    רק קבוצות ומשימות שה«תנאי» שלהן מתקיים בסוג השבת. שורת הכנה של קבוצה קבועה מחליפה
+    את המשימה הקבועה עם אותו (קבוצה, יום, שעה, עוגן), ויורשת ממנה את מה שחסר בה.
+    «עזרה = N» מוסיף משימת הצטרפות להכנה לפי HELP_RULES, מיד אחרי משימות הקבוצה שעוזרת.
+    מצייני המקום מתמלאים מהתפריט (גם בעמודת המתכון), הערות [משותפת] נשארות רק בשבת משותפת,
+    ומשימה שהעוגן שלה הוא אירוע שלא מתקיים השבוע (סעודה שלישית, ערב חברה) נופלת.
     שעה יחסית («-30») מחושבת מזמן אירוע העוגן: times = {(יום, אירוע): time}."""
     week = read_week(date)
-    stage_of = {r["קבוצה"]: r["שלב"] for r in read_csv("group_plan.csv")}
+    tags = week_tags(date, week)
+    say = warn and date is not None
+    plan = read_csv("group_plan.csv")
+    stage_of = {r["קבוצה"]: r["שלב"] for r in plan}
+    off = {r["קבוצה"] for r in plan if not applies(r.get("תנאי"), tags)}
+    library = [r for r in read_csv("task_library.csv")
+               if r["קבוצה"] not in off and applies(r.get("תנאי"), tags)]
+    by_key = {}
+    for r in library:
+        by_key.setdefault(_task_key(r["קבוצה"], r["יום"], r["שעה"], r["עוגן"]), r)
+    help_group, help_hour = next((g, h) for tag, g, h in HELP_RULES if not tag or tag in tags)
+    ovens = next((t for t in tags if t in ("תנורים " + OVENS_EARLY, "תנורים " + OVENS_LATE)), "")
+    prep_note = " · ".join(x for x in (PREP_NOTE, ovens.replace("תנורים", "התנורים שלנו", 1)) if x)
+
     preps, helpers, taken = [], [], set()
     for p in week["preps"]:
         name = (p.get("הכנה") or "").strip()
         if not name:
             continue
-        day = (p.get("יום") or "").strip() or "שישי"
-        hour = _hour(p.get("שעה")) or ("08:00" if day == "שישי" else "")
+        if name in off:
+            if say:
+                print("⚠ «{}» לא פעילה בשבת כזו — השורה שלה בקובץ ההכנות לא נכנסת".format(name))
+            continue
+        day = prep_day(p)
+        anchor = prep_anchor(p, tags)
+        hour = _hour(p.get("שעה"))
+        if not hour and name == FRIDAY_LUNCH and day == "שישי":
+            hour = next((h for tag, (h, _) in LUNCH_RULES.items() if tag in tags), "")
+        if not hour and day == "שישי":
+            hour = "+0"                                  # עם תחילת העבודה (08:00, או 11:00)
         stage = stage_of.get(name, STAGES[0])
         qty = (p.get("כמות") or "").strip()
-        note = (p.get("הערה") or "").strip()
+        base = by_key.get(_task_key(name, day, hour, anchor), {})
+        if not base and (p.get("שעה") or "").strip() and not (p.get("עוגן") or "").strip():
+            base = next((r for r in library if r["קבוצה"] == name and r["יום"] == day      # (קבוצה, יום, שעה)
+                         and _hour(r["שעה"]) == hour), {})                                    # כמו פעם — והעוגן
+            anchor = base.get("עוגן") or anchor                                               # עובר בירושה
+        text = (p.get("משימה") or "").strip() or ("{} — {}".format(name, qty) if qty else "") \
+            or base.get("משימה") or name
+        note = (p.get("הערה") or "").strip() or _note(base.get("הערה"), week["shared"])
         if week["shared"] and stage == STAGES[0] and day == "שישי":
-            note = " · ".join(x for x in (PREP_NOTE, note) if x)
-        preps.append({"שלב": stage, "יום": day, "שעה": hour, "קבוצה": name,
-                      "משימה": (p.get("משימה") or "").strip() or ("{} — {}".format(name, qty) if qty else name),
-                      "אנשים": (p.get("אנשים") or "").strip(), "מתכון": (p.get("מתכון") or "").strip(),
-                      "עוגן": (p.get("עוגן") or "").strip() or DEFAULT_ANCHOR.get(day, ""), "הערה": note})
-        taken.add((name, day, hour))
-        helpers_n = (p.get("עזרה מבית המדרש") or "").strip()
+            note = " · ".join(x for x in (prep_note, note) if x)
+        preps.append({"שלב": stage, "יום": day, "שעה": hour, "קבוצה": name, "משימה": text,
+                      "אנשים": (p.get("אנשים") or "").strip() or base.get("אנשים", ""),
+                      "מתכון": (p.get("מתכון") or "").strip() or base.get("מתכון", ""),
+                      "עוגן": anchor, "הערה": note})
+        taken.add(_task_key(name, day, hour, anchor))
+        helpers_n = (p.get("עזרה") or p.get("עזרה מבית המדרש") or "").strip()
         if helpers_n and helpers_n != "0":
-            helpers.append({"שלב": STAGES[1], "יום": "שישי", "שעה": "10:00", "קבוצה": "בית מדרש",
-                            "משימה": "עזרה בהכנת {}".format(name), "אנשים": helpers_n,
+            if help_group in off:
+                print("⚠ «{}» לא פעילה השבוע — אין מי שיצטרף ל«{}»".format(help_group, name))
+                continue
+            helpers.append({"שלב": stage_of.get(help_group, STAGES[1]), "יום": "שישי", "שעה": help_hour,
+                            "קבוצה": help_group, "משימה": "עזרה בהכנת {}".format(name), "אנשים": helpers_n,
                             "מתכון": "", "עוגן": "תחילת עבודה", "הערה": ""})
 
-    standing = []
-    for r in read_csv("task_library.csv"):
-        if (r["קבוצה"], r["יום"], _hour(r["שעה"])) in taken:
-            continue
-        standing.append(dict(r, הערה=_note(r.get("הערה"), week["shared"])))
-    last_bm = max((i for i, r in enumerate(standing) if r["קבוצה"] == "בית מדרש"), default=len(standing) - 1)
-    rows = preps + standing[:last_bm + 1] + helpers + standing[last_bm + 1:]
-    sched_day = {"מוצאי שבת": "שבת"}                 # מוצ"ש יושב בלו"ז תחת שבת
+    standing = [dict(r, הערה=_note(r.get("הערה"), week["shared"])) for r in library
+                if _task_key(r["קבוצה"], r["יום"], r["שעה"], r["עוגן"]) not in taken]
+    rows = preps + standing                              # העזרה — מיד אחרי המשימות של הקבוצה שעוזרת
+    last = max((i for i, r in enumerate(rows) if r["קבוצה"] == help_group), default=len(rows) - 1)
+    rows = rows[:last + 1] + helpers + rows[last + 1:]
+
+    active = known = None
+    if date is not None:
+        events = schedule_rows(date, week=week)
+        active = {(r["יום"], r["אירוע"]) for r in events}
+        known = {(r["יום"], r["אירוע"]) for r in read_schedule_template()} | active
+    names = {r["מנה"].strip() for r in recipe_rows(date)}
+    out = []
     for r in rows:
-        r["משימה"] = expand_catering(r["משימה"], week["menu"], warn=date is not None)
-        r["שעה"] = resolve_hour(r["שעה"], (times or {}).get((sched_day.get(r["יום"], r["יום"]), r["עוגן"])))
-    return rows
+        key = (SCHED_DAY.get(r["יום"], r["יום"]), r["עוגן"])
+        if active is not None and r["עוגן"] and key in known and key not in active:
+            continue                                     # אירוע שלא מתקיים השבוע
+        r["משימה"] = expand_catering(r["משימה"], week["menu"], warn=say)
+        r["מתכון"] = _recipe_list(expand_catering(r.get("מתכון") or "", week["menu"], warn=say, sep=";"),
+                                  names, say)
+        r["שעה"] = resolve_hour(r["שעה"], (times or {}).get(key))
+        out.append(r)
+    return out
 
 
 def write_task_row(ws, r, row):
@@ -369,7 +577,7 @@ def suggested_time(row, candle, havdalah, known=None):
     """הזמן המוצע לשורת תבנית, כאובייקט time (או None כשאין עוגן).
 
     «בסיס»: קבוע · כניסה · צאה · או שם של אירוע אחר באותו יום (טיש = סעודת שבת + 90),
-    שהזמן שלו כבר חושב ב-known = {(יום, אירוע): time}."""
+    שהזמן שלו כבר חושב ב-known = {(יום, אירוע): time}. «לא לפני» = רצפה (סעודה לא לפני 19:00)."""
     base, offset = row["בסיס"].strip(), row["היסט"].strip()
     if base == "קבוע":
         return as_time(offset)
@@ -382,20 +590,80 @@ def suggested_time(row, candle, havdalah, known=None):
     if anchor is None:
         return None
     total = _round(_mins(anchor) + int(offset), row)
+    floor = (row.get("לא לפני") or "").strip()
+    if floor:
+        total = max(total, _mins(as_time(floor)))
     return time((total // 60) % 24, total % 60)
 
 
-def event_times(candle, havdalah):
-    """{(יום, אירוע): time} לכל שורות התבנית, לפי הסדר — כך אירוע יכול להישען על קודמו."""
+SCHED_FIELDS = ["יום", "אירוע", "מקום", "בסיס", "היסט", "עיגול", "לא לפני", "הערה"]
+
+
+def schedule_rows(date=None, candle=None, havdalah=None, optional=False, week=None):
+    """הלו"ז של השבת, כרשימת שורות עם «שעה» מחושבת (time או None).
+
+    תבנית (data/schedule_template.csv) לפי סוג השבת («תנאי»), בלי אירועים אופציונליים
+    שלא הודלקו; ואז data/schedule/<תאריך>.csv: שורה עם אותו (יום, אירוע) מדליקה אותו
+    ודורסת את השדות שאינם ריקים, «פעולה=בטל» מוחקת, ושורה חדשה היא אירוע חדש.
+    {ספר} / {שם} מתמלאים מ-shabbatot.csv. הזמנים מחושבים לפי סדר ההגדרה (כך אירוע נשען
+    על קודמו), ואז הכול ממוין לפי יום ושעה. optional=True — כל האופציונליים דולקים."""
+    week = read_week(date) if week is None else week
+    template = read_schedule_template()
+    on = _optional_on(week, template, optional)
+    tags = tags_for(week["shared"], week["ovens"], {n for _, n in on}, [n for _, n in _optional(template)])
+    rows = []
+    for r in template:
+        key = (r["יום"], r["אירוע"])
+        if not applies(r.get("תנאי"), tags) or ((r.get("אופציונלי") or "").strip() == "כן" and key not in on):
+            continue
+        rows.append({k: (r.get(k) or "").strip() for k in SCHED_FIELDS})
+    week_rows, cancelled = week_schedule(week)
+    rows = [r for r in rows if (r["יום"], r["אירוע"]) not in cancelled]
+    for w in week_rows:
+        key = (w["יום"], w["אירוע"])
+        if key in cancelled:
+            continue
+        hit = next((r for r in rows if (r["יום"], r["אירוע"]) == key), None)
+        if hit is None:
+            if not w.get("בסיס") or not w.get("היסט"):
+                print("⚠ «{}» בלו\"ז של השבוע בלי שעה (בסיס + היסט) — לא נכנס".format(key[1]))
+                continue
+            hit = {k: "" for k in SCHED_FIELDS}
+            rows.append(hit)
+        for k in SCHED_FIELDS:
+            if w.get(k):
+                hit[k] = w[k]
+    have = {(r["יום"], r["אירוע"]) for r in rows}
+    for r in rows:
+        if r["בסיס"] not in ("קבוע", "כניסה", "צאה") and (r["יום"], r["בסיס"]) not in have:
+            raise SystemExit("✗ «{}» נשען על «{}», שלא מתקיים השבוע (data/schedule/{}.csv)".format(
+                r["אירוע"], r["בסיס"], date.isoformat() if date else "—"))
     known = {}
-    for row in read_schedule_template():
-        known[(row["יום"], row["אירוע"])] = suggested_time(row, candle, havdalah, known)
-    return known
+    for r in rows:
+        r["מקום"], r["הערה"] = expand_info(r["מקום"], week["info"]), expand_info(r["הערה"], week["info"])
+        r["שעה"] = known[(r["יום"], r["אירוע"])] = suggested_time(r, candle, havdalah, known)
+    return [r for _, r in sorted(enumerate(rows), key=lambda ir: (event_sort_key(ir[1]["יום"], ir[1]["שעה"]), ir[0]))]
+
+
+def event_sort_key(day, t):
+    """(יום, בלי שעה בסוף היום, שעה) — שעה לפני 05:00 נחשבת אחרי חצות."""
+    m = None if t is None else _mins(t) + (1440 if _mins(t) < 300 else 0)
+    return (DAY_ORDER.get(day, 9), m is None, m or 0)
+
+
+def active_events(date=None):
+    """{(יום, אירוע)} שמתקיימים בשבת הזו — בלי תלות בשעות."""
+    return {(r["יום"], r["אירוע"]) for r in schedule_rows(date)}
+
+
+def event_times(candle, havdalah, date=None):
+    """{(יום, אירוע): time} ללו"ז של השבת — כך משימה יחסית («-30») יודעת מתי העוגן שלה."""
+    return {(r["יום"], r["אירוע"]): r["שעה"] for r in schedule_rows(date, candle, havdalah)}
 
 
 def suggestion_formula(row, row_of=None):
     """נוסחת ההצעה לאותה שורה, לעדכון אוטומטי כשמחליפים תאריך בשיטס.
-    row_of = {אירוע: מספר שורה בגיליון} — לבסיס שהוא אירוע אחר."""
+    row_of = {(יום, אירוע): מספר שורה בגיליון} — לבסיס שהוא אירוע אחר."""
     base, offset = row["בסיס"].strip(), row["היסט"].strip()
     if base == "קבוע":
         return as_time(offset)
@@ -404,16 +672,48 @@ def suggestion_formula(row, row_of=None):
     elif base == "צאה":
         ref = "$" + SCHED_HAVDALAH[0] + "$" + SCHED_HAVDALAH[1:]
     else:
-        ref = "${}${}".format(col_letter(L_SUGGEST), (row_of or {})[base])
+        ref = "${}${}".format(col_letter(L_SUGGEST), (row_of or {})[(row["יום"], base)])
     minutes = int(offset)
     step = int((row.get("עיגול") or "0").strip() or 0)
-    if minutes == 0 and not step:
-        return '=IF({r}="","",{r})'.format(r=ref)
+    floor = (row.get("לא לפני") or "").strip()
     sign = "+" if minutes >= 0 else "-"
     expr = "{r}{s}TIME({h},{m},0)".format(r=ref, s=sign, h=abs(minutes) // 60, m=abs(minutes) % 60)
     if step:                                   # כלפי מעלה: ROUNDUP על דקות שלמות (בלי CEILING על זמן)
-        return '=IF({r}="","",ROUNDUP(ROUND(({e})*1440,0)/{s},0)*{s}/1440)'.format(r=ref, e=expr, s=step)
-    return '=IF({r}="","",ROUND(({e})*288,0)/288)'.format(r=ref, e=expr)
+        core = "ROUNDUP(ROUND(({e})*1440,0)/{s},0)*{s}/1440".format(e=expr, s=step)
+    elif minutes:
+        core = "ROUND(({e})*288,0)/288".format(e=expr)
+    else:
+        core = ref
+    if floor:                                  # בתוך ה-IF: בלי תאריך — ריק, לא ‎#VALUE!
+        t = as_time(floor)
+        core = "MAX(TIME({h},{m},0),{c})".format(h=t.hour, m=t.minute, c=core)
+    return '=IF({r}="","",{c})'.format(r=ref, c=core)
+
+
+def write_sched_row(ws, r, row, row_of, hour=True):
+    """שורה בגיליון «לוז» — גם בתבנית (hour=False: בלי שעה סטטית) וגם בקובץ השבת."""
+    day = row["יום"] if row else None
+    data_cell(ws, r, L_DAY, day, center=True, bold=True)
+    data_cell(ws, r, L_HOUR, row.get("שעה") if row and hour else None, center=True, bold=True, size=12,
+              fmt="hh:mm")
+    data_cell(ws, r, L_EVENT, row["אירוע"] if row else None, bold=True)
+    data_cell(ws, r, L_PLACE, (row["מקום"] or None) if row else None)
+    data_cell(ws, r, L_NOTE, (row["הערה"] or None) if row else None, wrap=True)
+    sug = calc_cell(ws, r, L_SUGGEST, suggestion_formula(row, row_of) if row else None, fmt="hh:mm")
+    sug.font = f(10, color=MUTED)
+    calc_cell(ws, r, L_TASKS, '=IF(C{r}="","",COUNTIF({t},C{r}))'.format(r=r, t=T(T_ANCHOR)))
+    if day:
+        ws.cell(row=r, column=L_DAY).fill = fill(DAY_FILLS.get(day, BAND))
+    ws.row_dimensions[r].height = 22
+
+
+def write_schedule(ws, rows, hour=True):
+    """כל שורות הלו"ז (SCHED_ROWS), עם ניקוי שאריות — מקור אחד לתבנית ולקובץ השבת."""
+    if len(rows) > SCHED_ROWS:
+        raise SystemExit("✗ {} אירועים — יותר מ-{} שורות בגיליון «לוז»".format(len(rows), SCHED_ROWS))
+    row_of = {(t["יום"], t["אירוע"]): SCHED_FIRST_ROW + i for i, t in enumerate(rows)}
+    for i in range(SCHED_ROWS):
+        write_sched_row(ws, SCHED_FIRST_ROW + i, rows[i] if i < len(rows) else None, row_of, hour)
 
 
 def resolve_hour(text, anchor_time):
@@ -426,6 +726,30 @@ def resolve_hour(text, anchor_time):
         return ""
     total = (_mins(anchor_time) + int(text) + 2) // 5 * 5
     return "{:02d}:{:02d}".format((total // 60) % 24, total % 60)
+
+
+# ---------------------------------------------------------------------------
+# זמני השבת — zmanim.csv (חישוב), וזמני האתר מ-shabbatot.csv גוברים
+# ---------------------------------------------------------------------------
+def read_zmanim():
+    """[{תאריך (date), פרשה, כניסת שבת, צאת שבת, מקור}] לכל שבת בלוח."""
+    site = {}
+    if (DATA / "shabbatot.csv").exists():
+        for r in read_csv("shabbatot.csv"):
+            if (r.get("כניסת שבת") or "").strip() and (r.get("צאת שבת") or "").strip():
+                site[r["תאריך"].strip()] = (r["כניסת שבת"].strip(), r["צאת שבת"].strip())
+    rows = []
+    for r in read_csv("zmanim.csv"):
+        d = datetime.strptime(r["תאריך"], "%d/%m/%Y").date()
+        candle, havdalah, source = r["כניסת שבת"], r["צאת שבת"], "חישוב (ירושלים)"
+        if d.isoformat() in site:
+            (candle, havdalah), source = site[d.isoformat()], "אתר ישיבה (כפר אדומים)"
+        rows.append({"תאריך": d, "פרשה": r["פרשה"], "כניסת שבת": candle, "צאת שבת": havdalah, "מקור": source})
+    return rows
+
+
+def zmanim_for(date):
+    return next((z for z in read_zmanim() if z["תאריך"] == date), None)
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +884,7 @@ def build_schedule(wb):
     title_row(ws, 1, "לו\"ז השבת", span="A:G", size=20)
 
     z = q(SH_ZMAN)
-    labels = {(3, 1): "תאריך השבת", (3, 3): "פרשה", (4, 1): "כניסת שבת", (4, 3): "צאת שבת"}
+    labels = {(3, 1): "תאריך השבת", (3, 3): "פרשה", (4, 1): "כניסת שבת", (4, 3): "צאת שבת", (4, 5): "שם השבת"}
     for (r, c), text in labels.items():
         lab = ws.cell(row=r, column=c, value=text)
         lab.font = f(11, bold=True)
@@ -583,24 +907,9 @@ def build_schedule(wb):
     hint.font = f(10, color=MUTED, italic=True)
     hint.alignment = align()
 
+    data_cell(ws, 4, 6, None, bold=True).fill = fill(SCRIPT_BG)          # SCHED_TITLE — new_shabbat כותב
     header_row(ws, SCHED_HEADER_ROW, ["יום", "שעה", "אירוע", "מקום", "הערה", "הצעה", "משימות"])
-    template = read_schedule_template()
-    row_of = {t["אירוע"]: SCHED_FIRST_ROW + i for i, t in enumerate(template)}
-    for i in range(SCHED_ROWS):
-        r = SCHED_FIRST_ROW + i
-        row = template[i] if i < len(template) else None
-        day = row["יום"] if row else None
-        data_cell(ws, r, L_DAY, day, center=True, bold=True)
-        data_cell(ws, r, L_HOUR, None, center=True, bold=True, size=12, fmt="hh:mm")
-        data_cell(ws, r, L_EVENT, row["אירוע"] if row else None, bold=True)
-        data_cell(ws, r, L_PLACE, (row["מקום"] or None) if row else None)
-        data_cell(ws, r, L_NOTE, (row["הערה"] or None) if row else None, wrap=True)
-        sug = calc_cell(ws, r, L_SUGGEST, suggestion_formula(row, row_of) if row else None, fmt="hh:mm")
-        sug.font = f(10, color=MUTED)
-        calc_cell(ws, r, L_TASKS, '=IF(C{r}="","",COUNTIF({t},C{r}))'.format(r=r, t=T(T_ANCHOR)))
-        if day:
-            ws.cell(row=r, column=L_DAY).fill = fill(DAY_FILLS.get(day, BAND))
-        ws.row_dimensions[r].height = 22
+    write_schedule(ws, schedule_rows(), hour=False)      # תבנית: שבת נפרדת, בלי אירועים אופציונליים
     dv_list(ws, '"{}"'.format(DAYS), "A{}:A{}".format(SCHED_FIRST_ROW, SCHED_FIRST_ROW + SCHED_ROWS - 1))
     ws.freeze_panes = "A{}".format(SCHED_FIRST_ROW)
     note_row(ws, SCHED_FIRST_ROW + SCHED_ROWS + 1,
@@ -752,7 +1061,18 @@ def build_recipes(wb):
     widths(ws, {"A": 18, "B": 26, "C": 12, "D": 50, "E": 50, "F": 24})
     title_row(ws, 1, "מתכונים — עוגות, סלטים, מטבוחה וארוחת צהריים שישי", span="A:F", size=18)
     header_row(ws, 2, ["קטגוריה", "מנה", "כמות", "מרכיבים", "הוראות", "הערה"])
-    recipes = read_csv("recipes.csv") if (DATA / "recipes.csv").exists() else []
+    write_recipes(ws, recipe_rows())
+    dv_list(ws, '"{}"'.format(RECIPE_KINDS), "A3:A{}".format(2 + RECIPE_ROWS))
+    ws.freeze_panes = "A3"
+    note_row(ws, RECIPE_ROWS + 4,
+             "שם המנה (עמודה B) הוא מה שבוחרים בעמודת «מתכון» ב«משימות» — והמצרכים מודפסים על הפלייר של הקבוצה "
+             "(ההוראות רק עם --with-recipes). "
+             "מרכיבים והוראות: שורה לכל פריט (Alt+Enter לשורה חדשה בתא).", last_col=6)
+    return ws
+
+
+def write_recipes(ws, recipes):
+    """כל שורות «מתכונים» (RECIPE_ROWS), עם ניקוי שאריות — לתבנית ולקובץ השבת."""
     for i in range(RECIPE_ROWS):
         r = 3 + i
         row = recipes[i] if i < len(recipes) else None
@@ -763,15 +1083,7 @@ def build_recipes(wb):
         data_cell(ws, r, 4, get("מרכיבים"), wrap=True)
         data_cell(ws, r, 5, get("הוראות"), wrap=True)
         data_cell(ws, r, 6, get("הערה"), wrap=True)
-        if row:
-            ws.row_dimensions[r].height = 120
-    dv_list(ws, '"{}"'.format(RECIPE_KINDS), "A3:A{}".format(2 + RECIPE_ROWS))
-    ws.freeze_panes = "A3"
-    note_row(ws, RECIPE_ROWS + 4,
-             "שם המנה (עמודה B) הוא מה שבוחרים בעמודת «מתכון» ב«משימות» — והמצרכים מודפסים על הפלייר של הקבוצה "
-             "(ההוראות רק עם --with-recipes). "
-             "מרכיבים והוראות: שורה לכל פריט (Alt+Enter לשורה חדשה בתא).", last_col=6)
-    return ws
+        ws.row_dimensions[r].height = 120 if row else None
 
 
 def build_catering(wb):
@@ -796,21 +1108,21 @@ def build_catering(wb):
 def build_zmanim(wb):
     ws = wb.create_sheet(SH_ZMAN)
     page(ws, tab=TAB_REF)
-    widths(ws, {"A": 16, "B": 26, "C": 14, "D": 14, "E": 46})
-    title_row(ws, 1, "לוח שבתות — זמני ירושלים", span="A:E", size=16)
-    header_row(ws, 2, ["תאריך", "פרשה", "כניסת שבת", "צאת שבת", "ניתן לעריכה"])
-    for i, row in enumerate(read_csv("zmanim.csv")):
+    widths(ws, {"A": 16, "B": 26, "C": 14, "D": 14, "E": 24, "F": 46})
+    title_row(ws, 1, "לוח שבתות — כניסה וצאה", span="A:F", size=16)
+    header_row(ws, 2, ["תאריך", "פרשה", "כניסת שבת", "צאת שבת", "מקור", "ניתן לעריכה"])
+    for i, row in enumerate(read_zmanim()):
         r = 3 + i
-        d = datetime.strptime(row["תאריך"], "%d/%m/%Y").date()
-        for col, val, fmt in ((1, d, "dd/mm/yyyy"), (2, row["פרשה"], None),
+        for col, val, fmt in ((1, row["תאריך"], "dd/mm/yyyy"), (2, row["פרשה"], None),
                               (3, as_time(row["כניסת שבת"]), "hh:mm"),
-                              (4, as_time(row["צאת שבת"]), "hh:mm")):
+                              (4, as_time(row["צאת שבת"]), "hh:mm"), (5, row["מקור"], None)):
             data_cell(ws, r, col, val, editable=(col in (3, 4)), center=(col != 2), fmt=fmt)
     ws.freeze_panes = "A3"
-    hint = ws.cell(row=3, column=5,
-                   value="הזמנים מחושבים לירושלים (כניסה 40 דק' לפני השקיעה, צאה 40 דק' אחריה). "
-                         "אם הלוח שלך אומר אחרת — תקנו את השורה.")
-    ws.merge_cells("E3:E8")
+    hint = ws.cell(row=3, column=6,
+                   value="בשבתות שלנו (data/shabbatot.csv) — הזמנים מאתר ישיבה לכפר אדומים. "
+                         "בשאר — חישוב לירושלים (כניסה 40 דק' לפני השקיעה, צאה 40 דק' אחריה). "
+                         "new_shabbat כותב מחדש את שורת השבת שלו.")
+    ws.merge_cells("F3:F8")
     hint.font = f(10, color=MUTED, italic=True)
     hint.alignment = align(v="top", wrap=True)
     return ws
