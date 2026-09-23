@@ -949,7 +949,14 @@ def _dashboard_body() -> None:
 
     st.divider()
     st.markdown("#### עבר את התאריך המומלץ")
-    overdue = dm.get_overdue_tasks()
+    # derived from the task list this body already holds: v_overdue_tasks was
+    # one more round-trip after every ✓ / ▶ on this screen, for the same rows.
+    # The predicate is the one the trainee home uses (annotate_deadline).
+    owners = dm.get_owners_by_mishmar()
+    overdue = sorted(
+        ({**t, "owners": " + ".join(sorted(owners.get(t["mishmar_id"], []))) or "צוות"}
+         for t in all_tasks if dm.annotate_deadline(t)["overdue"]),
+        key=lambda t: (str(t.get("due_date")), t["mishmar_id"], t["id"]))
     over_by_mid: dict[int, int] = {}
     for t in overdue:
         over_by_mid[t["mishmar_id"]] = over_by_mid.get(t["mishmar_id"], 0) + 1
@@ -1001,7 +1008,6 @@ def _dashboard_body() -> None:
     upcoming = [m for m in mishmarim
                 if (_parse_date(m.get("gregorian_date")) or today) >= today]
     past = [m for m in mishmarim if m not in upcoming]
-    owners = dm.get_owners_by_mishmar()
     # The roster in the database and the roster in students_tasks.md drift
     # apart every time the season changes — a trainee leaves, the pairs are
     # re-drawn. This card is the loud half of the answer (see the always-there
@@ -1391,11 +1397,6 @@ def _save_budget_clicked(mid: int, speakers: list[str]) -> None:
     if other:
         dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
     st.toast(f"נשמרו {n} שורות תקציב")
-
-
-def _toggle(key: str, value) -> None:
-    """on_click handler for the editors: open if closed, close if open."""
-    st.session_state[key] = None if st.session_state.get(key) == value else value
 
 
 def _set_state(key: str, value) -> None:
@@ -1885,16 +1886,26 @@ def _add_candidate(c: dict, display: str, name: str, lesson: str,
     taken up. Three writes, one run — never write(); st.rerun()."""
     href = c.get("link") or next(
         (e.get("href") for e in c.get("evidence") or [] if e.get("href")), None)
-    dm.add_new_speaker(
-        name=display, expertise_topics=c.get("bio") or None,
-        verification_url=href, source_type="web_search",
-        lesson_fit=lesson or None,
-        notes=" · ".join(x for x in [
-            c.get("affiliation"), c.get("region_hint"),
-            "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
+    # Only a person the index does not know becomes a new row. add_new_speaker
+    # upserts on (name, source_type), so a known speaker under another source
+    # got a second «web_search» row — and from then on resolve_speaker was
+    # ambiguous for them and every ✅ / outreach on them went unlogged.
+    try:
+        known = dm.resolve_speaker(name=name) is not None
+    except dm.AmbiguousSpeaker:
+        known = True
+    if not known:
+        dm.add_new_speaker(
+            name=display, expertise_topics=c.get("bio") or None,
+            verification_url=href, source_type="web_search",
+            lesson_fit=lesson or None,
+            notes=" · ".join(x for x in [
+                c.get("affiliation"), c.get("region_hint"),
+                "נמצא בסריקת מרצים · ⚠️ לאמת לפני פנייה"] if x))
     dm.add_lesson_speaker(lid, name, student_id=st.session_state.student_id)
     dm.mark_search_added(search_id, name)
-    st.toast(f"«{name}» נוסף כמועמד ל{slot_label} — ולמאגר")
+    st.toast(f"«{name}» נוסף כמועמד ל{slot_label}"
+             + (" — כבר במאגר" if known else " — ולמאגר"))
 
 
 # The angle picker is a segmented control, so the labels stay short; the
@@ -2444,6 +2455,18 @@ def _slot_times(l: dict) -> str:
     return f"{start}–{end // 60:02d}:{end % 60:02d}"
 
 
+# Two index rows share this name: the journal refuses to pick one, so the
+# approach was NOT logged. Said out loud — it used to vanish silently.
+_AMBIGUOUS_WARNING = ("במאגר יש יותר מרשומה אחת בשם «{name}» — הפנייה לא נרשמה ביומן. "
+                      "המדריך צריך לאחד את הרשומות במאגר.")
+
+
+def _candidate_status_changed(cid: int, key: str, mid: int, name: str) -> None:
+    if not dm.update_lesson_speaker_status(cid, st.session_state[key], mishmar_id=mid,
+                                           student_id=st.session_state.student_id):
+        st.toast(_AMBIGUOUS_WARNING.format(name=name), icon="⚠️")
+
+
 def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
     res = dm.close_lesson_speaker(lesson_id, name, mishmar_id=mid,
                                   student_id=st.session_state.student_id)
@@ -2454,6 +2477,8 @@ def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
     st.toast(f"«{res['closed']}» נסגר לשיעור"
              + (" · משימת סגירת המרצה סומנה כבוצעה" if sync.get("completed") else "")
              + (f" · הוסרו: {', '.join(res['removed'])}" if res["removed"] else ""))
+    if not res.get("logged", True):
+        st.toast(_AMBIGUOUS_WARNING.format(name=res["closed"]), icon="⚠️")
 
 
 def _add_candidate_clicked(lesson_id: int, mid: int, close: bool = False) -> None:
@@ -2608,9 +2633,7 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
             "סטטוס", dm.SPEAKER_STATUSES, width=150,
             index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
             key=skey, label_visibility="collapsed",
-            on_change=lambda cid=cand["id"], k=skey: dm.update_lesson_speaker_status(
-                cid, st.session_state[k], mishmar_id=mid,
-                student_id=st.session_state.student_id))
+            on_change=_candidate_status_changed, args=(cand["id"], skey, mid, cand["name"]))
         cr.button("✅ סגור מרצה", key=f"close-{cand['id']}", type="primary",
                   help="הופך למרצה של השיעור; שאר המועמדים יוסרו ומשימת סגירת המרצה נסגרת",
                   on_click=_close_candidate, args=(l["id"], cand["name"], mid))
@@ -3419,11 +3442,20 @@ def _after_tab(mid: int) -> None:
         "דרגו רק מקטעים שהייתם בהם — מקטע בלי כוכבים לא נשמר. "
         "שליחה גם סוגרת את משימת המשוב שלך."
     )
-    existing = dm.get_feedback_for_mishmar(mid)
-    my_titles = {f.get("lesson_title") for f in existing
-                 if f.get("student_id") == st.session_state.student_id}
+    evening = _parse_date((m or {}).get("gregorian_date"))
+    if evening and evening > _date_cls.today():
+        # nothing to rate before the night — and no feedback read either
+        # (one round-trip on every cold workfile of an upcoming evening)
+        _empty("המשוב נפתח ביום הערב.", "אז אפשר לדרג כל מקטע ולכתוב מה עבד.")
+        existing, my_titles = None, set()
+    else:
+        existing = dm.get_feedback_for_mishmar(mid)
+        my_titles = {f.get("lesson_title") for f in existing
+                     if f.get("student_id") == st.session_state.student_id}
 
-    if not lessons:
+    if existing is None:
+        pass
+    elif not lessons:
         _empty("אין עדיין מבנה ערב.", "המשוב ייפתח כשיהיו מקטעים.")
     else:
         with st.form(f"slot-feedback-{mid}"):
@@ -3515,7 +3547,9 @@ def _workfile_body(mid: int) -> None:
     m = dm.get_mishmar(mid)
     tasks = [dm.annotate_deadline(t) for t in dm.get_tasks_for_mishmar(mid)]
     progress = dm.mishmar_progress(mishmar=m, tasks=tasks)
-    partners = dm.get_partners(mid)
+    # the same cached read as the trainee home and the dashboard — get_partners
+    # was two more round-trips (assignments + students) for the same two names
+    partners = dm.get_owners_by_mishmar().get(mid, [])
 
     # --- the Mishmar's identity card: who, when, where it stands ---
     with st.container(border=True, key=f"card-wf-{mid}"):
@@ -3523,7 +3557,7 @@ def _workfile_body(mid: int) -> None:
         if m.get("mishmar_type"):
             chips.append(_chip(m["mishmar_type"], "gold"))
         if partners:
-            chips.append(_chip("👥 " + " · ".join(p["name"] for p in partners), "blue"))
+            chips.append(_chip("👥 " + " · ".join(partners), "blue"))
         title = _clean(m.get("topic") or "") or "<span style='color:#5c6577'>עדיין בלי נושא</span>"
         st.markdown(
             f"<div style='display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap'>"

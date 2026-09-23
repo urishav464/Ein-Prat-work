@@ -59,7 +59,7 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   Everything about a round — presenters, sheets, rooms — is scoped to THAT round.
 - **Reads are cached per table and writes invalidate per table** (`_READS` / `_WRITES` at the foot
   of `data_manager.py`). A new write function missing from `_WRITES` leaves stale rows on screen
-  for up to two minutes.
+  for up to fifteen minutes (`CACHE_TTL_SECONDS = 900`).
 - **Navigation is staged; panels are isolated.** `_goto()` parks a deep link under one session key
   and `_apply_goto()` lands it at the top of `main()` before any widget exists — writing a widget's
   key after that widget was drawn raises. The workfile body, the dashboard body and the trainee

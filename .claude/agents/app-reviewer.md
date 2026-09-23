@@ -52,6 +52,11 @@ Write your own scenario files under `/tmp` for anything the committed ones do no
 `harness.py`'s docstring; `scripts/harness/scenarios/` and `sweep.json` are examples). Keyboard
 activation (`press`) for checkboxes and popovers; the harness refuses 🗑 / «אפס» / «מחק».
 
+**Cold is relative.** The read cache is process-global, so a step's "cold" count depends on what
+earlier scenarios warmed within the TTL. `serve` starts a fresh process; a scenario's
+`login_expect` measures the login run itself (the home's true cold load, first in `sweep.json`).
+When you compare before/after, run the same scenario list in the same order on both.
+
 **The fixture:** trainees from `students_tasks.md`; «Uri» logs in as the instructor; #03 and #05
 have a closed topic and the default timeline, #05 a candidate; `אלה מאיר` builds #05 (her home and
 workfile land on it). The search screen runs on canned scout results (`--scout ok|empty`).
@@ -88,10 +93,10 @@ number you did not read from a trace.
   it on popover/expander/tabs), anything inside an `st.form` until submit.
 - **Double run:** a write followed by `st.rerun()` in the same run — the write should have been a
   callback. Tolerated only after a form submit, to close a dialog, or for navigation/auth.
-- **Cost inside a run** is queries × ~150 ms on Cloud. Reads are cached per table for 120 s
+- **Cost inside a run** is queries × ~150 ms on Cloud. Reads are cached per table for 900 s
   (`_READS`); every write clears the reads of the tables it touches (`_WRITES`). So a slow click is
   usually (a) an app run where a fragment run would do, (b) a write whose invalidation fans out to
-  reads the screen then re-fetches, (c) sequential round-trips inside a callback, or (d) the 120 s
+  reads the screen then re-fetches, (c) sequential round-trips inside a callback, or (d) the 900 s
   TTL expiring — an `untriggered`-looking run full of queries.
 - **The static audit's blind spots:** it sees widget *sites*, not causes that exist only at runtime
   (a value changing, the TTL, a reconnect, invalidation fan-out). It is a map; the trace is the
@@ -143,6 +148,21 @@ number you did not read from a trace.
   `name_norm`; `AmbiguousSpeaker` is never swallowed.
 - A per-name reader called in a loop is an N+1 — read the season's cached list once and group
   (`_index_memory` did 5 queries per name before it read the lists).
+- **A per-id reader beside a cached season-wide reader of the same table pays for rows already in
+  memory** — derive the one from the other. `get_mishmar` and `get_partners` did exactly this
+  (the cold workfile was 10 queries; derived from `get_all_mishmarim` / `get_owners_by_mishmar`,
+  5). A different column list on the same table is a different cache entry too (`students`
+  `select("id,name")` beside `get_students()` cost one more query on every cold home).
+- **A substring search is never an identity.** `get_speaker_by_name` (`ilike %norm%`) is for
+  browsing; any write that picks *the* speaker uses `resolve_speaker` (exact `name_norm`, raises
+  `AmbiguousSpeaker`), on the name with its title split off. The substring version put a new
+  candidate's phone on a different person whose name contained hers, and never indexed her.
+- **Resolve before you create.** `add_new_speaker` upserts on `(name, source_type)`, so calling it
+  for a person already indexed under another source makes a second row — and from then on
+  `resolve_speaker` is ambiguous for them forever and every ✅ / outreach on them is unlogged.
+- **`AmbiguousSpeaker` is surfaced, never swallowed silently**: the write returns a flag
+  (`close_lesson_speaker(...)["logged"]`, `update_lesson_speaker_status(...) -> bool`) and the UI
+  says the approach was not logged (`_AMBIGUOUS_WARNING`).
 
 ### Schema (`supabase_schema.sql`)
 - **Every `ALTER TABLE … ADD COLUMN` belongs above the views** (section 4ב).

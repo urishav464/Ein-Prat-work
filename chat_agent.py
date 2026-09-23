@@ -887,7 +887,7 @@ def _index_memory(name: str) -> Optional[str]:
     Reads only the SEASON-WIDE cached lists — `get_speakers_with_status`,
     `get_all_outreach`, `get_teaching_history`, `get_all_mishmarim` — and looks
     the name up in Python, so five candidates cost the same as one and a
-    second search in the same two minutes costs nothing. Per-name readers here
+    second search within the cache's fifteen minutes costs nothing. Per-name readers here
     were the index page's 46-round-trip regression over again."""
     norm = dm.normalize_name(name)
     if not norm:

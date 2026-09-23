@@ -35,6 +35,8 @@ Scenario steps (a list under "steps"; "user" logs in first by name):
   {"wait": 1500}
 Any step may carry "name", "expect": {"app_runs": 0, "queries_max": 4,
 "tables": ["update tasks", "select v_tasks_full"]}, and "measure": false.
+A scenario may carry "login_expect": {...} to measure the login itself — the
+home screen's cold load.
 
 The harness never clicks 🗑 / «אפס» / «מחק»: a scenario that names one is refused.
 Processes are stopped by /proc/<pid>/exe, never pkill -f (it kills the caller's
@@ -364,8 +366,16 @@ def run_scenario(sc: dict, port: int, browser) -> list[dict]:
     results = []
     try:
         offset = tp.stat().st_size
+        t0 = time.time()
         _login(page, url, sc.get("user", "Uri"))
-        settle(tp, offset)
+        events = settle(tp, offset)
+        if sc.get("login_expect") is not None:
+            # the home screen's cold cost IS the login run — measured like a step
+            s = summarize(events)
+            s["wall_ms"] = round((max(e["t"] for e in events) - t0) * 1000) if events else 0
+            row = {"scenario": sc.get("name"), "step": f"log in as {sc.get('user', 'Uri')} (cold home)", **s}
+            row["expect_failed"] = _check(sc["login_expect"], s)
+            results.append(row)
         for i, step in enumerate(sc.get("steps", [])):
             offset = tp.stat().st_size
             t0 = time.time()

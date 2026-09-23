@@ -685,13 +685,12 @@ def get_all_mishmarim() -> list[dict]:
 
 
 def get_mishmar(mishmar_id: int) -> Optional[dict]:
-    m = _one(_t("mishmarim").select("*").eq("id", mishmar_id).execute())
-    if not m:
-        return None
-    b = _one(_t("v_mishmar_budget").select("*").eq("mishmar_id", mishmar_id).execute())
-    m["budget_used"] = float((b or {}).get("budget_used") or 0)
-    m["budget_nominal"] = PER_MISHMAR_BUDGET_NIS
-    return m
+    """One evening, taken from the season list. The picker, the trainee home
+    and the dashboard already hold `get_all_mishmarim` in the read cache, so
+    the two by-id round-trips this used to make (mishmarim + v_mishmar_budget)
+    fetched rows that were already in memory — measured: a cold workfile
+    10 → 6 queries, 1.7 → 1.06 s."""
+    return next((m for m in get_all_mishmarim() if m["id"] == mishmar_id), None)
 
 
 def set_mishmar_topic(mishmar_id: int, topic: str) -> bool:
@@ -736,10 +735,16 @@ def set_student_email(student_id: int, email: Optional[str]) -> bool:
     return bool(_rows(resp))
 
 
+def get_all_assignments() -> list[dict]:
+    """Every (mishmar_id, student_id) pair — one cached read shared by the
+    trainee's own list and the season's owners. The home used to read
+    `assignments` twice per cold run: once filtered, once whole."""
+    return _rows(_t("assignments").select("mishmar_id,student_id").execute())
+
+
 def get_mishmarim_for_student(student_id: int) -> list[dict]:
-    links = _rows(_t("assignments").select("mishmar_id")
-                  .eq("student_id", student_id).execute())
-    ids = [l["mishmar_id"] for l in links]
+    ids = [l["mishmar_id"] for l in get_all_assignments()
+           if l["student_id"] == student_id]
     if not ids:
         return []
     return [m for m in get_all_mishmarim() if m["id"] in ids]
@@ -1090,13 +1095,6 @@ def search_speakers_by_topic(topic: str, lesson: Optional[str] = None) -> list[d
     return sorted(rows, key=lambda r: (r.get("source_type") or "", r.get("name") or ""))
 
 
-def get_speaker_stats() -> dict:
-    out: dict[str, int] = {}
-    for r in _rows(_t("speakers").select("source_type").execute()):
-        out[r["source_type"]] = out.get(r["source_type"], 0) + 1
-    return out
-
-
 def resolve_speaker(name: Optional[str] = None, speaker_id: Optional[int] = None,
                     create_if_missing: bool = False) -> Optional[dict]:
     """Exactly one speaker row, or AmbiguousSpeaker."""
@@ -1158,11 +1156,6 @@ def get_all_outreach() -> list[dict]:
 
 def get_outreach_for_speaker(speaker_id: int) -> list[dict]:
     return _rows(_t("v_outreach_full").select("*").eq("speaker_id", speaker_id)
-                 .order("id", desc=True).execute())
-
-
-def get_outreach_for_mishmar(mishmar_id: int) -> list[dict]:
-    return _rows(_t("v_outreach_full").select("*").eq("mishmar_id", mishmar_id)
                  .order("id", desc=True).execute())
 
 
@@ -1271,14 +1264,17 @@ def add_lesson_speaker(lesson_id: int, name: str, phone: Optional[str] = None,
         "lesson_id": lesson_id, "name": name, "phone": (phone or "").strip() or None,
     }).execute())
     try:
-        existing = get_speaker_by_name(name)
+        # EXACT name, title stripped the way add_new_speaker stores it.
+        # get_speaker_by_name is a substring search: «תמר» found «תמר כהן»,
+        # never joined the index, and her phone was written onto his row.
+        existing = resolve_speaker(name=split_title(name)[1])
         if not existing:
             add_new_speaker(name=name, source_type="manual",
                             contact=(phone or "").strip() or None,
                             notes="נוסף כמועמד ממבנה הערב")
-        elif phone and not (existing[0].get("contact") or "").strip("TBD "):
+        elif phone and not (existing.get("contact") or "").strip("TBD "):
             _t("speakers").update({"contact": phone.strip()}).eq(
-                "id", existing[0]["id"]).execute()
+                "id", existing["id"]).execute()
     except AmbiguousSpeaker:
         pass   # several known people share the name — never merge on our own
     return row.get("id") if row else None
@@ -1286,8 +1282,11 @@ def add_lesson_speaker(lesson_id: int, name: str, phone: Optional[str] = None,
 
 def update_lesson_speaker_status(candidate_id: int, status: str,
                                  mishmar_id: Optional[int] = None,
-                                 student_id: Optional[int] = None) -> None:
-    """Candidate status routes through the journal's single writer too."""
+                                 student_id: Optional[int] = None) -> bool:
+    """Candidate status routes through the journal's single writer too.
+    Returns False when the journal could NOT log it — several index rows
+    share the name — so the UI can say so instead of the log silently
+    missing an approach."""
     if status not in SPEAKER_STATUSES:
         raise ValueError(f"status must be one of {SPEAKER_STATUSES}")
     row = _one(_t("lesson_speakers").update({"status": status})
@@ -1297,7 +1296,8 @@ def update_lesson_speaker_status(candidate_id: int, status: str,
             record_outreach(status, name=row["name"], mishmar_id=mishmar_id,
                             student_id=student_id)
         except AmbiguousSpeaker:
-            pass
+            return False
+    return True
 
 
 def close_lesson_speaker(lesson_id: int, name: str,
@@ -1319,12 +1319,13 @@ def close_lesson_speaker(lesson_id: int, name: str,
         else:
             _t("lesson_speakers").delete().eq("id", c["id"]).execute()
             removed.append(c["name"])
+    logged = True
     try:
         record_outreach("✅ סגור", name=closed_name, mishmar_id=mishmar_id,
                         student_id=student_id)
     except AmbiguousSpeaker:
-        pass
-    return {"closed": closed_name, "removed": removed}
+        logged = False      # the UI says so — never pick one of the namesakes
+    return {"closed": closed_name, "removed": removed, "logged": logged}
 
 
 def _storage_upload(path: str, data: bytes,
@@ -1495,13 +1496,6 @@ def add_break(mishmar_id: int, minutes: int = 15) -> None:
     recompute_lesson_times(mishmar_id)
 
 
-def delete_break(mishmar_id: int, lesson_id: int) -> None:
-    """Remove one row of the evening and reflow the clock. `delete_lesson` alone
-    leaves a hole in the timeline — every start time after it would be stale."""
-    _t("lessons").delete().eq("id", lesson_id).execute()
-    recompute_lesson_times(mishmar_id)
-
-
 def delete_lesson_candidate(candidate_id: int) -> bool:
     return bool(_rows(_t("lesson_speakers").delete().eq("id", candidate_id).execute()))
 
@@ -1530,11 +1524,13 @@ def get_owners_by_mishmar() -> dict[int, list[str]]:
     «זוג חניכים» told the instructor nothing; the names do. Per-Mishmar
     get_partners() would have been 21 round-trips on the dashboard.
     """
-    links = _rows(_t("assignments").select("mishmar_id,student_id").execute())
+    links = get_all_assignments()
     if not links:
         return {}
-    names = {s["id"]: s["name"] for s in
-             _rows(_t("students").select("id,name").execute())}
+    # get_students(), not a narrower select: the login screen has just cached
+    # it, and a different column list is a different cache entry — one more
+    # round-trip on every cold home and dashboard for the same names
+    names = {s["id"]: s["name"] for s in get_students()}
     out: dict[int, list[str]] = {}
     for l in links:
         who = names.get(l["student_id"])
@@ -1965,9 +1961,11 @@ def set_candidate_phone(candidate_id: int, phone: Optional[str]) -> None:
     if not phone or not row:
         return
     try:
-        existing = get_speaker_by_name(row.get("name") or "")
-        if existing and not (existing[0].get("contact") or "").strip("TBD "):
-            _t("speakers").update({"contact": phone}).eq("id", existing[0]["id"]).execute()
+        # exact, like add_lesson_speaker — a substring match wrote the phone
+        # onto a different person whose name merely contains this one
+        existing = resolve_speaker(name=split_title(row.get("name") or "")[1])
+        if existing and not (existing.get("contact") or "").strip("TBD "):
+            _t("speakers").update({"contact": phone}).eq("id", existing["id"]).execute()
     except AmbiguousSpeaker:
         pass
 
@@ -2266,20 +2264,6 @@ def delete_search(search_id: int) -> None:
     _t("speaker_searches").delete().eq("id", int(search_id)).execute()
 
 
-def get_searches(mishmar_id: Optional[int] = None, limit: int = 8) -> list[dict]:
-    """Recent saved scans, newest first. Missing table degrades to none."""
-    try:
-        q = _t("speaker_searches").select("*").order("id", desc=True).limit(limit)
-        if mishmar_id is not None:
-            q = q.eq("mishmar_id", mishmar_id)
-        rows = _rows(q.execute())
-    except Exception as exc:
-        if _missing_relation(exc):
-            return []
-        raise
-    return _decode_search_rows(rows)
-
-
 # --------------------------------------------------------------------------
 # Distance from the Midrasha
 #
@@ -2520,12 +2504,6 @@ def get_chat_history(mishmar_id: Optional[int] = None,
     return list(reversed(_rows(q.order("id", desc=True).limit(limit).execute())))
 
 
-def clear_chat_history(mishmar_id: int, student_id: int) -> int:
-    return len(_rows(_t("chat_messages").delete()
-                     .eq("mishmar_id", mishmar_id)
-                     .eq("student_id", student_id).execute()))
-
-
 # --------------------------------------------------------------------------
 # Search cache
 # --------------------------------------------------------------------------
@@ -2564,15 +2542,6 @@ def cache_put(query: str, results: list[dict], ok: bool = True,
     }).execute()
 
 
-def cache_stats() -> dict:
-    rows = _rows(_t("search_cache").select("ok,created_at").execute())
-    return {
-        "total": len(rows),
-        "ok": sum(1 for r in rows if r.get("ok")),
-        "newest": max((str(r.get("created_at") or "") for r in rows), default=None),
-    }
-
-
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -2600,7 +2569,13 @@ if __name__ == "__main__":
 
 import functools as _functools
 
-CACHE_TTL_SECONDS = 120
+# 15 minutes. Every write made through the app clears its tables at once, in
+# the one process that serves everybody, so the TTL guards only against writes
+# made OUTSIDE the app (the SQL Editor, a migration) — those now show within
+# 15 minutes, or at once after a reboot. At 120 s the first click after any
+# two-minute pause was a cold run: ✓ on the hero 7 queries / 1.1 s and the
+# page dimmed; at 900 s the same click is 2 queries / 0.33 s.
+CACHE_TTL_SECONDS = 900
 
 # Each read names the tables it depends on (views expand to their base
 # tables); each write names the tables it touches. A write clears only the
@@ -2615,6 +2590,7 @@ _READS = {
     "get_students":             ("students",),
     "get_student":              ("students",),
     "get_student_by_email":     ("students",),
+    "get_all_assignments":      ("assignments",),
     "get_mishmarim_for_student": ("assignments", "mishmarim", "budget"),
     "get_partners":             ("assignments", "students"),
     "get_tasks_for_mishmar":    ("tasks", "mishmarim"),
@@ -2630,9 +2606,7 @@ _READS = {
     "get_budget_speaker_names": ("budget",),
     "get_speakers_with_status": ("speakers", "speaker_outreach"),
     "get_all_outreach":         ("speaker_outreach", "speakers", "mishmarim", "students"),
-    "get_speaker_stats":        ("speakers", "speaker_outreach"),
     "get_outreach_for_speaker": ("speaker_outreach",),
-    "get_outreach_for_mishmar": ("speaker_outreach", "speakers"),
     "get_speaker_by_name":      ("speakers",),
     "get_speaker_status":       ("speakers", "speaker_outreach"),
     "search_speakers_by_topic": ("speakers", "speaker_outreach"),
@@ -2645,7 +2619,6 @@ _READS = {
     "get_budget_rows":          ("budget",),
     "get_logistics":            ("logistics_items",),
     "get_teaching_history":     ("lessons", "feedback"),
-    "get_searches":             ("speaker_searches",),
     "get_searches_for":         ("speaker_searches",),
     "get_all_searches":         ("speaker_searches", "students"),
     # the three the audit found outside the registry: a speaker lookup used
@@ -2667,7 +2640,6 @@ _WRITES = {
     "create_default_timeline": ("lessons", "tasks"), "recompute_lesson_times": ("lessons",),
     "set_lesson_duration": ("lessons",), "add_lesson_slot": ("lessons",),
     "add_break": ("lessons",),
-    "delete_break": ("lessons", "tasks"),           # tasks.lesson_id: ON DELETE SET NULL
     "delete_lesson_with_tasks": ("lessons", "tasks"),
     "sync_lesson_tasks": ("tasks",),
     "set_candidate_room": ("lesson_speakers",),
@@ -2683,7 +2655,7 @@ _WRITES = {
     "add_budget_entry": ("budget",), "add_feedback": ("feedback",),
     "record_outreach": ("speaker_outreach", "speakers", "lessons"),
     "add_new_speaker": ("speakers",),
-    "add_chat_message": ("chat_messages",), "clear_chat_history": ("chat_messages",),
+    "add_chat_message": ("chat_messages",),
     "reopen_lesson_speaker": ("lessons",),
     "add_logistics_item": ("logistics_items",),
     "toggle_logistics_item": ("logistics_items",),
