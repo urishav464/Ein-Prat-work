@@ -73,7 +73,7 @@ works around this rather than fighting it:
 
 The workbook is meant to be imported into Google Sheets, which constrains formulas:
 basic functions only (`IF`, `IFERROR`, `VLOOKUP`, `COUNTIF`, `SUMIF`, `LEN`, `SUBSTITUTE`,
-`ROUND`, `TIME`); round times with `ROUND(x*288)/288` rather than `CEILING` on a time
+`ROUND`, `ROUNDUP`, `TIME`); round times with `ROUND(x*288)/288` rather than `CEILING` on a time
 value; data validation from a **range** rather than an inline list (an inline list is
 capped at 255 chars and Excel drops it silently); no hidden helper columns; sheet names
 without quote characters. Cell fills carry meaning: yellow = user fills, turquoise = a
@@ -102,6 +102,12 @@ script writes, grey = computed.
   points are added to the person's ranking score in earlier stages, so stage order can't
   silently defeat a pin. Elul students are spread across groups by ratio.
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
+- **Time rules chain.** A schedule row's `בסיס` may be another event's name (טיש = סעודת שבת + 90),
+  resolved in template order by `bw.event_times`; `עיגול` rounds *up* to that many minutes
+  (formula path: `ROUNDUP(ROUND(x*1440,0)/step,0)*step/1440`, never CEILING on a time). A task's
+  `שעה` may be relative to its anchor (`-30`, `+0`), resolved by `bw.resolve_hour` in
+  `new_shabbat` from the static hours it just wrote — so pre-Shabbat tasks (oven at candle −60)
+  stay before candle-lighting in winter.
 - **Weekly preps** (`data/preps/<date>.csv`): a prep name that is not a standing group becomes a
   new group (stage הכנות שישי, `PREP_POINTS`), listed before the standing groups; a row for a
   standing group *replaces* that group's standing task at the same `(day, hour)` (that is how

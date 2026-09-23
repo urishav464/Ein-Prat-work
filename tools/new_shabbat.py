@@ -51,16 +51,16 @@ def reset_schedule(wb, date):
     candle, havdalah = zm.cell(row=row, column=3).value, zm.cell(row=row, column=4).value
     ws[bw.SCHED_DATE] = zm.cell(row=row, column=1).value
 
-    template = bw.read_schedule_template()
-    by_event = {(t["יום"], t["אירוע"]): t for t in template}
+    times = bw.event_times(candle, havdalah)
+    day = None
     for r in range(bw.SCHED_FIRST_ROW, bw.SCHED_FIRST_ROW + bw.SCHED_ROWS):
-        day, event = ws.cell(row=r, column=bw.L_DAY).value, ws.cell(row=r, column=bw.L_EVENT).value
-        spec = by_event.get((day, event))
-        if spec:
-            ws.cell(row=r, column=bw.L_HOUR).value = bw.suggested_time(spec, candle, havdalah)
+        day = ws.cell(row=r, column=bw.L_DAY).value or day
+        event = ws.cell(row=r, column=bw.L_EVENT).value
+        if (day, event) in times:
+            ws.cell(row=r, column=bw.L_HOUR).value = times[(day, event)]
         elif event:
             clear(ws, r, bw.L_HOUR)      # אירוע שאורי הוסיף — השעה שלו נקבעת ידנית
-    return zm.cell(row=row, column=2).value, candle, havdalah
+    return zm.cell(row=row, column=2).value, candle, havdalah, times
 
 
 def reset_people(wb):
@@ -77,10 +77,10 @@ def reset_people(wb):
     # «היסטוריה» לא מתאפסת — זה הזיכרון של המערכת
 
 
-def write_week(wb, date):
+def write_week(wb, date, times=None):
     """המשימות, הקבוצות והתפריט של השבת הזו: הקבועים + מה שהאחראים בחרו לשבוע
     (data/preps, data/menu, data/weeks.csv). מצייני המקום מתמלאים כאן."""
-    rows, plan, menu = bw.task_rows(date), bw.plan_rows(date), bw.read_week(date)["menu"]
+    rows, plan, menu = bw.task_rows(date, times), bw.plan_rows(date), bw.read_week(date)["menu"]
     if len(rows) > bw.TASK_ROWS or len(plan) > bw.GROUP_ROWS or len(menu) > bw.CATERING_ROWS:
         raise SystemExit("יותר מדי שורות לגיליון: {} משימות, {} קבוצות, {} מנות".format(
             len(rows), len(plan), len(menu)))
@@ -114,10 +114,10 @@ def main():
         shutil.copy(source, out)
 
     wb = load_workbook(out)
-    parasha, candle, havdalah = reset_schedule(wb, date)
+    parasha, candle, havdalah, times = reset_schedule(wb, date)
     reset_people(wb)
     if not args.source:                  # --from שומר את המשימות של השבת הקודמת כמו שהן
-        rows, plan = write_week(wb, date)
+        rows, plan = write_week(wb, date, times)
         print("  {} משימות · {} קבוצות".format(len(rows), len(plan)))
     wb.save(out)
     shown = out.relative_to(ROOT) if out.resolve().is_relative_to(ROOT) else out

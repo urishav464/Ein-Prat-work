@@ -217,6 +217,8 @@ def _note(note, shared):
 
 def _hour(text):
     text = (text or "").strip()
+    if text[:1] in "+-":
+        return text
     return "{:02d}:{}".format(int(text.split(":")[0]), text.split(":")[1]) if text else ""
 
 
@@ -243,12 +245,13 @@ def week_leaders(date=None):
     return leaders
 
 
-def task_rows(date=None):
+def task_rows(date=None, times=None):
     """כל משימות השבת: ההכנות של השבוע, ואחריהן המשימות הקבועות מ-task_library.csv.
 
     שורת הכנה של קבוצה קבועה מחליפה את המשימה הקבועה שלה באותו (יום, שעה).
     «עזרה מבית המדרש = N» מוסיף לבית המדרש משימה ב-10:00, מיד אחרי המשימות שלו.
-    מצייני המקום מתמלאים מהתפריט, והערות [משותפת] נשארות רק בשבת משותפת."""
+    מצייני המקום מתמלאים מהתפריט, והערות [משותפת] נשארות רק בשבת משותפת.
+    שעה יחסית («-30») מחושבת מזמן אירוע העוגן: times = {(יום, אירוע): time}."""
     week = read_week(date)
     stage_of = {r["קבוצה"]: r["שלב"] for r in read_csv("group_plan.csv")}
     preps, helpers, taken = [], [], set()
@@ -281,8 +284,10 @@ def task_rows(date=None):
         standing.append(dict(r, הערה=_note(r.get("הערה"), week["shared"])))
     last_bm = max((i for i, r in enumerate(standing) if r["קבוצה"] == "בית מדרש"), default=len(standing) - 1)
     rows = preps + standing[:last_bm + 1] + helpers + standing[last_bm + 1:]
+    sched_day = {"מוצאי שבת": "שבת"}                 # מוצ"ש יושב בלו"ז תחת שבת
     for r in rows:
         r["משימה"] = expand_catering(r["משימה"], week["menu"], warn=date is not None)
+        r["שעה"] = resolve_hour(r["שעה"], (times or {}).get((sched_day.get(r["יום"], r["יום"]), r["עוגן"])))
     return rows
 
 
@@ -351,33 +356,76 @@ def _mins(t):
     return t.hour * 60 + t.minute
 
 
-def suggested_time(row, candle, havdalah):
-    """הזמן המוצע לשורת תבנית, כאובייקט time (או None כשאין כניסה/צאה)."""
+def _round(total, row):
+    """עיגול דקות: «עיגול» בתבנית = עיגול כלפי מעלה לכפולה שלו (15 → לרבע השעה הבאה);
+    בלי עיגול — לחמש הדקות הקרובות, כשיש היסט."""
+    step = int((row.get("עיגול") or "0").strip() or 0)
+    if step:
+        return -(-total // step) * step
+    return (total + 2) // 5 * 5 if int(row["היסט"]) else total
+
+
+def suggested_time(row, candle, havdalah, known=None):
+    """הזמן המוצע לשורת תבנית, כאובייקט time (או None כשאין עוגן).
+
+    «בסיס»: קבוע · כניסה · צאה · או שם של אירוע אחר באותו יום (טיש = סעודת שבת + 90),
+    שהזמן שלו כבר חושב ב-known = {(יום, אירוע): time}."""
     base, offset = row["בסיס"].strip(), row["היסט"].strip()
     if base == "קבוע":
         return as_time(offset)
-    anchor = candle if base == "כניסה" else havdalah
+    if base == "כניסה":
+        anchor = candle
+    elif base == "צאה":
+        anchor = havdalah
+    else:
+        anchor = (known or {}).get((row["יום"], base))
     if anchor is None:
         return None
-    total = _mins(anchor) + int(offset)
-    if int(offset):
-        total = (total + 2) // 5 * 5          # עיגול ל-5 דקות, כמו ROUND בגיליון
+    total = _round(_mins(anchor) + int(offset), row)
     return time((total // 60) % 24, total % 60)
 
 
-def suggestion_formula(row):
-    """נוסחת ההצעה לאותה שורה, לעדכון אוטומטי כשמחליפים תאריך בשיטס."""
+def event_times(candle, havdalah):
+    """{(יום, אירוע): time} לכל שורות התבנית, לפי הסדר — כך אירוע יכול להישען על קודמו."""
+    known = {}
+    for row in read_schedule_template():
+        known[(row["יום"], row["אירוע"])] = suggested_time(row, candle, havdalah, known)
+    return known
+
+
+def suggestion_formula(row, row_of=None):
+    """נוסחת ההצעה לאותה שורה, לעדכון אוטומטי כשמחליפים תאריך בשיטס.
+    row_of = {אירוע: מספר שורה בגיליון} — לבסיס שהוא אירוע אחר."""
     base, offset = row["בסיס"].strip(), row["היסט"].strip()
     if base == "קבוע":
         return as_time(offset)
-    ref = "$" + SCHED_CANDLE[0] + "$" + SCHED_CANDLE[1:] if base == "כניסה" else \
-          "$" + SCHED_HAVDALAH[0] + "$" + SCHED_HAVDALAH[1:]
+    if base == "כניסה":
+        ref = "$" + SCHED_CANDLE[0] + "$" + SCHED_CANDLE[1:]
+    elif base == "צאה":
+        ref = "$" + SCHED_HAVDALAH[0] + "$" + SCHED_HAVDALAH[1:]
+    else:
+        ref = "${}${}".format(col_letter(L_SUGGEST), (row_of or {})[base])
     minutes = int(offset)
-    if minutes == 0:
+    step = int((row.get("עיגול") or "0").strip() or 0)
+    if minutes == 0 and not step:
         return '=IF({r}="","",{r})'.format(r=ref)
-    sign = "+" if minutes > 0 else "-"
+    sign = "+" if minutes >= 0 else "-"
     expr = "{r}{s}TIME({h},{m},0)".format(r=ref, s=sign, h=abs(minutes) // 60, m=abs(minutes) % 60)
+    if step:                                   # כלפי מעלה: ROUNDUP על דקות שלמות (בלי CEILING על זמן)
+        return '=IF({r}="","",ROUNDUP(ROUND(({e})*1440,0)/{s},0)*{s}/1440)'.format(r=ref, e=expr, s=step)
     return '=IF({r}="","",ROUND(({e})*288,0)/288)'.format(r=ref, e=expr)
+
+
+def resolve_hour(text, anchor_time):
+    """שעת משימה: «19:30» קבועה, או «-30» / «+0» יחסית לאירוע העוגן (עיגול ל-5 דקות).
+    יחסית בלי זמן לעוגן (בתבנית) → ריק."""
+    text = (text or "").strip()
+    if not text or text[0] not in "+-":
+        return text
+    if anchor_time is None:
+        return ""
+    total = (_mins(anchor_time) + int(text) + 2) // 5 * 5
+    return "{:02d}:{:02d}".format((total // 60) % 24, total % 60)
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +585,7 @@ def build_schedule(wb):
 
     header_row(ws, SCHED_HEADER_ROW, ["יום", "שעה", "אירוע", "מקום", "הערה", "הצעה", "משימות"])
     template = read_schedule_template()
+    row_of = {t["אירוע"]: SCHED_FIRST_ROW + i for i, t in enumerate(template)}
     for i in range(SCHED_ROWS):
         r = SCHED_FIRST_ROW + i
         row = template[i] if i < len(template) else None
@@ -546,7 +595,7 @@ def build_schedule(wb):
         data_cell(ws, r, L_EVENT, row["אירוע"] if row else None, bold=True)
         data_cell(ws, r, L_PLACE, (row["מקום"] or None) if row else None)
         data_cell(ws, r, L_NOTE, (row["הערה"] or None) if row else None, wrap=True)
-        sug = calc_cell(ws, r, L_SUGGEST, suggestion_formula(row) if row else None, fmt="hh:mm")
+        sug = calc_cell(ws, r, L_SUGGEST, suggestion_formula(row, row_of) if row else None, fmt="hh:mm")
         sug.font = f(10, color=MUTED)
         calc_cell(ws, r, L_TASKS, '=IF(C{r}="","",COUNTIF({t},C{r}))'.format(r=r, t=T(T_ANCHOR)))
         if day:
