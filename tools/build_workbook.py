@@ -10,6 +10,7 @@
 תשעה גיליונות: לוח בקרה · לוז · משימות · קבוצות · חניכים · היסטוריה · מתכונים · קייטרינג · זמנים.
 """
 import csv
+import re
 from datetime import datetime, time
 from pathlib import Path
 
@@ -62,7 +63,8 @@ L_DAY, L_HOUR, L_EVENT, L_PLACE, L_NOTE, L_SUGGEST, L_TASKS = range(1, 8)
 STAGES = ["הכנות שישי", "תורנות שישי", "תורנות שבת"]
 DAYS = "חמישי,שישי,שבת,מוצאי שבת"
 RECIPE_KINDS = "מאפים,עוגות,סלטים,בישול,ארוחת צהריים שישי"
-MEALS = "ארוחת ערב,קידוש,ארוחת צהריים,סעודה שלישית"
+MEALS = "ארוחת ערב,ארוחת צהריים,סלטים,קידוש,סעודה שלישית"
+PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
 
 # --- צבעים ------------------------------------------------------------------
 INK, MUTED, LINE, BAND = "1F2430", "6B7280", "C9CFD8", "EDF1F6"
@@ -153,6 +155,28 @@ def dv_list(ws, source, target, strict=False):
 def read_csv(name):
     with (DATA / name).open(encoding="utf-8-sig", newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def read_catering():
+    """תפריט הקייטרינג של השבוע: שורה לכל מנה (ארוחה, מנה, כמות, הערה)."""
+    return read_csv("catering.csv") if (DATA / "catering.csv").exists() else []
+
+
+def expand_catering(text, catering):
+    """מחליף {ארוחה} בטקסט של משימה ברשימת המנות של אותה ארוחה מ-catering.csv.
+
+    התפריט משתנה כל שבוע ומופיע בכמה משימות; כך הוא נרשם במקום אחד. ארוחה שאין לה
+    מנות משאירה את הסוגריים גלויים ומדפיסה אזהרה — כדי ששום דבר לא ייעלם בשקט."""
+    if not text or "{" not in text:
+        return text
+    def sub(m):
+        dishes = [r["מנה"].strip() for r in catering
+                  if r["ארוחה"].strip() == m.group(1).strip() and r["מנה"].strip()]
+        if not dishes:
+            print("⚠ אין מנות ל«{}» ב-catering.csv — המשימה: {}".format(m.group(1), text[:50]))
+            return m.group(0)
+        return ", ".join(dishes)
+    return PLACEHOLDER.sub(sub, text)
 
 
 def as_time(text):
@@ -404,6 +428,7 @@ def build_tasks(wb):
     header_row(ws, 2, ["שלב", "יום", "שעה", "קבוצה", "משימה", "אנשים", "שמות", "מתכון", "עוגן בלו\"ז", "הערה"])
 
     library = read_csv("task_library.csv")
+    catering = read_catering()
     for i in range(TASK_ROWS):
         r = TASK_FIRST_ROW + i
         row = library[i] if i < len(library) else None
@@ -413,7 +438,7 @@ def build_tasks(wb):
         data_cell(ws, r, T_HOUR, as_time(row["שעה"]) if row and row["שעה"] else None,
                   center=True, bold=True, fmt="hh:mm")
         data_cell(ws, r, T_GROUP, get("קבוצה"))
-        data_cell(ws, r, T_TASK, get("משימה"), wrap=True)
+        data_cell(ws, r, T_TASK, expand_catering(get("משימה"), catering), wrap=True)
         data_cell(ws, r, T_PEOPLE, int(row["אנשים"]) if row and row["אנשים"] else None, center=True)
         names = data_cell(ws, r, T_NAMES, None, wrap=True)
         names.fill = fill(SCRIPT_BG)
@@ -583,14 +608,20 @@ def build_catering(wb):
     widths(ws, {"A": 18, "B": 34, "C": 12, "D": 44})
     title_row(ws, 1, "קייטרינג — מה מגיע לכל ארוחה", span="A:D", size=18)
     header_row(ws, 2, ["ארוחה", "מנה", "כמות", "הערה"])
+    catering = read_catering()
     for i in range(CATERING_ROWS):
         r = 3 + i
-        data_cell(ws, r, 1, center=True)
-        data_cell(ws, r, 2)
-        data_cell(ws, r, 3, center=True)
-        data_cell(ws, r, 4, wrap=True)
+        row = catering[i] if i < len(catering) else None
+        get = lambda k: (row.get(k) or None) if row else None
+        data_cell(ws, r, 1, get("ארוחה"), center=True)
+        data_cell(ws, r, 2, get("מנה"))
+        data_cell(ws, r, 3, get("כמות"), center=True)
+        data_cell(ws, r, 4, get("הערה"), wrap=True)
     dv_list(ws, '"{}"'.format(MEALS), "A3:A{}".format(2 + CATERING_ROWS))
     ws.freeze_panes = "A3"
+    note_row(ws, CATERING_ROWS + 4,
+             "המקור הוא data/catering.csv. משימה שכתוב בה {ארוחת ערב}, {ארוחת צהריים} או {סלטים} "
+             "מקבלת את רשימת המנות של אותה ארוחה — כך התפריט מתעדכן בכל המשימות בבת אחת.", last_col=4)
     return ws
 
 

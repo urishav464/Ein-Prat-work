@@ -8,6 +8,7 @@ and RTL. Work happens on the `Shabbat` branch. See `README.md` for the user-faci
 ## Commands
 
 ```bash
+python3 tools/shabbat.py 2026-09-25              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
 python3 tools/build_workbook.py                  # data/*.csv → shabbat-planner.xlsx (only when the schema changes)
 python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-09-18.xlsx
 python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx   # carry last week's edits forward
@@ -18,7 +19,12 @@ python3 tools/zmanim.py 2026-09-01 2027-09-01    # regenerate data/zmanim.csv
 python3 tools/fetch_fonts.py                     # refill assets/fonts/ (already committed)
 ```
 
-There is no test suite and no linter. Verification is described under "Verifying changes".
+There is no test suite and no linter. `tools/shabbat.py` runs the standing checks after every
+pipeline run and exits 1 on any problem; see also "Verifying changes".
+
+**Weekly input** is `טופס שבת.md` (root): the user fills it in chat, and it maps onto exactly two
+files — `data/attendance/<date>.csv` and `data/catering.csv`. Everything else (schedule rules,
+tasks, groups, points) is standing data that changes only when the user asks for a change.
 
 ## Architecture
 
@@ -87,6 +93,10 @@ script writes, grey = computed.
   points are added to the person's ranking score in earlier stages, so stage order can't
   silently defeat a pin. Elul students are spread across groups by ratio.
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
+- **Catering placeholders.** Task text in `data/task_library.csv` may contain `{ארוחה}`;
+  `build_workbook.expand_catering` replaces it with that meal's dishes from `data/catering.csv`
+  (one row per dish). An unknown placeholder prints a warning and stays visible, and
+  `shabbat.py` fails its checks on any leftover `{`.
 
 ### Rendering
 
