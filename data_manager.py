@@ -1101,7 +1101,10 @@ def resolve_speaker(name: Optional[str] = None, speaker_id: Optional[int] = None
     if speaker_id is not None:
         return _one(_t("speakers").select("*").eq("id", speaker_id).execute())
 
-    norm = normalize_name(name)
+    # the title is its own column, never part of name_norm — «ד״ר X» typed in
+    # the workfile must find X, not upsert a second «manual» X over her contact
+    # (every status change and close goes through here via record_outreach)
+    norm = normalize_name(split_title(name or "")[1])
     if not norm:
         return None
     exact = _rows(_t("speakers").select("*").eq("name_norm", norm).execute())
@@ -1264,10 +1267,10 @@ def add_lesson_speaker(lesson_id: int, name: str, phone: Optional[str] = None,
         "lesson_id": lesson_id, "name": name, "phone": (phone or "").strip() or None,
     }).execute())
     try:
-        # EXACT name, title stripped the way add_new_speaker stores it.
+        # EXACT name (resolve_speaker strips the title the way add_new_speaker stores it).
         # get_speaker_by_name is a substring search: «תמר» found «תמר כהן»,
         # never joined the index, and her phone was written onto his row.
-        existing = resolve_speaker(name=split_title(name)[1])
+        existing = resolve_speaker(name=name)
         if not existing:
             add_new_speaker(name=name, source_type="manual",
                             contact=(phone or "").strip() or None,
@@ -1963,7 +1966,7 @@ def set_candidate_phone(candidate_id: int, phone: Optional[str]) -> None:
     try:
         # exact, like add_lesson_speaker — a substring match wrote the phone
         # onto a different person whose name merely contains this one
-        existing = resolve_speaker(name=split_title(row.get("name") or "")[1])
+        existing = resolve_speaker(name=row.get("name") or "")
         if existing and not (existing.get("contact") or "").strip("TBD "):
             _t("speakers").update({"contact": phone}).eq("id", existing["id"]).execute()
     except AmbiguousSpeaker:

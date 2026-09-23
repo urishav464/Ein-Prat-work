@@ -618,6 +618,12 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
                 res = dm.close_lesson_speaker(
                     lesson["id"], args["name"], mishmar_id=mishmar_id,
                     student_id=ctx.get("student_id"))
+                if not res.get("logged", True):
+                    # several index rows share the name: nothing was logged,
+                    # and the model must not tell the pair that it was
+                    return {"ok": True, **res,
+                            "warning": "המרצה נסגר לשיעור, אבל לא נרשם ביומן — "
+                                       "יש במאגר יותר מרשומה אחת בשם הזה"}
                 return {"ok": True, **res,
                         "visible_to": "נרשם ✅ ביומן המשותף — כל הזוגות רואים"}
             dm.set_lesson_source(lesson["id"], args["url"])

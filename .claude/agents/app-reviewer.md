@@ -157,6 +157,12 @@ number you did not read from a trace.
   browsing; any write that picks *the* speaker uses `resolve_speaker` (exact `name_norm`, raises
   `AmbiguousSpeaker`), on the name with its title split off. The substring version put a new
   candidate's phone on a different person whose name contained hers, and never indexed her.
+- **A lookup strips the title the way the writer stores it.** `name_norm` is generated from the
+  title-less `name` (the title is its own column), so `resolve_speaker` splits the title first; a
+  lookup of «ד״ר X» that misses X then upserts a manual X over her contact, or duplicates her.
+- **A cached read that calls another cached read lists every table the inner one depends on** —
+  the failure mode of the "derive from the season list" pattern (`get_mishmar` →
+  `get_all_mishmarim`, `get_owners_by_mishmar` → `get_all_assignments` + `get_students`).
 - **Resolve before you create.** `add_new_speaker` upserts on `(name, source_type)`, so calling it
   for a person already indexed under another source makes a second row — and from then on
   `resolve_speaker` is ambiguous for them forever and every ✅ / outreach on them is unlogged.
