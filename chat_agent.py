@@ -22,6 +22,7 @@ import json
 import os
 import re
 from typing import Any, Iterator, Optional
+from urllib.parse import urlparse
 
 import archive
 import data_manager as dm
@@ -796,7 +797,18 @@ ANGLES = {"1": "יסודות", "2": "ערעור / טוויסט", "3": "זווי�
 # Grounding: an evidence URL on one of these is what makes a name «high».
 _INSTITUTIONAL = ("ac.il", "org.il", "hartman", "vanleer", "bac.org", "herzog",
                   "shazar", "pardes", "alma", "bina", "einprat", "gov.il", "muni.il",
-                  ".edu", ".ac.", "kolot", "hadar", "morasha", "oranim", "yeshiva")
+                  ".edu", ".ac.", "kolot", "hadar", "morasha", "oranim")
+
+
+def _is_institutional(url: str) -> bool:
+    """An institution's own site, matched on the HOST — never the path: «hadar»
+    in a LinkedIn or news slug is a first name, «yeshiva» a headline word, and
+    matching the whole URL made a LinkedIn profile «🏛️ עמוד המוסד» with a
+    green «ודאות גבוהה» (app-reviewer, measured on 11 such URLs)."""
+    host = urlparse(url or "").netloc.lower().removeprefix("www.")
+    if not host or host == "academia.edu" or host.endswith(".academia.edu"):
+        return False                     # anyone's self-upload page, not a faculty page
+    return any(k in host for k in _INSTITUTIONAL)
 
 MAP_SYSTEM = """\
 אתה עוזר לצוות של מדרשת עין פרת לתכנן משמר — ערב לימוד של לילה שלם, בנוי
@@ -1122,7 +1134,7 @@ def _confidence(urls: list[str], sources: dict) -> str:
     """high = an institutional page AND recent activity in the evidence;
     medium = one of the two; low = neither. The same promotion rule the old
     scout applied to mined snippets, applied to the pages the model read."""
-    institutional = any(any(k in (u or "").lower() for k in _INSTITUTIONAL) for u in urls)
+    institutional = any(_is_institutional(u) for u in urls)
     years = []
     for u in urls:
         years += [int(y) for y in re.findall(r"20\d\d", str((sources.get(u) or {}).get("page_age") or ""))]
@@ -1160,7 +1172,7 @@ def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
         angle = str(c.get("angle") or "")
         # the page where a person's contact details actually live — «🏛️ עמוד
         # המוסד» on the card, instead of re-verifying what the model just read
-        inst = next((u for u in urls if any(k in u.lower() for k in _INSTITUTIONAL)), "")
+        inst = next((u for u in urls if _is_institutional(u)), "")
         out.append({
             "name": name, "title": str(c.get("title") or "").strip(),
             "angle": angle if angle in ANGLES else "",
@@ -1216,6 +1228,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
     `usage["cost_usd"]` is the whole search in money: this call plus the map."""
     res = _scout_run(topic, lesson, lesson_topic, progress, scout_map_result)
     usage = dict(res.get("usage") or {})
+    # the map is billed with the FIRST scan made from it — the caller drops
+    # its usage from the held map afterwards, so a re-scan does not bill it again
     usage["cost_usd"] = round(_cost(usage) + _cost((scout_map_result or {}).get("usage") or {}), 4)
     res["usage"] = usage
     return res
@@ -1311,9 +1325,14 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
                 "queries": queries, "rejected": [], "usage": {}}
     except Exception as exc:                     # noqa: BLE001 — named, not hidden
         reason = "search_disabled" if _search_disabled(exc) else "error"
+        usage = _usage_sum(usages)
+        if queries:
+            # searches ran and were billed, but the failing request's usage never
+            # arrived — the cost shown is a floor, and the screen says «≥»
+            usage["partial"] = True
         return {"fallback": True, "reason": reason, "map": smap,
                 "error": f"{type(exc).__name__}: {exc}",
-                "queries": queries, "rejected": [], "usage": _usage_sum(usages)}
+                "queries": queries, "rejected": [], "usage": usage}
 
     rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
     vetted = _ground(data.get("candidates") or [], sources, rejected)

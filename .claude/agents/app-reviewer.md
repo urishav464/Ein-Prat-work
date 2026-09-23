@@ -196,6 +196,9 @@ number you did not read from a trace.
 - `trim_history` cuts only on a plain user turn; `compact_tool_output` never truncates JSON text.
 - `MAX_TOOL_ROUNDS` bounded; the final round forces `tool_choice: none`. No tool accepts a
   `mishmar_id` from the model.
+- **A URL classifier matches on the host, never the whole URL**: «hadar»/«yeshiva» in a LinkedIn or news slug promoted a name to «high» and made a LinkedIn profile «🏛️ עמוד המוסד»; academia.edu is anyone's upload page.
+- **A cost labelled as the whole operation counts a shared input once** (the map several scans reuse was billed in each).
+- **A default among slots never lands on a חבורות round** (`dm.is_chavurot`); Hebrew word matching strips the ה/ו prefix and punctuation first.
 - **A server-tool parameter the API rejects fails every call** — `user_location.country: "IL"` → 400 «Country code IL is not supported» broke every scan, and was first misread as «search is switched off». Check tool definitions against the tool's docs, and read the «פרטים טכניים» text before theorising.
 - The scout: web-search `max_uses` capped; candidates grounded in harvested URLs; `pause_turn`
   resumed a bounded number of times.

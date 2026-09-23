@@ -6,8 +6,9 @@ This is the hardest and most failure-prone step in building a Mishmar
 
 SINCE THE MAP (chat_agent.scout_map / scout_speakers) the app's search screen no
 longer comes here for discovery: the model searches the web itself along a
-field map. This module now serves the «אמת» button (`verify_speaker`), the
-manual-link fallback (`manual_search_links`) and the CLI agents.
+field map. This module now serves the manual-link fallback
+(`manual_search_links`) and the CLI agents (`verify_speaker`, discovery). The
+screen's «אמת» became a link to the institutional page the model already read.
 
 TWO PATHS — the core design decision, as it stood before the map:
 

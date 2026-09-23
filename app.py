@@ -1084,8 +1084,7 @@ def _dashboard_body() -> None:
     # search that found nothing shows its map and its queries: that is where a
     # bad reading of a topic becomes visible, and where the tool gets better.
     searches = dm.get_all_searches()
-    spent = sum(((r.get("results_json") or {}).get("usage") or {}).get("cost_usd") or 0
-                for r in searches)
+    spent = sum(_usd((r.get("results_json") or {}).get("usage") or {}) for r in searches)
     with st.expander(f"🔍 חיפושי המרצים של החניכים ({len(searches)})"
                      + (f" · עד כה ≈₪{spent * ca.ILS_PER_USD:.0f}" if spent else "")):
         if not searches:
@@ -1107,7 +1106,7 @@ def _dashboard_body() -> None:
                     + f" · {_clean(row['topic'])}"
                     + (f" → {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
                     + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · {outcome}"
-                    + (f" · {_money(r['usage'])}" if (r.get("usage") or {}).get("cost_usd") else "")
+                    + (f" · {_money(r['usage'])}" if r.get("usage") else "")
                     + (f" · נוספו: {_clean(' · '.join(added))}" if added else "")
                     + (f"<br>🗺️ {_clean(fields)}" if fields else "")
                     + (f"<br>⚠️ {_clean(str(r['error']))[:160]}"
@@ -1813,13 +1812,17 @@ REGION_HELP = {
 }
 
 
-def _money(usage: dict) -> str:
-    """≈₪ (and $) for a search — its usage carries cost_usd since round 2;
-    an older record is priced from its tokens."""
+def _usd(usage: dict) -> float:
+    """A search in dollars — cost_usd since round 2; an older record is priced
+    from its tokens (without the map, which it never recorded)."""
     usd = (usage or {}).get("cost_usd")
-    if usd is None:
-        usd = ca._cost(usage or {})
-    return f"≈₪{usd * ca.ILS_PER_USD:.2f} (${usd:.2f})"
+    return ca._cost(usage or {}) if usd is None else usd
+
+
+def _money(usage: dict) -> str:
+    usd = _usd(usage)
+    floor = "≥" if (usage or {}).get("partial") else "≈"
+    return f"{floor}₪{usd * ca.ILS_PER_USD:.2f} (${usd:.2f})"
 
 
 def _link_label(url: str, title: str = "") -> str:
@@ -1831,14 +1834,32 @@ def _link_label(url: str, title: str = "") -> str:
     return f"{t} — {host}" if t else host or url
 
 
+_SLOT_STOP = {"בין", "איך", "למה", "מול", "כמו", "אחרי", "לפני", "אצל", "האם", "מתי", "אבל"}
+
+
+def _slot_words(text: str) -> set[str]:
+    """Hebrew words comparable across a title and a topic: punctuation off, a
+    leading ה/ו off («הזיכרון» → «זיכרון»), filler words out."""
+    out = set()
+    for w in (text or "").split():
+        w = w.strip("?!.,:;\"'«»()״׳-")
+        if len(w) > 3 and w[0] in "הו":
+            w = w[1:]
+        if len(w) > 2 and w not in _SLOT_STOP:
+            out.add(w)
+    return out
+
+
 def _default_slot(slots: list[dict], lesson_topic: str) -> int:
     """The slot the search was FOR: its title shares a word with the lesson
-    topic; else the first slot with no closed speaker; else the first."""
-    words = {w for w in (lesson_topic or "").split() if len(w) > 2}
+    topic; else the first lesson with no closed speaker — never a round of
+    חבורות, which has no speaker_name ever; else the first."""
+    words = _slot_words(lesson_topic)
     for i, l in enumerate(slots):
-        if words & set((l.get("title") or "").split()):
+        if words & _slot_words(l.get("title") or ""):
             return i
-    return next((i for i, l in enumerate(slots) if not l.get("speaker_name")), 0)
+    return next((i for i, l in enumerate(slots)
+                 if not l.get("speaker_name") and not dm.is_chavurot(l)), 0)
 
 
 def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
@@ -1962,9 +1983,9 @@ LESSON_ANGLES = {
 }
 ANGLE_HINTS = {
     "בלי המלצה": "לחפש בכל הזוויות",
-    "יסודות": "היסטוריון, חוקר, איש אקדמיה",
-    "ערעור / טוויסט": "פילוסוף, הוגה, מחשבת ישראל",
-    "זווית מפתיעה": "אמנות, קולנוע, פסיכולוגיה, סוציולוגיה",
+    "יסודות": "מה צריך לדעת כדי לדבר על הנושא בכלל",
+    "ערעור / טוויסט": "מי שהופך את השאלה ומערער על היסודות",
+    "זווית מפתיעה": "תחום סמוך שלא היינו חושבים עליו",
 }
 
 
@@ -2075,7 +2096,7 @@ def show_speaker_search() -> None:
         ) if mine else None
         go_map = st.form_submit_button("🗺️ בנה מפה", type="primary")
     st.caption("המפה היא קריאה אחת קטנה של המודל — כמה שניות. הסריקה עצמה, אחרי שאישרתם "
-               "את המפה, היא דקה או שתיים ועד שמונה חיפושים ברשת; התוצאה נשמרת.")
+               "את המפה, היא דקה או שתיים ועד שבעה חיפושים ברשת (שניים לכל זווית ועוד אחד); התוצאה נשמרת.")
 
     topic, lesson_topic = topic.strip(), lesson_topic.strip()
     if go_map and (topic or lesson_topic):
@@ -2215,6 +2236,9 @@ def _run_scan(held: dict) -> None:
 
         res = ca.scout_speakers(topic, lesson, lesson_topic, progress=_stage,
                                 scout_map_result=smap)
+        # the map's cost now sits in this scan's cost_usd — a re-scan from the
+        # same map (an angle unticked) must not bill it a second time
+        (held.get("map") or {}).pop("usage", None)
         n_found = len(res.get("candidates") or [])
         u = res.get("usage") or {}
         box.update(
