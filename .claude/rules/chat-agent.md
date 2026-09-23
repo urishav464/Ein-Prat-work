@@ -58,9 +58,15 @@ the searching; the anchor moved from names to URLs. Dynamic filtering is the lat
 optimisation, once we know what the runs really cost.
 
 **Every fallback names its reason** (`no_map` · `no_names` · `model_rejected_all` · `truncated` ·
-`empty_reply` · `search_disabled` — the org has web search off in the Claude Console and the API
-says so with a 400 · `error`), keeps the map and the queries, and the screen offers one manual
-link per term. The index is NOT a source on this screen, but every returned name is checked
+`empty_reply` · `search_disabled` · `error`), keeps the map and the queries, and the screen offers
+one manual link per term — and **always the API's own error text** under «פרטים טכניים» (also on
+the dashboard's searches table). `search_disabled` is decided by `_off_for_org`: the error names
+web search **and** says «not enabled»/«disabled» — the first version matched on the tool's name
+alone, so any 400 about a tool parameter was shown as «search is switched off» and the real cause
+was hidden. Web search is ON by default (platform.claude.com/settings/privacy); only the admin line
+under the warning names that link. **Web fetch off on its own** (`_fetch_disabled`) is not a
+failure: the request is retried once without the `web_fetch` tool, names are grounded on search
+result URLs alone, and `usage["fetch_disabled"]` puts a note in the cost caption. The index is NOT a source on this screen, but every returned name is checked
 against it: **`_index_memory(name)`** is one line of institutional memory — what the person
 taught here and when (the seed's «(18.9.25)»-dated notes, this season's `lessons.speaker_name`),
 the last outreach with its Mishmar and date, the rating if any — or «אין תיעוד של הזמנה קודמת».

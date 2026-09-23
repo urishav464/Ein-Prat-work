@@ -1042,8 +1042,8 @@ def scout_map(topic: str, lesson_topic: str = "", angle: str = "") -> dict:
             "usage": _usage_of(resp)}
 
 
-def _scout_tools() -> list[dict]:
-    return [
+def _scout_tools(with_fetch: bool = True) -> list[dict]:
+    tools = [
         {"type": SCOUT_SEARCH_TOOL, "name": "web_search",
          "max_uses": SCOUT_MAX_SEARCHES,
          # direct, not dynamic filtering: every result block then comes back
@@ -1054,6 +1054,9 @@ def _scout_tools() -> list[dict]:
         {"type": SCOUT_FETCH_TOOL, "name": "web_fetch",
          "max_uses": SCOUT_MAX_FETCHES, "max_content_tokens": SCOUT_FETCH_TOKENS},
     ]
+    # web fetch can be switched off for the organization on its own; search
+    # alone still grounds names, on the result URLs
+    return tools if with_fetch else tools[:1]
 
 
 def _harvest_sources(content, sources: dict, queries: list[str]) -> None:
@@ -1153,9 +1156,22 @@ def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
     return out
 
 
-def _search_disabled(exc: Exception) -> bool:
+def _off_for_org(exc: Exception, *names: str) -> bool:
+    """The API's 400 for a server tool the organization switched off says the
+    tool «is not enabled». Naming the tool is NOT enough: any 400 about a
+    parameter of the tool names it too — the first version of this matched on
+    the name alone, told the pair that search was switched off, and hid the
+    real error."""
     s = str(exc).lower()
-    return "web search" in s or "web_search" in s
+    return any(n in s for n in names) and ("not enabled" in s or "disabled" in s)
+
+
+def _search_disabled(exc: Exception) -> bool:
+    return _off_for_org(exc, "web search", "web_search")
+
+
+def _fetch_disabled(exc: Exception) -> bool:
+    return _off_for_org(exc, "web fetch", "web_fetch")
 
 
 def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
@@ -1185,36 +1201,46 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
     text = ""
     try:
         client = get_client()
-        for attempt in range(SCOUT_MAX_CONTINUES + 1):
-            with client.messages.stream(
-                model=MODEL, max_tokens=5000,
-                system=[{"type": "text",
-                         "text": SCOUT_SYSTEM.replace("{max}", str(MAX_SCOUT_CANDIDATES)),
-                         "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
-                output_config={"effort": "medium"},
-                tools=_scout_tools(),
-                messages=messages,
-            ) as stream:
-                seen_blocks = 0
-                for event in stream:
-                    if getattr(event, "type", None) != "content_block_stop":
-                        continue
-                    snap = stream.current_message_snapshot
-                    blocks = list(snap.content or [])
-                    for b in blocks[seen_blocks:]:
-                        seen_blocks += 1
-                        if getattr(b, "type", None) == "server_tool_use" and progress:
-                            inp = getattr(b, "input", None) or {}
-                            if inp.get("query"):
-                                progress(f"מחפש: {inp['query']}")
-                            elif inp.get("url"):
-                                progress(f"קורא: {inp['url'][:90]}")
-                msg = stream.get_final_message()
+        with_fetch, attempt = True, 0
+        while True:
+            try:
+                with client.messages.stream(
+                    model=MODEL, max_tokens=5000,
+                    system=[{"type": "text",
+                             "text": SCOUT_SYSTEM.replace("{max}", str(MAX_SCOUT_CANDIDATES)),
+                             "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                    output_config={"effort": "medium"},
+                    tools=_scout_tools(with_fetch),
+                    messages=messages,
+                ) as stream:
+                    seen_blocks = 0
+                    for event in stream:
+                        if getattr(event, "type", None) != "content_block_stop":
+                            continue
+                        snap = stream.current_message_snapshot
+                        blocks = list(snap.content or [])
+                        for b in blocks[seen_blocks:]:
+                            seen_blocks += 1
+                            if getattr(b, "type", None) == "server_tool_use" and progress:
+                                inp = getattr(b, "input", None) or {}
+                                if inp.get("query"):
+                                    progress(f"מחפש: {inp['query']}")
+                                elif inp.get("url"):
+                                    progress(f"קורא: {inp['url'][:90]}")
+                    msg = stream.get_final_message()
+            except Exception as exc:                 # noqa: BLE001 — re-raised unless it is this one case
+                if with_fetch and _fetch_disabled(exc):
+                    with_fetch = False
+                    if progress:
+                        progress("פתיחת דפים חסומה בחשבון — ממשיך בחיפוש בלבד")
+                    continue
+                raise
             usages.append(_usage_of(msg))
             _harvest_sources(msg.content, sources, queries)
             text += "".join(getattr(b, "text", "") for b in (msg.content or [])
                             if getattr(b, "type", None) == "text")
             if getattr(msg, "stop_reason", None) == "pause_turn" and attempt < SCOUT_MAX_CONTINUES:
+                attempt += 1
                 if progress:
                     progress("ממשיך את החיפוש…")
                 messages.append({"role": "assistant",
@@ -1223,6 +1249,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
                 continue
             break
         usage = _usage_sum(usages)
+        if not with_fetch:
+            usage["fetch_disabled"] = True
         stop = getattr(msg, "stop_reason", None)
         if stop == "max_tokens" or stop == "pause_turn":
             return {"fallback": True, "reason": "truncated", "error": stop, "map": smap,

@@ -1,0 +1,9 @@
+{
+ "fallback": true,
+ "reason": "search_disabled",
+ "error": "BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'web search is not enabled for this organization'}}",
+ "queries": [],
+ "rejected": [],
+ "usage": {},
+ "candidates": []
+}

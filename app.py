@@ -1106,7 +1106,9 @@ def _dashboard_body() -> None:
                     + (f" → {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
                     + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · {outcome}"
                     + (f" · נוספו: {_clean(' · '.join(added))}" if added else "")
-                    + (f"<br>🗺️ {_clean(fields)}" if fields else "") + "</span>",
+                    + (f"<br>🗺️ {_clean(fields)}" if fields else "")
+                    + (f"<br>⚠️ {_clean(str(r['error']))[:160]}"
+                       if r.get("fallback") and r.get("error") else "") + "</span>",
                     unsafe_allow_html=True)
                 if c2.button("פתח", key=f"ds-open-{row['id']}"):
                     st.session_state["scout_result"] = {
@@ -2214,6 +2216,8 @@ def _scout_results(result: dict) -> None:
             f"עלות הסריקה: {u.get('searches') or 0} חיפושים · {u.get('fetches') or 0} דפים נפתחו · "
             f"{u.get('input') or 0:,} טוקנים נכנסים · {u.get('output') or 0:,} יוצאים"
             + (f" · מהמטמון: {u['cache_read']:,}" if u.get("cache_read") else "")
+            + (" · פתיחת דפים חסומה בחשבון — השמות מבוססים על תוצאות החיפוש בלבד"
+               if u.get("fetch_disabled") else "")
         )
     if result.get("rejected"):
         with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})"):
@@ -2236,8 +2240,8 @@ SCOUT_FALLBACK_TEXT = {
                           "מרצה חי ופעיל לנושא הזה. זו תשובה כנה, לא תקלה.",
     "truncated": "הסריקה נקטעה לפני שסיימה. סרקו שוב, אולי עם פחות זוויות.",
     "empty_reply": "המודל לא החזיר תשובה. סרקו שוב.",
-    "search_disabled": "חיפוש ברשת כבוי לארגון הזה ב-Claude Console. המדריך יכול להפעיל אותו "
-                       "ב-Settings → Privacy; עד אז — הקישורים הידניים למטה.",
+    "search_disabled": "חיפוש המרצים באינטרנט חסום כרגע בחשבון Anthropic של התוכנית — "
+                       "ספרו למדריך. עד שייפתח, אפשר להמשיך בקישורי החיפוש הידני שלמטה.",
     "error": "הסריקה לא רצה",
 }
 
@@ -2248,9 +2252,15 @@ def _scout_fallback(result: dict) -> None:
     search link per term, so a pair can carry on by hand."""
     reason = result.get("reason") or ("error" if result.get("error") else "no_names")
     msg = SCOUT_FALLBACK_TEXT.get(reason, SCOUT_FALLBACK_TEXT["error"])
-    if reason == "error" and result.get("error"):
-        msg += f" ({_clean(result['error'])[:80]})"
     st.warning(msg)
+    if reason == "search_disabled" and st.session_state.get("role") == "admin":
+        st.caption("להפעלה: [platform.claude.com/settings/privacy](https://platform.claude.com/settings/privacy) "
+                   "→ Web search — צריך הרשאת אדמין בארגון של מפתח ה-API.")
+    # the API's own words, whatever the reason: the first «search is off»
+    # report could not be diagnosed because only reason «error» showed them
+    if result.get("error"):
+        with st.expander("פרטים טכניים"):
+            st.code(str(result["error"])[:300], language=None, wrap_lines=True)
     if result.get("rejected"):
         with st.expander(f"🚫 נשקלו ונפסלו ({len(result['rejected'])})", expanded=True):
             for r in result["rejected"]:
