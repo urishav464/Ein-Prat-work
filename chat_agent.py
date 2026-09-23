@@ -1048,9 +1048,10 @@ def _scout_tools(with_fetch: bool = True) -> list[dict]:
          "max_uses": SCOUT_MAX_SEARCHES,
          # direct, not dynamic filtering: every result block then comes back
          # whole, and the harvested URLs are what grounds the names (below)
-         "allowed_callers": ["direct"],
-         "user_location": {"type": "approximate", "country": "IL",
-                           "city": "Jerusalem", "timezone": "Asia/Jerusalem"}},
+         "allowed_callers": ["direct"]},
+        # NO user_location: the API rejects `country: "IL"` with a 400
+        # («Country code IL is not supported»), which failed every scan. The
+        # map's Hebrew field terms and Israeli institutions localise it anyway.
         {"type": SCOUT_FETCH_TOOL, "name": "web_fetch",
          "max_uses": SCOUT_MAX_FETCHES, "max_content_tokens": SCOUT_FETCH_TOKENS},
     ]

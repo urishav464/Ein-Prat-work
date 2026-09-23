@@ -196,6 +196,7 @@ number you did not read from a trace.
 - `trim_history` cuts only on a plain user turn; `compact_tool_output` never truncates JSON text.
 - `MAX_TOOL_ROUNDS` bounded; the final round forces `tool_choice: none`. No tool accepts a
   `mishmar_id` from the model.
+- **A server-tool parameter the API rejects fails every call** — `user_location.country: "IL"` → 400 «Country code IL is not supported» broke every scan, and was first misread as «search is switched off». Check tool definitions against the tool's docs, and read the «פרטים טכניים» text before theorising.
 - The scout: web-search `max_uses` capped; candidates grounded in harvested URLs; `pause_turn`
   resumed a bounded number of times.
 

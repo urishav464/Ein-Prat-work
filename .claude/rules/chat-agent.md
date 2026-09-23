@@ -39,7 +39,7 @@ Now:
    (terms as a text line, a checkbox per angle) before anything expensive runs.
 2. **`scout_speakers(topic, lesson, lesson_topic, progress, scout_map_result)`** — the model
    searches the web itself: `web_search_20260318` (`max_uses = SCOUT_MAX_SEARCHES = 8`,
-   `allowed_callers: ["direct"]`, `user_location` IL/Jerusalem) + `web_fetch_20260318`
+   `allowed_callers: ["direct"]`, no `user_location` — the API rejects `country: "IL"` with a 400 «Country code IL is not supported», which failed every scan until the «פרטים טכניים» text named it) + `web_fetch_20260318`
    (`max_uses = 4`, `max_content_tokens = 8000`, free beyond tokens, can only open URLs its own
    searches returned). Streamed, so every `server_tool_use` becomes a progress line («מחפש: …» /
    «קורא: …»). `pause_turn` is resumed at most `SCOUT_MAX_CONTINUES = 2` times by sending the
