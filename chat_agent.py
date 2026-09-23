@@ -776,10 +776,18 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 # which is why a lesson topic made it narrower instead of wider.
 # --------------------------------------------------------------------------
 
-SCOUT_MAX_SEARCHES = 8      # web searches one run may spend — $10 per 1,000
-SCOUT_MAX_FETCHES = 4       # pages it may open — free beyond their tokens
+SCOUT_MAX_SEARCHES = 8      # ceiling; a run gets 2 per angle + 1 (_scout_tools)
+SCOUT_MAX_FETCHES = 4       # ceiling; a run gets 1 per angle + 1 — free beyond tokens
 SCOUT_MAX_CONTINUES = 2     # pause_turn resumptions before «truncated»
-SCOUT_FETCH_TOKENS = 8000   # cap on a fetched page
+SCOUT_FETCH_TOKENS = 5000   # cap on a fetched page (an average page is ~2.5k)
+
+# What a run costs, in money — the screen used to say «35,665 tokens», which
+# tells nobody anything. USD per million tokens for MODEL (platform.claude.com
+# pricing, Sonnet 5); the cache write is the 5-minute one, which is what the
+# scout writes. The shekel rate is a label, not a quote.
+PRICES = {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.50}
+SEARCH_USD = 0.01           # $10 per 1,000 web searches; web fetch is free
+ILS_PER_USD = 3.7
 SCOUT_SEARCH_TOOL = "web_search_20260318"
 SCOUT_FETCH_TOOL = "web_fetch_20260318"
 
@@ -787,17 +795,15 @@ ANGLES = {"1": "יסודות", "2": "ערעור / טוויסט", "3": "זווי�
 
 # Grounding: an evidence URL on one of these is what makes a name «high».
 _INSTITUTIONAL = ("ac.il", "org.il", "hartman", "vanleer", "bac.org", "herzog",
-                  "shazar", "pardes", "alma", "bina", "einprat", "gov.il", "muni.il")
+                  "shazar", "pardes", "alma", "bina", "einprat", "gov.il", "muni.il",
+                  ".edu", ".ac.", "kolot", "hadar", "morasha", "oranim", "yeshiva")
 
 MAP_SYSTEM = """\
 אתה עוזר לצוות של מדרשת עין פרת לתכנן משמר — ערב לימוד של לילה שלם, בנוי
 משלושה שיעורים ושעת חבורות. כל שיעור פונה לנושא הערב מזווית אחרת:
-1. **יסודות** — התחום שהנושא שייך אליו. היסטוריון/ית, חוקר/ת, איש/אשת אקדמיה,
-   לימוד טקסטואלי. מה צריך לדעת כדי לדבר על זה בכלל.
-2. **ערעור / טוויסט** — תחום שמערער על היסודות. פילוסוף/ית, הוגה, מחשבת ישראל,
-   מי שהופך את השאלה.
-3. **זווית מפתיעה** — תחום סמוך שלא היינו חושבים עליו. אמנות, קולנוע, פסיכולוגיה,
-   סוציולוגיה, מדע, מוזיקה, השוואתי.
+1. **יסודות** — מה צריך לדעת כדי לדבר על הנושא בכלל: התחום שהוא שייך אליו.
+2. **ערעור / טוויסט** — מי שהופך את השאלה ומערער על היסודות.
+3. **זווית מפתיעה** — תחום סמוך שלא היינו חושבים עליו.
 
 תקבל נושא של משמר, אולי גם נושא של שיעור בתוכו, ואולי זווית שנבחרה. תפקידך:
 **לתרגם את הנושא לתחומים** ולומר איזה סוג של אדם עוסק בהם — לא למצוא אנשים.
@@ -809,7 +815,12 @@ MAP_SYSTEM = """\
   שם של שדה מחקר.
 - `where` — 1–3 מוסדות או חוגים בישראל שבהם אנשים כאלה יושבים באמת. אל תמציא
   חוג שאינך בטוח שקיים; מוסד כללי («האוניברסיטה העברית») עדיף על חוג מומצא.
-- `who` — סוג האדם במילה או שתיים, לא שם של אדם.
+- `who` — סוג האדם במילה או שתיים, לא שם של אדם — **והנושא קובע אותו**, לא
+  ברירת מחדל. זה יכול להיות חוקר/ת, אבל גם מחנך/ת, רב/ה, סופר/ת, אמן/ית,
+  איש/אשת מקצוע מהשטח (מטפל/ת, שופט/ת, רופא/ה), עיתונאי/ת — מי שבאמת מדבר על
+  זה בישראל. העדף מי שמלמד/ת קהל רחב של צעירים, לא רק עמיתים.
+- `where` יכול להיות גם מקום שאינו אקדמי: מכון הרטמן, בית אבי חי, עלמא, בינה,
+  קולות, מכון הדר, בתי מדרש, או מקום של עשייה — מה שמתאים לסוג האדם.
 - `why` — משפט אחד: איך התחום הזה מדבר עם הנושא הספציפי.
 - אם נבחרה זווית — החזר רק אותה. אחרת החזר את שלושתן.
 - עברית בלבד, JSON בלבד, בלי הקדמות.
@@ -828,7 +839,11 @@ SCOUT_SYSTEM = """\
 השיטה:
 1. חפש לפי **מונחי המפה והמוסדות** — לא לפי ניסוח הנושא. דפים שמכילים את ניסוח
    הנושא הם מאמרים; אנשים נמצאים בדפי סגל, רשימות עמיתים, תוכניות כנסים, פרקי
-   פודקאסט, ספרים שיצאו לאחרונה, ראיונות.
+   פודקאסט, ספרים שיצאו לאחרונה, ראיונות. חפש בעברית; באנגלית רק כדי להגיע לעמוד
+   המוסדי של אדם שכבר מצאת. בערך שני חיפושים לכל זווית.
+   **סוג האדם שבמפה מחייב**: אם המפה אומרת «מחנך/ת» או «אמן/ית» — חוקר/ת אינו
+   תחליף. בין שני מתאימים, העדף את מי שיש עדות שמלמד/ת קהל רחב (הרצאות פתוחות,
+   קורסים, פודקאסט) — וכתוב את זה ב-`fit`.
 2. כשעלה שם מבטיח — פתח דף אחד עליו (עמוד מוסדי, ראיון) כדי לבסס שיוך ופעילות
    עדכנית. אל תפתח יותר מדף אחד לאדם.
 3. החזר **1–2 שמות לכל זווית** שנשארה במפה, ולא יותר מ-{max} בסך הכל.
@@ -844,8 +859,9 @@ SCOUT_SYSTEM = """\
    כתובת שלא ראית — אל תכתוב.
 5. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
    מרופדת גרועה מרשימה קצרה וכנה.
-6. ב-`rejected` פרט שמות ששקלת ופסלת ולמה (משפט קצר) — כדי שלא יחפשו אותם שוב.
-7. עברית בלבד. JSON בלבד, בלי הקדמה ובלי סיכום אחרי.
+6. ב-`rejected` עד 4 שמות ששקלת ופסלת, ולמה בחצי משפט — כדי שלא יחפשו אותם שוב.
+7. עברית בלבד. **אל תכתוב שום טקסט בין החיפושים** ובסוף — JSON בלבד, בלי הקדמה
+   ובלי סיכום. `bio` ו-`fit` — משפט אחד קצר כל אחד. כל מילה כאן עולה כסף.
 
 {"candidates": [{"name": "שם בלי תואר", "title": "ד\\"ר/הרב/פרופ׳ או \\"\\"",
   "angle": "1|2|3",
@@ -1042,10 +1058,13 @@ def scout_map(topic: str, lesson_topic: str = "", angle: str = "") -> dict:
             "usage": _usage_of(resp)}
 
 
-def _scout_tools(with_fetch: bool = True) -> list[dict]:
+def _scout_tools(n_angles: int = 3, with_fetch: bool = True) -> list[dict]:
+    """Budgets sized to the request: 2 searches per angle + 1, one page per
+    angle + 1. A single-angle scan used to be allowed the full 8 searches."""
+    n = max(1, min(3, n_angles))
     tools = [
         {"type": SCOUT_SEARCH_TOOL, "name": "web_search",
-         "max_uses": SCOUT_MAX_SEARCHES,
+         "max_uses": min(SCOUT_MAX_SEARCHES, 2 * n + 1),
          # direct, not dynamic filtering: every result block then comes back
          # whole, and the harvested URLs are what grounds the names (below)
          "allowed_callers": ["direct"]},
@@ -1053,7 +1072,7 @@ def _scout_tools(with_fetch: bool = True) -> list[dict]:
         # («Country code IL is not supported»), which failed every scan. The
         # map's Hebrew field terms and Israeli institutions localise it anyway.
         {"type": SCOUT_FETCH_TOOL, "name": "web_fetch",
-         "max_uses": SCOUT_MAX_FETCHES, "max_content_tokens": SCOUT_FETCH_TOKENS},
+         "max_uses": min(SCOUT_MAX_FETCHES, n + 1), "max_content_tokens": SCOUT_FETCH_TOKENS},
     ]
     # web fetch can be switched off for the organization on its own; search
     # alone still grounds names, on the result URLs
@@ -1139,6 +1158,9 @@ def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
         for banned in ("contact", "phone", "email", "טלפון", "מייל"):
             c.pop(banned, None)
         angle = str(c.get("angle") or "")
+        # the page where a person's contact details actually live — «🏛️ עמוד
+        # המוסד» on the card, instead of re-verifying what the model just read
+        inst = next((u for u in urls if any(k in u.lower() for k in _INSTITUTIONAL)), "")
         out.append({
             "name": name, "title": str(c.get("title") or "").strip(),
             "angle": angle if angle in ANGLES else "",
@@ -1148,6 +1170,7 @@ def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
             "fit": str(c.get("fit") or "").strip(),
             "rationale": str(c.get("rationale") or c.get("fit") or "").strip(),
             "link": link or (kept_ev[0]["href"] if kept_ev else ""),
+            "inst_link": inst,
             "evidence": [{"title": e.get("title") or "", "href": e["href"]} for e in kept_ev][:4],
             "flags": ["⚠️ לאמת"], "source": "web",
             "confidence": _confidence(urls, sources),
@@ -1175,13 +1198,31 @@ def _fetch_disabled(exc: Exception) -> bool:
     return _off_for_org(exc, "web fetch", "web_fetch")
 
 
+def _cost(usage: dict) -> float:
+    """USD for one call's usage, cache writes included — the screen showed
+    tokens and left the writes out entirely."""
+    u = usage or {}
+    mtok = sum((u.get(k) or 0) * PRICES[k] for k in PRICES) / 1_000_000
+    return mtok + (u.get("searches") or 0) * SEARCH_USD
+
+
 def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
                    progress=None, scout_map_result: Optional[dict] = None) -> dict:
     """The expensive call: the model searches the web along the map and comes
     back with grounded names. `progress` gets one Hebrew line per search and
     per page opened. Every failure degrades to {"fallback": True, "reason":…}
     with the map and the queries kept, so the screen can still hand the pair
-    one manual link per term. `lesson` is kept for the saved-search columns."""
+    one manual link per term. `lesson` is kept for the saved-search columns.
+    `usage["cost_usd"]` is the whole search in money: this call plus the map."""
+    res = _scout_run(topic, lesson, lesson_topic, progress, scout_map_result)
+    usage = dict(res.get("usage") or {})
+    usage["cost_usd"] = round(_cost(usage) + _cost((scout_map_result or {}).get("usage") or {}), 4)
+    res["usage"] = usage
+    return res
+
+
+def _scout_run(topic: str, lesson: str, lesson_topic: str,
+               progress, scout_map_result: Optional[dict]) -> dict:
     smap = scout_map_result or {}
     angles = [a for a in (smap.get("angles") or []) if a.get("on", True)]
     if not angles:
@@ -1209,9 +1250,12 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
                     model=MODEL, max_tokens=5000,
                     system=[{"type": "text",
                              "text": SCOUT_SYSTEM.replace("{max}", str(MAX_SCOUT_CANDIDATES)),
-                             "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                             # 5-minute cache: scans are minutes to hours apart, so
+                             # the 1h write (2× input) rarely paid back; the reads
+                             # inside one scan's server-side loop hit it either way
+                             "cache_control": {"type": "ephemeral"}}],
                     output_config={"effort": "medium"},
-                    tools=_scout_tools(with_fetch),
+                    tools=_scout_tools(len(angles), with_fetch),
                     messages=messages,
                 ) as stream:
                     seen_blocks = 0
@@ -1274,7 +1318,8 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
     rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
     vetted = _ground(data.get("candidates") or [], sources, rejected)
     for c in vetted:
-        c["region_flag"] = dm.region_flag(c.get("region_hint"), c.get("affiliation"))
+        c["region_flag"], c["region_place"] = dm.region_match(c.get("region_hint"),
+                                                              c.get("affiliation"))
         c["memory"] = _index_memory(c["name"])
         c["already_approached"] = bool(c["memory"] and "פנייה אחרונה" in c["memory"])
         if c["memory"]:
@@ -1304,7 +1349,8 @@ def slim_for_storage(result: dict) -> dict:
         "queries": list(result.get("queries") or [])[:20],
         "candidates": [{k: c.get(k) for k in
                         ("name", "title", "angle", "affiliation", "region_hint", "region_flag",
-                         "bio", "fit", "rationale", "link", "evidence", "flags", "confidence",
+                         "region_place", "bio", "fit", "rationale", "link", "inst_link",
+                         "evidence", "flags", "confidence",
                          "memory", "already_approached")}
                        for c in (result.get("candidates") or [])],
         "rejected": list(result.get("rejected") or [])[:8],

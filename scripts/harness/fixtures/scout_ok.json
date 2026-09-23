@@ -4,11 +4,13 @@
  "target": 4,
  "sources": 14,
  "usage": {
-  "input": 31200,
-  "output": 2100,
-  "cache_read": 1800,
-  "searches": 6,
-  "fetches": 3
+  "input": 35665,
+  "output": 5307,
+  "cache_read": 129985,
+  "cache_write": 3100,
+  "searches": 7,
+  "fetches": 1,
+  "cost_usd": 0.2282
  },
  "queries": [
   "🔎 זיכרון קולקטיבי חוקרת אוניברסיטה",
@@ -83,11 +85,15 @@
    "bio": "מרצה בדיקה א — חוקר/ת בתחום",
    "fit": "מאמר על שכתוב העבר נוגע ישירות בשאלת הערב",
    "rationale": "",
-   "link": "https://example.org/fixture/person",
+   "link": "https://example.org/fixture/interview",
    "evidence": [
     {
+     "title": "ראיון בנושא",
+     "href": "https://example.org/fixture/interview"
+    },
+    {
      "title": "עמוד סגל",
-     "href": "https://example.org/fixture/person"
+     "href": "https://huji.example.ac.il/staff/a"
     }
    ],
    "flags": [
@@ -96,23 +102,25 @@
    "source": "web",
    "confidence": "high",
    "memory": null,
-   "already_approached": false
+   "already_approached": false,
+   "inst_link": "https://huji.example.ac.il/staff/a",
+   "region_place": "ירושלים"
   },
   {
    "name": "מרצה בדיקה ב",
    "title": "הרב",
    "angle": "2",
-   "affiliation": "מכון הרטמן",
-   "region_hint": "ירושלים",
-   "region_flag": "🟢",
+   "affiliation": "המחלקה ללימודי אסיה, אוניברסיטת בר-אילן",
+   "region_hint": "",
+   "region_flag": "🟡",
    "bio": "מרצה בדיקה ב — חוקר/ת בתחום",
    "fit": "מאמר על שכתוב העבר נוגע ישירות בשאלת הערב",
    "rationale": "",
-   "link": "https://example.org/fixture/person",
+   "link": "https://biu.example.ac.il/staff/b",
    "evidence": [
     {
-     "title": "עמוד סגל",
-     "href": "https://example.org/fixture/person"
+     "title": "עמוד סגל — לימודי אסיה",
+     "href": "https://biu.example.ac.il/staff/b"
     }
    ],
    "flags": [
@@ -122,7 +130,9 @@
    "source": "web",
    "confidence": "high",
    "memory": "‼️ במאגר · לימד/ה אצלנו: תשובה בראי הפסיכולוגיה (18.9.25) · חנוכה והאל — ניתי? (11.12.25) · סטטוס במאגר: ✅ לימד פעמיים",
-   "already_approached": false
+   "already_approached": false,
+   "region_place": "בר-אילן",
+   "inst_link": "https://biu.example.ac.il/staff/b"
   },
   {
    "name": "מרצה בדיקה ג",
@@ -147,7 +157,9 @@
    "source": "web",
    "confidence": "medium",
    "memory": null,
-   "already_approached": false
+   "already_approached": false,
+   "region_place": "",
+   "inst_link": ""
   }
  ],
  "rejected": [

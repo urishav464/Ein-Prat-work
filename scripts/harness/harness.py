@@ -297,7 +297,20 @@ def _body_error(page) -> str:
 def _act(page, step: dict) -> str:
     if "nav" in step:
         label = step["nav"]
+        side = page.locator('[data-testid="stSidebar"]')
+        phone = side.get_attribute("aria-expanded") == "false"   # phone width: collapsed
+        if phone:
+            page.locator('[data-testid="stExpandSidebarButton"]').click()
+            page.wait_for_timeout(400)
         page.locator('[data-testid="stSidebar"] label').filter(has_text=label).first.click()
+        if phone:
+            # a radio pick does not close the overlaying sidebar on a phone —
+            # a person taps it shut, and so does the harness
+            page.wait_for_timeout(600)
+            btn = page.locator('[data-testid="stSidebarCollapseButton"] button')
+            if btn.count():
+                btn.first.click(force=True)
+                page.wait_for_timeout(400)
         return f"nav «{label}»"
     if "click" in step:
         spec = step["click"]
@@ -343,7 +356,8 @@ def _login(page, url: str, user: str) -> None:
     page.locator('input[aria-label="השם שלך"]').wait_for(timeout=60000)
     page.fill('input[aria-label="השם שלך"]', user)
     page.get_by_role("button", name="כניסה").click()
-    page.locator('[data-testid="stSidebar"]').wait_for(timeout=60000)
+    # attached, not visible: on a phone width the sidebar starts collapsed
+    page.locator('[data-testid="stSidebar"]').wait_for(state="attached", timeout=60000)
 
 
 def _check(expect: dict, s: dict) -> list[str]:

@@ -38,14 +38,35 @@ Now:
    Cached in `session_state["scout_map"]` on `(topic, lesson_topic, angle)`; the trainee edits it
    (terms as a text line, a checkbox per angle) before anything expensive runs.
 2. **`scout_speakers(topic, lesson, lesson_topic, progress, scout_map_result)`** — the model
-   searches the web itself: `web_search_20260318` (`max_uses = SCOUT_MAX_SEARCHES = 8`,
+   searches the web itself: `web_search_20260318` (`max_uses` = 2 per angle + 1, ceiling
+   `SCOUT_MAX_SEARCHES = 8` — a single-angle scan used to be allowed all 8,
    `allowed_callers: ["direct"]`, no `user_location` — the API rejects `country: "IL"` with a 400 «Country code IL is not supported», which failed every scan until the «פרטים טכניים» text named it) + `web_fetch_20260318`
-   (`max_uses = 4`, `max_content_tokens = 8000`, free beyond tokens, can only open URLs its own
+   (`max_uses` = angles + 1, ceiling 4; `max_content_tokens = 5000` — an average page is ~2.5k;
+   free beyond tokens, can only open URLs its own
    searches returned). Streamed, so every `server_tool_use` becomes a progress line («מחפש: …» /
    «קורא: …»). `pause_turn` is resumed at most `SCOUT_MAX_CONTINUES = 2` times by sending the
    assistant message back unchanged (`model_dump(exclude_none=True)` keeps `encrypted_content`),
    then reported as `truncated`. Usage is summed across the resumptions and carries
-   `searches` / `fetches` — shown on screen, so the «about a shekel» claim is checkable.
+   `searches` / `fetches` and **`cost_usd`** — the scan plus the map, priced by `_cost` from
+   `PRICES` (Sonnet 5: $2 in · $10 out · $0.20 cache read · $2.50 5-minute cache write) and
+   `SEARCH_USD`, cache writes included. The screen and the dashboard show ≈₪ (`ILS_PER_USD`, a
+   label, not a quote). Measured on the first real scan (#04, three angles): 7 searches, 35.7k
+   input, 130k cache reads, 5.3k output → **$0.22 ≈ ₪0.8**; searches and input ~⅓ each, output
+   ~¼. The system prompt caches for 5 minutes, not 1h: scans are minutes to hours apart, so the
+   2× write rarely paid back, and the reads inside one scan's server-side loop hit either TTL.
+
+**Round 2 of the method (after the first real results — four professors, all relevant).** The
+map's angles are PURPOSES, not professions (יסודות = what one must know; ערעור = who turns the
+question over; מפתיעה = a neighbouring field), and **`who` is chosen by the topic**: a researcher,
+or an educator, rabbi, writer, artist, practitioner, journalist — whoever actually speaks about it
+in Israel, preferring people who teach a broad young audience; `where` may be Hartman, Beit Avi
+Chai, Alma, Kolot… not only departments. The scout treats the map's kind of person as binding,
+breaks ties toward evidence of public teaching (and says so in `fit`), searches in Hebrew (English
+only to reach an institutional page), writes no text between searches, and caps `rejected` at 4.
+`_ground` adds **`inst_link`** — the first grounded URL on an institutional domain — which the
+card opens as «🏛️ עמוד המוסד» (the old «אמת» re-ran a 5-second DuckDuckGo check of what the
+model had just read). Nothing here could be tested against the API from the sandbox; the
+comparison is the instructor's re-run of the same topic against the $0.22 baseline.
 
 **Why `allowed_callers: ["direct"]` and not dynamic filtering.** Direct calls return every
 `web_search_tool_result` block whole; `_harvest_sources` collects every URL the model actually
@@ -75,8 +96,8 @@ Never «not in the index» read as a review.
 **Every run is saved**, the empty ones included: `slim_for_storage` keeps the map, the queries,
 the candidates without evidence snippets, the rejections, the outcome and the cost (~2–4 KB);
 `dm.mark_search_added` appends the names the pair actually took from it. `speaker_search.py`'s
-discovery (`search_candidates`, `extract_names`) is off the primary path; `verify_speaker` (the
-«אמת» button) and the CLI agents still use it.
+discovery (`search_candidates`, `extract_names`) is off the primary path; `verify_speaker` is
+used only by the CLI agents now — the search screen's «אמת» became «🏛️ עמוד המוסד».
 
 ## The prompt
 

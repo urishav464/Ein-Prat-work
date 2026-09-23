@@ -345,7 +345,12 @@ More probe traps that produced false test results here: **input placeholders nev
   `app-reviewer` pairs it with the harness trace, which sees the runtime causes the AST cannot. The search screen's «סרוק את הרשת» is the one
   sanctioned `page` site (it changes what the results panel receives, and its own model call
   dwarfs a boundary). **Everything under the results is the `_results_panel` fragment** — the
-  cards, «➕ הוסף כמועמד», «אמת». Found by `app-reviewer` on the harness: adding a candidate was a
+  cards, «➕ הוסף כמועמד», «🏛️ עמוד המוסד» (a `link_button` — no run at all; it replaced «אמת»).
+  The card names its place by what decided the distance flag (`dm.region_match` → «🟡 בר-אילן»,
+  never «מיקום לא ידוע» beside a 🟡), labels links «title — domain», picks the slot by the
+  evening's own names (`_slot_names`) with the one matching the lesson topic preselected, and says
+  «⚠️ לאמת» once above the list. «סרוק» warns when the same Mishmar + topic was already scanned
+  with results (`_prior_search`, read from the history's own cached call). Found by `app-reviewer` on the harness: adding a candidate was a
   whole-app run (sidebar, login gate, map, every card — the page dimmed) for a three-row write;
   scoped, the run after the callback is 12 ms instead of 229, and 5 queries instead of 6. What is
   left (~0.8 s) is the callback's own five round-trips. The history list above the form does not

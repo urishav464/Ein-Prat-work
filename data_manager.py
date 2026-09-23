@@ -2287,19 +2287,28 @@ _REGION_BANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def region_flag(*texts: Optional[str]) -> str:
-    """🟢 / 🟡 / 🔴 by travel time to the Midrasha, or ⚪ when nothing says.
+def region_match(*texts: Optional[str]) -> tuple[str, str]:
+    """(🟢 / 🟡 / 🔴 by travel time to the Midrasha, the place that decided it),
+    or ("⚪", "") when nothing says.
 
     Pure and evidence-only: it reads places that appeared in what the search
-    returned. An unknown location stays ⚪ rather than being guessed at.
+    returned. An unknown location stays ⚪ rather than being guessed at. The
+    place is returned so a card can SAY it — the chip printed the model's
+    region_hint («מיקום לא ידוע») while the flag had been found in the
+    affiliation (בר-אילן), and the two contradicted each other on screen.
     """
     blob = " ".join(t or "" for t in texts)
     if not blob.strip():
-        return "⚪"
+        return "⚪", ""
     for flag, places in _REGION_BANDS:
-        if any(p in blob for p in places):
-            return flag
-    return "⚪"
+        for p in places:
+            if p in blob:
+                return flag, p
+    return "⚪", ""
+
+
+def region_flag(*texts: Optional[str]) -> str:
+    return region_match(*texts)[0]
 
 
 def get_teaching_history() -> dict[str, dict]:
