@@ -1,0 +1,460 @@
+<title>טופס שבת עין פרת</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&family=Rubik:wght@500;700&display=swap">
+<style>
+:root{
+  --ink:#1F2430; --muted:#5A6572; --faint:#8A94A0; --line:#D5DBE3; --ground:#F3F5F8; --paper:#FFFFFF;
+  --accent:#2E5C8A; --accent-ink:#FFFFFF; --accent-soft:#E3ECF5;
+  --ok:#2F7D5B; --ok-soft:#E2F2EA; --warn:#9A6212; --warn-soft:#FBEFD9;
+  --leave:#6B4FA0; --leave-soft:#EEE8F7; --out:#8C3B3B; --out-soft:#F6E4E4; --unset-soft:#FFF4D6;
+  --radius:10px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#E6E9EE; --muted:#A7B0BC; --faint:#7D8794; --line:#39414D; --ground:#15191F; --paper:#1D222A;
+    --accent:#7FAEDC; --accent-ink:#0F1720; --accent-soft:#223244;
+    --ok:#6CC49A; --ok-soft:#1D3329; --warn:#E3B062; --warn-soft:#3A2E17;
+    --leave:#B79BE6; --leave-soft:#2C2540; --out:#E39A9A; --out-soft:#3A2323; --unset-soft:#3A331C;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#E6E9EE; --muted:#A7B0BC; --faint:#7D8794; --line:#39414D; --ground:#15191F; --paper:#1D222A;
+  --accent:#7FAEDC; --accent-ink:#0F1720; --accent-soft:#223244;
+  --ok:#6CC49A; --ok-soft:#1D3329; --warn:#E3B062; --warn-soft:#3A2E17;
+  --leave:#B79BE6; --leave-soft:#2C2540; --out:#E39A9A; --out-soft:#3A2323; --unset-soft:#3A331C;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:16px/1.55 'Heebo',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
+  direction:rtl;padding-inline:16px;padding-block:0 48px}
+.wrap{max-width:720px;margin:0 auto}
+h1,h2,h3{font-family:'Rubik','Heebo',system-ui,sans-serif;text-wrap:balance;margin:0}
+header.top{padding-block:28px 12px}
+header.top .eyebrow{font-size:13px;letter-spacing:.04em;color:var(--muted)}
+header.top h1{font-size:30px;line-height:1.15;margin-top:4px}
+header.top p{margin:10px 0 0;color:var(--muted);max-width:60ch}
+.deadline{display:inline-block;margin-top:12px;background:var(--accent-soft);color:var(--accent);font-weight:700;
+  padding:6px 12px;border-radius:999px;font-size:14px}
+nav.steps{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--ground);
+  padding-block:10px;border-bottom:1px solid var(--line);display:flex;gap:6px;overflow-x:auto}
+nav.steps a{flex:0 0 auto;text-decoration:none;color:var(--muted);font-size:14px;padding:6px 10px;border-radius:999px;
+  border:1px solid var(--line);background:var(--paper);white-space:nowrap}
+nav.steps a b{font-family:'Rubik',sans-serif;color:var(--accent);margin-inline-end:4px}
+section.step{margin-top:28px;display:flex;flex-direction:column;gap:14px;scroll-margin-top:64px}
+section.step > h2{font-size:21px;display:flex;align-items:baseline;gap:10px}
+section.step > h2 .n{font-size:14px;color:var(--accent-ink);background:var(--accent);border-radius:999px;
+  min-width:26px;height:26px;display:inline-grid;place-items:center}
+.hint{color:var(--muted);font-size:14px;margin:-6px 0 0}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:500}
+label.f small{font-weight:400;color:var(--muted)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
+@media (max-width:520px){.row2,.row3{grid-template-columns:1fr}}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;width:100%;min-width:0}
+textarea{min-height:64px;resize:vertical}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px}
+.seg{display:flex;gap:8px;flex-wrap:wrap}
+.seg label{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:6px 14px;
+  background:var(--paper);cursor:pointer;font-size:15px}
+.seg input{width:auto;accent-color:var(--accent)}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--paper);color:var(--ink);padding:9px 14px}
+button.primary,a.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+button.ghost{background:transparent}
+.tally{display:flex;flex-wrap:wrap;gap:6px;font-size:13px;font-variant-numeric:tabular-nums}
+.tally span{padding:3px 10px;border-radius:999px}
+.t-in{background:var(--ok-soft);color:var(--ok)} .t-nofri{background:var(--warn-soft);color:var(--warn)}
+.t-leave{background:var(--leave-soft);color:var(--leave)} .t-out{background:var(--out-soft);color:var(--out)}
+.t-unset{background:var(--unset-soft);color:var(--warn)}
+.roster-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.roster-tools input{flex:1 1 180px}
+.program-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 4px}
+.program h3{font-size:15px;color:var(--muted);font-weight:500;letter-spacing:.02em}
+.program-head .quick{display:flex;gap:6px}
+.program-head .quick button{font-size:13px;padding:4px 10px}
+.people{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--paper)}
+.person{display:grid;grid-template-columns:1fr minmax(150px,46%);gap:8px;align-items:center;padding:7px 10px;
+  border-top:1px solid var(--line);border-inline-start:4px solid transparent}
+.person:first-child{border-top:0}
+.person .nm{font-weight:500}
+.person select{padding:6px 8px;font-size:14px}
+.person .why{grid-column:1 / -1}
+.person[data-s="in"]{border-inline-start-color:var(--ok)}
+.person[data-s="nofri"]{border-inline-start-color:var(--warn);background:var(--warn-soft)}
+.person[data-s="leave"]{border-inline-start-color:var(--leave);background:var(--leave-soft)}
+.person[data-s="out"]{border-inline-start-color:var(--out);background:var(--out-soft)}
+.person[data-s="out"] .nm{color:var(--out);text-decoration:line-through}
+.person[data-s=""]{background:var(--unset-soft)}
+.prep{border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);padding:14px;display:flex;flex-direction:column;gap:10px}
+.prep-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.prep-head h3{font-size:16px}
+details.recipe summary{cursor:pointer;color:var(--accent);font-size:14px}
+details.recipe[open]{display:flex;flex-direction:column;gap:8px}
+.errors{border:1px solid var(--out);background:var(--out-soft);color:var(--out);border-radius:var(--radius);padding:12px 16px}
+.errors ul{margin:6px 0 0;padding-inline-start:18px}
+.done{border:2px solid var(--accent);background:var(--paper);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px}
+.done textarea{min-height:260px;font-size:13px;line-height:1.5;font-family:ui-monospace,Menlo,Consolas,'Heebo',monospace;direction:rtl}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.actions a.primary{text-decoration:none;padding:9px 14px;border-radius:8px;display:inline-block}
+.small{font-size:13px;color:var(--muted)}
+.fixed-note{font-size:14px;color:var(--muted);background:var(--accent-soft);border-radius:8px;padding:8px 12px}
+footer{margin-top:40px;color:var(--faint);font-size:13px;text-align:center}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">מדרשת עין פרת · לאחראי השבת</div>
+  <h1>טופס שבת</h1>
+  <p>ממלאים כאן את כל מה שצריך לשבת. בסוף נוצרת הודעה אחת ושולחים אותה לאורי, וממנה יוצאים השיבוץ, הפליירים ולו"ז הצל.
+     צוות שבת, תורני הארוחות, הטיש, הקידוש ובית המדרש בבוקר כבר במערכת.</p>
+  <span class="deadline">שולחים עד שבוע לפני השבת</span>
+</header>
+
+<nav class="steps" aria-label="שלבי הטופס">
+  <a href="#s1"><b>1</b>השבת</a><a href="#s2"><b>2</b>מי בשבת</a><a href="#s3"><b>3</b>הכנות שישי</a>
+  <a href="#s4"><b>4</b>מה מוגש</a><a href="#s5"><b>5</b>לו"ז ומוצ"ש</a><a href="#s6"><b>✓</b>שליחה</a>
+</nav>
+
+<form id="form" novalidate>
+<section class="step" id="s1">
+  <h2><span class="n">1</span>השבת</h2>
+  <div class="panel">
+    <label class="f">איזו שבת?
+      <select id="date"></select>
+    </label>
+    <div class="f" role="group" aria-labelledby="shared-l">
+      <span id="shared-l" style="font-size:14px;font-weight:500">שנה א' איתנו בשבת?</span>
+      <div class="seg">
+        <label><input type="radio" name="shared" id="shared-no" value="לא" checked> לא, רק אנחנו</label>
+        <label><input type="radio" name="shared" id="shared-yes" value="כן"> כן, שבת משותפת</label>
+      </div>
+    </div>
+    <label class="f">מי ממלא/ת
+      <input id="filler" placeholder="שם מלא" autocomplete="name">
+    </label>
+  </div>
+</section>
+
+<section class="step" id="s2">
+  <h2><span class="n">2</span>מי בשבת</h2>
+  <p class="hint">לכל אחד בוחרים מצב. מי שלא בשישי בבוקר (שמירה בליל חמישי, מגיע מאוחר) לא ישובץ להכנות ולבית המדרש. מי שעוזב לפני מוצ"ש לא ישובץ לניקיונות.</p>
+  <div class="tally" id="tally" aria-live="polite"></div>
+  <div class="roster-tools">
+    <input id="search" type="search" placeholder="חיפוש שם…" aria-label="חיפוש שם">
+    <button type="button" id="all-in">כל מי שלא סומן — בשבת</button>
+  </div>
+  <div id="roster"></div>
+  <label class="f">מי שלא ברשימה <small>שם בכל שורה</small>
+    <textarea id="extra" placeholder="לדוגמה: חניך חדש שהצטרף השבוע"></textarea>
+  </label>
+</section>
+
+<section class="step" id="s3">
+  <h2><span class="n">3</span>הכנות שישי</h2>
+  <p class="hint">אתם מחליטים מה מכינים. לכל הכנה: כמה, כמה אנשים צריך, ומי אחראי/ת. החלות מתחילות ב-7:00, כל השאר ב-8:00. מתכון הוא בונוס.</p>
+  <div id="preps"></div>
+  <button type="button" id="add-prep">+ עוד הכנה</button>
+  <div class="panel">
+    <h3 style="font-size:16px">ארוחת צהריים שישי</h3>
+    <div class="row3">
+      <label class="f">מה מבשלים<input id="lunch-what" placeholder="לדוגמה: שקשוקה ולחם"></label>
+      <label class="f">כמה אנשים<input id="lunch-ppl" type="number" min="1" inputmode="numeric" placeholder="2"></label>
+      <label class="f">אחראי/ת<select id="lunch-lead" class="lead"></select></label>
+    </div>
+  </div>
+</section>
+
+<section class="step" id="s4">
+  <h2><span class="n">4</span>מה מוגש בשבת</h2>
+  <p class="hint">את הקייטרינג שואלים במטבח. כמה מנות בשורה, מופרדות בפסיק.</p>
+  <div class="panel">
+    <h3 style="font-size:16px">מהקייטרינג</h3>
+    <label class="f">ארוחת ערב<input id="m-dinner" placeholder="לדוגמה: פרגית בגריל, קוסקוס, מוקפץ טבעוני"></label>
+    <label class="f">ארוחת צהריים<input id="m-lunch" placeholder="לדוגמה: כתף בקר, אורז לבן, תפו״א ובטטה"></label>
+    <label class="f">סלטים<input id="m-salads" placeholder="לדוגמה: סלק אדום, ירקות מוחמצים, חומוס"></label>
+  </div>
+  <div class="panel">
+    <h3 style="font-size:16px">מההכנות של שישי</h3>
+    <label class="f">מה יוצא לארוחת הערב<input id="m-from-eve" placeholder="לדוגמה: חצי מהמטבוחה, חצי מהחלות"></label>
+    <label class="f">מה יוצא לצהריים<input id="m-from-noon" placeholder="לדוגמה: סלט חצילים, שאר המטבוחה"></label>
+  </div>
+  <div class="panel">
+    <h3 style="font-size:16px">חלוקת העוגות</h3>
+    <label class="f">לטיש<input id="m-tish" placeholder="לדוגמה: 5 פסי עוגת דבש, 2 עוגות שמרים"></label>
+    <label class="f">לקידוש<input id="m-kiddush" placeholder="לדוגמה: 3 פסי עוגת דבש והעוגיות"></label>
+    <label class="f">לסעודה שלישית<input id="m-seuda" placeholder="לדוגמה: 3 פסי עוגת דבש"></label>
+  </div>
+</section>
+
+<section class="step" id="s5">
+  <h2><span class="n">5</span>לו"ז ומוצ"ש</h2>
+  <div class="panel">
+    <label class="f">שינויים בלו"ז <small>רק מה שונה מהרגיל: מי מעביר שיעור, אירוע שזז, נוסף או בוטל</small>
+      <textarea id="sched" placeholder="לדוגמה: השיעור של משה, 16:30"></textarea>
+    </label>
+  </div>
+  <div class="panel">
+    <h3 style="font-size:16px">מוצ"ש</h3>
+    <div class="row2">
+      <label class="f">ניקיון בית המדרש — כמה<input id="z-bm" type="number" min="0" inputmode="numeric" value="12"></label>
+      <label class="f">ניקיון חדר האוכל — כמה<input id="z-ha" type="number" min="0" inputmode="numeric" value="12"></label>
+    </div>
+    <label class="f">ארוחת ערב במוצ"ש — מה מבשלים <small>5 מכינים</small>
+      <input id="z-dinner" placeholder="לדוגמה: פסטה ברוטב עגבניות">
+    </label>
+  </div>
+  <label class="f">עוד משהו שאורי צריך לדעת
+    <textarea id="notes"></textarea>
+  </label>
+</section>
+
+<section class="step" id="s6">
+  <h2><span class="n">✓</span>שליחה</h2>
+  <div class="errors" id="errors" hidden></div>
+  <div class="actions">
+    <button type="submit" class="primary">הכנת ההודעה לאורי</button>
+    <button type="button" class="ghost" id="reset">ניקוי הטופס</button>
+    <span class="small" id="reset-confirm" hidden>למחוק הכול? <button type="button" id="reset-yes">כן, למחוק</button> <button type="button" id="reset-no">לא</button></span>
+  </div>
+  <div class="done" id="done" hidden>
+    <strong>ההודעה מוכנה — שולחים אותה לאורי כמו שהיא</strong>
+    <div class="actions">
+      <a class="primary" id="wa" href="#" target="_blank" rel="noopener">שליחה בוואטסאפ</a>
+      <button type="button" id="copy">העתקה</button>
+      <span class="small" id="copied" aria-live="polite"></span>
+    </div>
+    <textarea id="out" readonly aria-label="ההודעה לאורי"></textarea>
+    <span class="small">אם הכפתור לא פותח את וואטסאפ — מעתיקים ושולחים לאורי בעצמכם. הטופס נשמר בדפדפן הזה, אפשר לחזור ולתקן.</span>
+  </div>
+</section>
+</form>
+<footer>מדרשת עין פרת</footer>
+</div>
+
+<script type="application/json" id="data">{"students": [{"name": "ניתאי שלום", "program": "מדרשה"}, {"name": "איתן וינסטון", "program": "מדרשה"}, {"name": "יובל יצחק", "program": "מדרשה"}, {"name": "הילי אלפסי", "program": "מדרשה"}, {"name": "יהב לוי", "program": "מדרשה"}, {"name": "שחר קרן", "program": "מדרשה"}, {"name": "ירדן בן שחר", "program": "מדרשה"}, {"name": "אחיה נחמני", "program": "מדרשה"}, {"name": "ניצן שטיין", "program": "מדרשה"}, {"name": "מעיין יוספי", "program": "מדרשה"}, {"name": "עמית סיילס", "program": "מדרשה"}, {"name": "אריאלה מרכוס", "program": "מדרשה"}, {"name": "משה אוברשטיין", "program": "מדרשה"}, {"name": "אוריה תעשה", "program": "מדרשה"}, {"name": "יונתן לירז", "program": "מדרשה"}, {"name": "פנחס אליהו גלוסקין", "program": "מדרשה"}, {"name": "נדב טוקר", "program": "מדרשה"}, {"name": "הדר עמדי", "program": "מדרשה"}, {"name": "יואב אוחנה", "program": "מדרשה"}, {"name": "עופר בביוף", "program": "מדרשה"}, {"name": "הילה עזרא", "program": "מדרשה"}, {"name": "בניה מעוז", "program": "מדרשה"}, {"name": "שחר מרקוביץ' גליק", "program": "מדרשה"}, {"name": "שליו שישו", "program": "מדרשה"}, {"name": "חיים שמאי", "program": "מדרשה"}, {"name": "אנה עזריאל", "program": "מדרשה"}, {"name": "אלרואי גרינברג", "program": "מדרשה"}, {"name": "אלה גוטליב", "program": "מדרשה"}, {"name": "רותם דרור", "program": "מדרשה"}, {"name": "עומר יוסף גנון", "program": "מדרשה"}, {"name": "סהר שירון", "program": "מדרשה"}, {"name": "שירה ספונוב", "program": "מדרשה"}, {"name": "הלל פינגולד", "program": "מדרשה"}, {"name": "מעיין רחל דינר", "program": "מדרשה"}, {"name": "עמרי קולטון", "program": "מדרשה"}, {"name": "נגה חוה כהן", "program": "מדרשה"}, {"name": "קובי סמייסון", "program": "מדרשה"}, {"name": "נגה שוהם", "program": "מדרשה"}, {"name": "ינון לוי", "program": "מדרשה"}, {"name": "אייל ציגנלאוב", "program": "מדרשה"}, {"name": "אלה מאיר", "program": "מדרשה"}, {"name": "זואי כהן", "program": "מדרשה"}, {"name": "של״ו רובינשטיין", "program": "מדרשה"}, {"name": "כליל בלאוקופף", "program": "מדרשה"}, {"name": "רוני פרנקל", "program": "מדרשה"}, {"name": "נועם גלס", "program": "מדרשה"}, {"name": "הילה לביא", "program": "מדרשה"}, {"name": "עמית שי אברהם", "program": "מדרשה"}, {"name": "תמר פרימור", "program": "מדרשה"}, {"name": "נבו בלוך", "program": "מדרשה"}, {"name": "ארבל פרנקו", "program": "מדרשה"}, {"name": "יעל קהת", "program": "מדרשה"}, {"name": "יעל ברחד", "program": "מדרשה"}, {"name": "תמר פרידמן", "program": "מדרשה"}, {"name": "יותם ספיר", "program": "מדרשה"}, {"name": "איתמר אסנהיים", "program": "מדרשה"}, {"name": "שי- לי וולגמוט", "program": "מדרשה"}, {"name": "יהונתן קצב", "program": "מדרשה"}, {"name": "שילת פילפל", "program": "מדרשה"}, {"name": "נועם ישראל קומפאס", "program": "מדרשה"}, {"name": "רועי צבי סרי", "program": "מדרשה"}, {"name": "שירה אדלה לוזון", "program": "מדרשה"}, {"name": "איתן כהן", "program": "מדרשה"}, {"name": "אורי טילינגר", "program": "מדרשה"}, {"name": "איתי בן מנחם", "program": "מדרשה"}, {"name": "לוי יצחק יונגר", "program": "מדרשה"}, {"name": "טליה קור", "program": "מדרשה"}, {"name": "ניצן גמלא", "program": "מדרשה"}, {"name": "אביב רוזנטל", "program": "אלול"}, {"name": "אביה וייל", "program": "אלול"}, {"name": "אורי אסף", "program": "אלול"}, {"name": "איתי גוסטינר", "program": "אלול"}, {"name": "איתי רוס", "program": "אלול"}, {"name": "אלון דיין", "program": "אלול"}, {"name": "דנה שם טוב", "program": "אלול"}, {"name": "יאר אלפסי", "program": "אלול"}, {"name": "יערה ריס", "program": "אלול"}, {"name": "ליאור שימרלינג", "program": "אלול"}, {"name": "ליבי בוכריס", "program": "אלול"}, {"name": "ליעם גבע", "program": "אלול"}, {"name": "מאיה פקטר", "program": "אלול"}, {"name": "נוה גריינר", "program": "אלול"}, {"name": "נעמי פונקלשטיין", "program": "אלול"}, {"name": "עליזה בלום", "program": "אלול"}, {"name": "עפרי גזיאל", "program": "אלול"}, {"name": "עשהאל ירושלמי", "program": "אלול"}, {"name": "פרת פולס", "program": "אלול"}, {"name": "רגב שהם", "program": "אלול"}, {"name": "רוני כהן", "program": "אלול"}, {"name": "יובל רוזנברג", "program": "אלול"}], "dates": [{"iso": "2026-09-04", "parasha": "נצבים, וילך", "label": "שבת 4-5.9 · נצבים, וילך"}, {"iso": "2026-09-11", "parasha": "ראש השנה", "label": "שבת 11-12.9 · ראש השנה"}, {"iso": "2026-09-18", "parasha": "האזינו", "label": "שבת 18-19.9 · האזינו"}, {"iso": "2026-09-25", "parasha": "סוכות", "label": "שבת 25-26.9 · סוכות"}, {"iso": "2026-10-02", "parasha": "שמיני עצרת", "label": "שבת 2-3.10 · שמיני עצרת"}, {"iso": "2026-10-09", "parasha": "בראשית", "label": "שבת 9-10.10 · בראשית"}, {"iso": "2026-10-16", "parasha": "נח", "label": "שבת 16-17.10 · נח"}, {"iso": "2026-10-23", "parasha": "לך לך", "label": "שבת 23-24.10 · לך לך"}, {"iso": "2026-10-30", "parasha": "וירא", "label": "שבת 30-31.10 · וירא"}, {"iso": "2026-11-06", "parasha": "חיי שרה", "label": "שבת 6-7.11 · חיי שרה"}, {"iso": "2026-11-13", "parasha": "תולדות", "label": "שבת 13-14.11 · תולדות"}, {"iso": "2026-11-20", "parasha": "ויצא", "label": "שבת 20-21.11 · ויצא"}, {"iso": "2026-11-27", "parasha": "וישלח", "label": "שבת 27-28.11 · וישלח"}, {"iso": "2026-12-04", "parasha": "וישב (חנוכה)", "label": "שבת 4-5.12 · וישב (חנוכה)"}, {"iso": "2026-12-11", "parasha": "מקץ (חנוכה)", "label": "שבת 11-12.12 · מקץ (חנוכה)"}, {"iso": "2026-12-18", "parasha": "ויגש", "label": "שבת 18-19.12 · ויגש"}, {"iso": "2026-12-25", "parasha": "ויחי", "label": "שבת 25-26.12 · ויחי"}, {"iso": "2027-01-01", "parasha": "שמות", "label": "שבת 1-2.1 · שמות"}, {"iso": "2027-01-08", "parasha": "וארא", "label": "שבת 8-9.1 · וארא"}, {"iso": "2027-01-15", "parasha": "בא", "label": "שבת 15-16.1 · בא"}, {"iso": "2027-01-22", "parasha": "בשלח (ט״ו בשבט)", "label": "שבת 22-23.1 · בשלח (ט״ו בשבט)"}, {"iso": "2027-01-29", "parasha": "יתרו", "label": "שבת 29-30.1 · יתרו"}, {"iso": "2027-02-05", "parasha": "משפטים", "label": "שבת 5-6.2 · משפטים"}, {"iso": "2027-02-12", "parasha": "תרומה", "label": "שבת 12-13.2 · תרומה"}, {"iso": "2027-02-19", "parasha": "תצוה", "label": "שבת 19-20.2 · תצוה"}, {"iso": "2027-02-26", "parasha": "כי תשא", "label": "שבת 26-27.2 · כי תשא"}, {"iso": "2027-03-05", "parasha": "ויקהל", "label": "שבת 5-6.3 · ויקהל"}, {"iso": "2027-03-12", "parasha": "פקודי", "label": "שבת 12-13.3 · פקודי"}, {"iso": "2027-03-19", "parasha": "ויקרא", "label": "שבת 19-20.3 · ויקרא"}, {"iso": "2027-03-26", "parasha": "צו", "label": "שבת 26-27.3 · צו"}, {"iso": "2027-04-02", "parasha": "שמיני", "label": "שבת 2-3.4 · שמיני"}, {"iso": "2027-04-09", "parasha": "תזריע", "label": "שבת 9-10.4 · תזריע"}, {"iso": "2027-04-16", "parasha": "מצורע", "label": "שבת 16-17.4 · מצורע"}, {"iso": "2027-04-23", "parasha": "פסח", "label": "שבת 23-24.4 · פסח"}, {"iso": "2027-04-30", "parasha": "אחרי מות", "label": "שבת 30-1.4 · אחרי מות"}, {"iso": "2027-05-07", "parasha": "קדושים", "label": "שבת 7-8.5 · קדושים"}, {"iso": "2027-05-14", "parasha": "אמור", "label": "שבת 14-15.5 · אמור"}, {"iso": "2027-05-21", "parasha": "בהר", "label": "שבת 21-22.5 · בהר"}, {"iso": "2027-05-28", "parasha": "בחוקותי", "label": "שבת 28-29.5 · בחוקותי"}, {"iso": "2027-06-04", "parasha": "במדבר", "label": "שבת 4-5.6 · במדבר"}, {"iso": "2027-06-11", "parasha": "נשא", "label": "שבת 11-12.6 · נשא"}, {"iso": "2027-06-18", "parasha": "בהעלותך", "label": "שבת 18-19.6 · בהעלותך"}, {"iso": "2027-06-25", "parasha": "שלח", "label": "שבת 25-26.6 · שלח"}, {"iso": "2027-07-02", "parasha": "קרח", "label": "שבת 2-3.7 · קרח"}, {"iso": "2027-07-09", "parasha": "חקת", "label": "שבת 9-10.7 · חקת"}, {"iso": "2027-07-16", "parasha": "בלק", "label": "שבת 16-17.7 · בלק"}, {"iso": "2027-07-23", "parasha": "פינחס", "label": "שבת 23-24.7 · פינחס"}, {"iso": "2027-07-30", "parasha": "מטות, מסעי", "label": "שבת 30-31.7 · מטות, מסעי"}, {"iso": "2027-08-06", "parasha": "דברים", "label": "שבת 6-7.8 · דברים"}, {"iso": "2027-08-13", "parasha": "ואתחנן", "label": "שבת 13-14.8 · ואתחנן"}, {"iso": "2027-08-20", "parasha": "עקב", "label": "שבת 20-21.8 · עקב"}, {"iso": "2027-08-27", "parasha": "ראה", "label": "שבת 27-28.8 · ראה"}], "dishes": ["חלות", "עוגות שמרים", "עוגת דבש", "עוגיות שוקולד צ'יפס", "בראוניז ללא גלוטן", "מטבוחה", "סלט חצילים", "סלט כרוב", "חומוס", "עוגות שמרים (קינמון ושוקולד)", "סלט חצילים קלויים", "סלט כרוב מרענן", "סלט טחינה ביתית"], "demo": null}</script>
+<script>
+(function(){
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = id => document.getElementById(id);
+const KEY = 'ein-prat-shabbat-form-v1';
+const STATES = [["", "— לבחור —"], ["in", "✓ בשבת"], ["nofri", "לא בשישי בבוקר"], ["leave", "עוזב/ת לפני מוצ״ש"], ["out", "✗ לא בשבת"]];
+const FIELDS = ["filler","extra","lunch-what","lunch-ppl","lunch-lead","m-dinner","m-lunch","m-salads","m-from-eve",
+  "m-from-noon","m-tish","m-kiddush","m-seuda","sched","z-bm","z-ha","z-dinner","notes","date"];
+let state = {att:{}, why:{}, preps:[]};
+
+// ---- dates -------------------------------------------------------------
+const today = new Date(); today.setHours(0,0,0,0);
+const dates = D.dates.filter(d => new Date(d.iso + "T00:00:00") >= today).slice(0, 26);
+$('date').innerHTML = '<option value="">— לבחור שבת —</option>' + dates.map(d =>
+  `<option value="${d.iso}">${d.label}</option>`).join('');
+
+// ---- roster ------------------------------------------------------------
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderRoster(){
+  const groups = {};
+  D.students.forEach(s => (groups[s.program || "אחר"] = groups[s.program || "אחר"] || []).push(s.name));
+  $('roster').innerHTML = Object.entries(groups).map(([prog, names]) =>
+    `<div class="program"><div class="program-head"><h3>${esc(prog)} · ${names.length}</h3>
+      <div class="quick"><button type="button" data-prog="${esc(prog)}" data-set="in">כולם בשבת</button>
+      <button type="button" data-prog="${esc(prog)}" data-set="out">כולם לא בשבת</button></div></div>
+      <div class="people">` + names.map((n, i) => {
+      const id = 'p-' + prog + '-' + i;
+      return `<div class="person" data-name="${esc(n)}" data-s="${state.att[n] || ''}">
+        <label class="nm" for="${esc(id)}">${esc(n)}</label>
+        <select id="${esc(id)}" data-person="${esc(n)}">${STATES.map(([v, t]) =>
+          `<option value="${v}"${(state.att[n] || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select>
+        <input class="why" data-why="${esc(n)}" placeholder="למה? (שמירה, מגיע/ה מאוחר…)" value="${esc(state.why[n] || '')}"${state.att[n] === 'nofri' ? '' : ' hidden'}>
+      </div>`; }).join('') + `</div></div>`).join('');
+}
+function tally(){
+  const c = {in:0, nofri:0, leave:0, out:0, unset:0};
+  D.students.forEach(s => c[state.att[s.name] || 'unset']++);
+  $('tally').innerHTML = `<span class="t-in">${c.in} בשבת</span><span class="t-nofri">${c.nofri} לא בשישי</span>` +
+    `<span class="t-leave">${c.leave} עוזבים לפני מוצ״ש</span><span class="t-out">${c.out} לא בשבת</span>` +
+    (c.unset ? `<span class="t-unset">${c.unset} עוד לא סומנו</span>` : '');
+}
+$('roster').addEventListener('change', e => {
+  const n = e.target.dataset.person; if (!n) return;
+  state.att[n] = e.target.value;
+  const row = e.target.closest('.person'); row.dataset.s = e.target.value;
+  row.querySelector('.why').hidden = e.target.value !== 'nofri';
+  tally(); refreshLeads(); save();
+});
+$('roster').addEventListener('input', e => { if (e.target.dataset.why) { state.why[e.target.dataset.why] = e.target.value; save(); } });
+$('roster').addEventListener('click', e => {
+  const prog = e.target.dataset.prog; if (prog === undefined) return;
+  D.students.filter(s => (s.program || "אחר") === prog).forEach(s => state.att[s.name] = e.target.dataset.set);
+  renderRoster(); tally(); refreshLeads(); save();
+});
+$('search').addEventListener('input', e => {
+  const q = e.target.value.trim();
+  document.querySelectorAll('.person').forEach(p => p.hidden = !!q && !p.dataset.name.includes(q));
+});
+$('all-in').addEventListener('click', () => {
+  D.students.forEach(s => { if (!state.att[s.name]) state.att[s.name] = 'in'; });
+  renderRoster(); tally(); refreshLeads(); save();
+});
+
+// ---- leaders: only people here on Friday morning -------------------------
+function fridayPeople(){ return D.students.map(s => s.name).filter(n => ['in','leave'].includes(state.att[n])); }
+function leadOptions(cur){
+  const names = fridayPeople();
+  if (cur && !names.includes(cur)) names.unshift(cur);
+  return '<option value="">— לבחור —</option>' + names.map(n => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+function refreshLeads(){ document.querySelectorAll('select.lead').forEach(s => { const v = s.value; s.innerHTML = leadOptions(v); }); }
+
+// ---- preps ---------------------------------------------------------------
+function blankPrep(){ return {what:'', qty:'', ppl:'', lead:'', help:'', note:'', ing:'', steps:''}; }
+function renderPreps(){
+  $('preps').innerHTML = state.preps.map((p, i) => `
+  <div class="prep" data-i="${i}">
+    <div class="prep-head"><h3>הכנה ${i + 1}</h3>
+      <button type="button" class="ghost" data-remove="${i}" aria-label="הסרת הכנה ${i + 1}">הסרה</button></div>
+    <div class="row2">
+      <label class="f">מה מכינים<input id="prep-${i}-what" data-k="what" list="dishes" value="${esc(p.what)}" placeholder="חלות, עוגת דבש, סלט…"></label>
+      <label class="f">כמה <small>ק״ג קמח, תבניות, יחידות</small><input id="prep-${i}-qty" data-k="qty" value="${esc(p.qty)}" placeholder="10 ק״ג קמח"></label>
+    </div>
+    <div class="row3">
+      <label class="f">אחראי/ת<select id="prep-${i}-lead" data-k="lead" class="lead">${leadOptions(p.lead)}</select></label>
+      <label class="f">כמה אנשים<input id="prep-${i}-ppl" data-k="ppl" type="number" min="1" inputmode="numeric" value="${esc(p.ppl)}"></label>
+      <label class="f">עזרה מבית המדרש ב-10:00<input id="prep-${i}-help" data-k="help" type="number" min="0" inputmode="numeric" value="${esc(p.help)}" placeholder="0"></label>
+    </div>
+    <label class="f">הערה <small>לדוגמה: לסמן 3 פסים לסעודה שלישית</small><input id="prep-${i}-note" data-k="note" value="${esc(p.note)}"></label>
+    <details class="recipe"${p.ing || p.steps ? ' open' : ''}><summary>מתכון (בונוס)</summary>
+      <label class="f">מצרכים <small>שורה לכל מצרך</small><textarea id="prep-${i}-ing" data-k="ing">${esc(p.ing)}</textarea></label>
+      <label class="f">אופן ההכנה<textarea id="prep-${i}-steps" data-k="steps">${esc(p.steps)}</textarea></label>
+    </details>
+  </div>`).join('') + `<datalist id="dishes">${D.dishes.map(d => `<option value="${esc(d)}">`).join('')}</datalist>`;
+}
+$('preps').addEventListener('input', e => {
+  const box = e.target.closest('.prep'); const k = e.target.dataset.k;
+  if (box && k) { state.preps[+box.dataset.i][k] = e.target.value; save(); }
+});
+$('preps').addEventListener('change', e => {
+  const box = e.target.closest('.prep'); const k = e.target.dataset.k;
+  if (box && k) { state.preps[+box.dataset.i][k] = e.target.value; save(); }
+});
+$('preps').addEventListener('click', e => {
+  if (e.target.dataset.remove === undefined) return;
+  state.preps.splice(+e.target.dataset.remove, 1); if (!state.preps.length) state.preps.push(blankPrep());
+  renderPreps(); save();
+});
+$('add-prep').addEventListener('click', () => {
+  state.preps.push(blankPrep()); renderPreps(); save();
+  $('prep-' + (state.preps.length - 1) + '-what').focus();
+});
+
+// ---- simple fields & draft ------------------------------------------------
+FIELDS.forEach(id => { const el = $(id); const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+  el.addEventListener(ev, () => { state[id] = el.value; save(); }); });
+document.querySelectorAll('input[name=shared]').forEach(r => r.addEventListener('change', () => { state.shared = r.value; save(); }));
+let saveTimer;
+function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }, 300); }
+function load(){
+  if (D.demo) return D.demo;
+  try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && s.att) return s; } catch (e) {}
+  return null;
+}
+function applyState(){
+  FIELDS.forEach(id => { if (state[id] !== undefined && id !== 'lunch-lead') $(id).value = state[id]; });
+  (state.shared === 'כן' ? $('shared-yes') : $('shared-no')).checked = true;
+  if (!state.preps || !state.preps.length) state.preps = [blankPrep()];
+  renderRoster(); tally(); renderPreps();
+  $('lunch-lead').innerHTML = leadOptions(state['lunch-lead'] || '');
+}
+
+// ---- the message ------------------------------------------------------------
+const clean = v => String(v || '').replace(/·/g, ',').replace(/\s*\n\s*/g, ' ').trim();
+const block = v => String(v || '').split('\n').map(s => s.trim()).filter(Boolean);
+function message(){
+  const d = dates.find(x => x.iso === state.date) || D.dates.find(x => x.iso === state.date);
+  const L = [`📋 טופס שבת · ${state.date} · ${d ? d.parasha : ''}`,
+             `שנה א': ${state.shared === 'כן' ? 'כן' : 'לא'}`, `מילא/ה: ${clean(state.filler)}`];
+  const by = s => D.students.map(x => x.name).filter(n => state.att[n] === s);
+  L.push('— לא בשבת —', ...by('out'));
+  L.push('— לא בשישי —', ...by('nofri').map(n => state.why[n] ? `${n} · ${clean(state.why[n])}` : n));
+  L.push('— עוזבים לפני מוצ"ש —', ...by('leave'));
+  L.push('— לא ברשימה —', ...block(state.extra));
+  L.push('— הכנות —');
+  const recipes = [];
+  state.preps.filter(p => clean(p.what)).forEach(p => {
+    const parts = [clean(p.what)];
+    if (clean(p.qty)) parts.push('כמה: ' + clean(p.qty));
+    parts.push('אנשים: ' + clean(p.ppl));
+    if (p.lead) parts.push('אחראי: ' + p.lead);
+    if (+p.help > 0) parts.push('עזרה: ' + (+p.help));
+    if (clean(p.note)) parts.push('הערה: ' + clean(p.note));
+    L.push(parts.join(' · '));
+    if (block(p.ing).length || block(p.steps).length) recipes.push(p);
+  });
+  L.push('— ארוחת צהריים שישי —');
+  if (clean(state['lunch-what'])) L.push(['מה: ' + clean(state['lunch-what']), 'אנשים: ' + (clean(state['lunch-ppl']) || '2'),
+    ...(state['lunch-lead'] ? ['אחראי: ' + state['lunch-lead']] : [])].join(' · '));
+  L.push('— קייטרינג —', 'ארוחת ערב: ' + clean(state['m-dinner']), 'ארוחת צהריים: ' + clean(state['m-lunch']), 'סלטים: ' + clean(state['m-salads']));
+  L.push('— מההכנות —', 'לערב: ' + clean(state['m-from-eve']), 'לצהריים: ' + clean(state['m-from-noon']));
+  L.push('— עוגות —', 'טיש: ' + clean(state['m-tish']), 'קידוש: ' + clean(state['m-kiddush']), 'סעודה שלישית: ' + clean(state['m-seuda']));
+  L.push('— מוצ"ש —', 'ניקיון בית המדרש: ' + (clean(state['z-bm']) || '12'), 'ניקיון חדר האוכל: ' + (clean(state['z-ha']) || '12'),
+         'ארוחת ערב: ' + clean(state['z-dinner']));
+  L.push('— לו"ז —', ...block(state.sched));
+  L.push('— הערות —', ...block(state.notes));
+  recipes.forEach(p => { L.push(`— מתכון: ${clean(p.what)} —`, 'מצרכים:', ...block(p.ing), 'הכנה:', ...block(p.steps)); });
+  L.push('— סוף —');
+  return L.join('\n');
+}
+function problems(){
+  const out = [];
+  if (!state.date) out.push(['s1', 'לבחור איזו שבת']);
+  const unset = D.students.filter(s => !state.att[s.name]).length;
+  if (unset) out.push(['s2', `${unset} חניכים עוד לא סומנו (אפשר «כל מי שלא סומן — בשבת»)`]);
+  const preps = state.preps.filter(p => clean(p.what));
+  if (!preps.length) out.push(['s3', 'לפחות הכנה אחת']);
+  preps.forEach(p => { if (!(+p.ppl > 0)) out.push(['s3', `כמה אנשים צריך ל«${clean(p.what)}»`]); });
+  state.preps.forEach((p, i) => { if (!clean(p.what) && (p.qty || p.ppl || p.lead)) out.push(['s3', `להכנה ${i + 1} חסר «מה מכינים»`]); });
+  if (!clean(state['lunch-what'])) out.push(['s3', 'מה מבשלים לארוחת צהריים שישי']);
+  return out;
+}
+$('form').addEventListener('submit', e => {
+  e.preventDefault();
+  const errs = problems();
+  if (errs.length) {
+    $('errors').innerHTML = '<strong>כמעט — חסרים עוד כמה דברים:</strong><ul>' +
+      errs.map(([s, t]) => `<li><a href="#${s}">${esc(t)}</a></li>`).join('') + '</ul>';
+    $('errors').hidden = false; $('done').hidden = true; $('errors').scrollIntoView({block:'center'});
+    return;
+  }
+  $('errors').hidden = true;
+  showMessage();
+});
+function showMessage(){
+  const msg = message();
+  $('out').textContent = msg; $('out').value = msg;
+  $('wa').href = 'https://wa.me/?text=' + encodeURIComponent(msg);
+  $('done').hidden = false; $('copied').textContent = '';
+}
+$('copy').addEventListener('click', () => {
+  const msg = $('out').value;
+  const fallback = () => { $('out').focus(); $('out').select(); $('copied').textContent = 'סומן — מעתיקים ידנית (העתק)'; };
+  try { navigator.clipboard.writeText(msg).then(() => $('copied').textContent = 'הועתק ✓', fallback); } catch (e) { fallback(); }
+});
+$('reset').addEventListener('click', () => { $('reset-confirm').hidden = false; });
+$('reset-no').addEventListener('click', () => { $('reset-confirm').hidden = true; });
+$('reset-yes').addEventListener('click', () => {
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  state = {att:{}, why:{}, preps:[]}; FIELDS.forEach(id => $(id).value = '');
+  $('z-bm').value = $('z-ha').value = 12; state['z-bm'] = state['z-ha'] = '12';
+  applyState(); $('reset-confirm').hidden = true; $('done').hidden = true; $('errors').hidden = true;
+});
+
+state = Object.assign({att:{}, why:{}, preps:[]}, load() || {});
+if (state['z-bm'] === undefined) state['z-bm'] = '12';
+if (state['z-ha'] === undefined) state['z-ha'] = '12';
+applyState();
+if (D.demo) showMessage();
+})();
+</script>

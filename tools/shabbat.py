@@ -4,7 +4,7 @@
     python3 tools/shabbat.py 2026-09-25
     python3 tools/shabbat.py 2026-09-25 --check      # רק בדיקות ו-zip, על מה שכבר קיים
 
-לפני ההרצה צריך שלושה קבצים לשבת הזו (הטופס «טופס שבת.md» מפרט מה נכנס לכל אחד):
+לפני ההרצה צריך שלושה קבצים לשבת הזו — tools/import_form.py כותב אותם מההודעה שהטופס הרכיב:
   data/attendance/<תאריך>.csv — נוכחים, מי לא בשישי / במוצ"ש, הצמדות
   data/preps/<תאריך>.csv      — מה מכינים, כמה, כמה אנשים ומי אחראי
   data/menu/<תאריך>.csv       — הקייטרינג, חלוקת העוגות ומה מוגש מההכנות
@@ -107,7 +107,7 @@ def main():
     if missing:
         raise SystemExit("✗ חסר לשבת הזו:\n" + "\n".join(
             "   · {} — {}".format(what, p.relative_to(ROOT)) for p, what in missing) +
-            "\n  ממלאים מתוך «טופס שבת.md» שהאחראים שלחו.")
+            "\n  קולטים את ההודעה מהטופס: python3 tools/import_form.py < הודעה.txt")
 
     if not args.check:
         run("build_workbook.py")

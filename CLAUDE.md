@@ -9,6 +9,8 @@ and RTL. Work happens on the `Shabbat` branch. See `README.md` for the user-faci
 
 ```bash
 python3 tools/guide.py                           # docs/מדריך לאחראי שבת.pdf|png (student checklist)
+python3 tools/form_page.py                       # docs/טופס שבת.html (the leaders' form; --demo --out X for a filled test page)
+python3 tools/import_form.py < message.txt       # the form's message → attendance/preps/menu/weeks (--dry-run)
 python3 tools/shabbat.py 2026-10-16              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
 python3 tools/build_workbook.py                  # data/*.csv → shabbat-planner.xlsx (only when the schema changes)
 python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-09-18.xlsx
@@ -23,12 +25,17 @@ python3 tools/fetch_fonts.py                     # refill assets/fonts/ (already
 There is no test suite and no linter. `tools/shabbat.py` runs the standing checks after every
 pipeline run and exits 1 on any problem; see also "Verifying changes".
 
-**Weekly input** comes from the student leaders: `docs/מדריך לאחראי שבת.png` (checklist, rendered by
-`tools/guide.py`) and `טופס שבת.md` (what they send). It maps onto `data/attendance/<date>.csv`,
-`data/preps/<date>.csv` (the Friday preps they chose — one row per task), `data/menu/<date>.csv`
-(what is served per «meal»: catering, prep leftovers, cake split) and a row in `data/weeks.csv`
-(`שבת משותפת`). Staff is standing (`צוות שבת` column in `data/students.csv`). Schedule rules,
-standing tasks and groups change only when the user asks.
+**Weekly input** comes from the student leaders through the **form page** — `docs/טופס שבת.html`, built by
+`tools/form_page.py` from `tools/form_page.html` (roster, upcoming Fridays and dish names embedded as JSON)
+and published as an Artifact (https://claude.ai/artifact/NVHtP94X3Nhh5RhHo9fXHs; republish the same file
+path to keep the link). It is deliberately capability-free: a `db` page is org-internal and the students
+are outside the org, so the page composes one structured message (`📋 טופס שבת · <date>`, `— section —`
+blocks, `key: value` joined by ` · `) that the leader sends by WhatsApp. `tools/import_form.py` parses that
+message with no guessing into `data/attendance/<date>.csv`, `data/preps/<date>.csv`, `data/menu/<date>.csv`,
+`data/weeks.csv` and `data/recipes.csv`; free-text schedule changes are printed for manual handling. If the
+message format changes, change the page's `message()` and `import_form.parse` together and re-run the
+end-to-end check (`form_page.py --demo` → dump-dom → import → `shabbat.py`). Staff is standing
+(`צוות שבת` column in `data/students.csv`); `docs/מדריך לאחראי שבת.png` (`tools/guide.py`) is the checklist.
 
 **Per-date files keep old Shabbatot reproducible** — never edit another date's preps/menu to
 change this week. `bw.task_rows(date)` / `bw.plan_rows(date)` compose standing + weekly data;
