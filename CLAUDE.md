@@ -43,14 +43,19 @@ change this week. `bw.task_rows(date)` / `bw.plan_rows(date)` compose standing +
 
 ## Architecture
 
-A five-stage pipeline. Each stage owns one artifact; nothing reaches back upstream.
+A pipeline where each stage owns one artifact and nothing reaches back upstream;
+`tools/shabbat.py` runs the whole week in order and then checks it.
 
 ```
-data/*.csv ──build_workbook──▶ shabbat-planner.xlsx ──new_shabbat──▶ shabbatot/<date>.xlsx
-                                                                            │
-   data/attendance/<date>.csv ──attendance──▶ ──assign_groups──▶ (names written back in)
-                                                                            │
-                                                          export_pdf ──▶ shabbatot/<date>/*.pdf|png
+form page ──message──▶ import_form ──▶ data/attendance|preps|menu/<date>.csv, weeks.csv
+                                                        │
+data/*.csv (standing) ──build_workbook──▶ shabbat-planner.xlsx (date-free template)
+                                                        │
+                    new_shabbat <date> ──▶ shabbatot/<date>.xlsx   (hours, tasks, groups, menu written here)
+                                                        │
+                    assign_groups <date> ──▶ names + data/duty_history.csv rows for <date>
+                                                        │
+                    export_pdf <date> ──▶ shabbatot/<date>/*.pdf|png  ──shabbat.py──▶ zip + checks
 ```
 
 **`tools/build_workbook.py` is the schema module.** Every other script does
@@ -58,8 +63,13 @@ data/*.csv ──build_workbook──▶ shabbat-planner.xlsx ──new_shabbat�
 (`SH_TASKS`…), column indices (`T_*`, `G_*`, `S_*`, `H_*`, `L_*`), row origins
 (`TASK_FIRST_ROW`…), header cells (`SCHED_DATE`, `SCHED_CANDLE`, `SCHED_HAVDALAH`), plus
 `STAGES`, `HISTORY_FIELDS`, `read_history`, `write_history_row`, `read_schedule_template`,
-`suggested_time`, `suggestion_formula`. Changing a sheet's columns means editing the
-constants there and nowhere else; never hard-code a column number in another file.
+`suggested_time`, `suggestion_formula`. It also composes each date's data — `read_week`,
+`task_rows(date, times)`, `plan_rows(date)`, `week_leaders`, `event_times`, `resolve_hour`,
+`expand_catering` — and owns the row writers (`write_task_row`, `write_group_row`,
+`write_menu_row`) that both the template build and `new_shabbat` use. Changing a sheet's columns
+means editing the constants there and nowhere else; never hard-code a column number in another
+file. `data_cell` assigns `.value` explicitly because `ws.cell(value=None)` does **not** clear a
+cell — writing a Shabbat's shorter task list over the template relies on that.
 
 ### The formula-value constraint (most important gotcha)
 
@@ -158,6 +168,20 @@ read and written as `utf-8-sig`. Name matching for pasted lists goes through
   value a script wrote for the same thing.
 - **Layout:** render and actually look at the PNG. Count PDF pages by regexing the bytes
   for `/Type\s*/Page[^s]` (pypdf is broken here — its `cryptography` dependency fails).
-- **Assignment:** re-run with the previous week's pins and confirm the roster is unchanged;
-  then check no name appears twice in one `(day, hour)` slot, every group member has at
-  least one task, and blocked people are absent from the stages they are blocked from.
+- **Assignment:** `shabbat.py` (or `--check`) runs the standing invariants — no name twice in
+  one `(day, hour)`, blocked people absent from their stages, every member has a task, every
+  staff-led group has a leader, every task anchored, no leftover `{…}`, one-page flyers.
+  To show a refactor changes nothing, snapshot the tasks/groups/events of an existing date via
+  `export_pdf.read_workbook`, re-run that date and diff.
+- **Re-running a past date is destructive.** It rewrites `shabbatot/<date>*` (already sent to
+  the students) and replaces that date's rows in `data/duty_history.csv`. Test on a copy or
+  restore afterwards: `git checkout -- shabbatot/<date>.xlsx shabbatot/<date>/ data/duty_history.csv`
+  and `git clean -fd shabbatot/<date>/`. Test weeks for future dates must have their
+  attendance/preps/menu files and history rows removed again.
+- **`export_pdf` deletes every PDF/PNG in the output folder first**, so `--only flyers` also
+  removes the shadow schedule — finish with a full export before committing.
+- **Phone-width screenshots:** headless Chromium will not lay out narrower than ~485px whatever
+  `--window-size` says; frame the page in a 390px `<iframe>` inside a wider window instead.
+- **The form page** (`docs/טופס שבת.html`) is checked end to end with `form_page.py --demo --out X`,
+  wrapping it in a doctype/body shell (the Artifact host adds that at publish), `--dump-dom` to read
+  the composed message out of `<textarea id="out">`, then `import_form.py` and `shabbat.py`.
