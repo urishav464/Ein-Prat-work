@@ -24,11 +24,14 @@ MISHMAR_NO_CACHE=1 streamlit run app.py               # read cache off, for scri
 python3 scripts/rerun_audit.py app.py                 # what every click costs; exit 1 on a write+st.rerun() double run
 python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules/streamlit-dom.md after a Streamlit upgrade
 python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (seed 5787)
+python3 scripts/harness/db.py up && python3 scripts/harness/harness.py serve   # local PG16 fixture + the app, traced
+python3 scripts/harness/harness.py sweep              # every screen + one click per kind vs the click contract
+python3 scripts/harness/harness.py stop && python3 scripts/harness/db.py down
 ```
 
 **Run the harness on the Streamlit that `requirements.txt` pins** (`streamlit>=1.63,<1.65`): Cloud installs the newest allowed version on every push, and 1.64 moved the radio DOM under a sidebar the 1.63 harness had just measured. Upgrading = `pip install`, `scripts/streamlit_dom_context.py`, re-measure, then widen the pin.
 
-There is no test suite and no live Supabase reachable from a sandbox. Verification runs on a local PostgreSQL 16 + a PostgREST-shaped shim + headless Chromium — described in `.claude/rules/database.md` §"Verifying changes" and `.claude/rules/ui.md` §"Verifying the UI", run end to end by the `deploy-check` agent. Without Streamlit secrets the app boots in name-only dev login, but storage still needs Supabase — there is no local storage mode.
+There is no test suite and no live Supabase reachable from a sandbox. Verification runs on a local PostgreSQL 16 + a PostgREST-shaped shim + headless Chromium — **committed in `scripts/harness/`**, with a tracer that names the cause of every run (the callback, widget or `st.rerun` line) and its queries by table. Described in `.claude/rules/database.md` §"Verifying changes" and `.claude/rules/ui.md` §"Verifying the UI"; `app-reviewer` uses it to prove why a click reruns and to prove its fixes on a scratch copy, `deploy-check` runs the sweep. Without Streamlit secrets the app boots in name-only dev login, but storage still needs Supabase — there is no local storage mode.
 
 ## Hard constraints
 
@@ -89,7 +92,7 @@ Path-scoped rules load automatically when their files enter context:
 - `.claude/rules/chat-agent.md` — the dormant chat loop and the live scout: the Mishmar-scoping rule and the four cost ceilings that keep a turn flat.
 - **Performance is a rule, not a phase**: reads are cached by table and every write invalidates through `data_manager` (`_READS`/`_WRITES`); buttons use `on_click`, never `write(); st.rerun()`; the workfile body and the chat are fragments. Details in `database.md` and `ui.md`.
 
-**`system_rules.md` is the operating layer** — read it when acting as the programme's assistant rather than as a repo developer. `.claude/skills/` holds the programme's recurring workflows; `.claude/agents/` holds the specialized subagents (speaker-scout, topic-ideation, archive-diver, app-reviewer, weekly-brief, deploy-check, design-review, rerun-audit).
+**`system_rules.md` is the operating layer** — read it when acting as the programme's assistant rather than as a repo developer. `.claude/skills/` holds the programme's recurring workflows; `.claude/agents/` holds the specialized subagents (speaker-scout, topic-ideation, archive-diver, app-reviewer, weekly-brief, deploy-check, design-review).
 
 ## Repository structure
 
@@ -107,7 +110,7 @@ DEPLOY.md              # Supabase + Streamlit Secrets setup, RLS rationale, firs
 system_rules.md        # operating layer: roles, pedagogy, speaker mandate, budget
 students_tasks.md      # seed data read on first run
 migrations/            # one-off SQL run by a human in the SQL Editor (trainee names + pairs)
-scripts/               # rerun_audit · streamlit_dom_context · assign_trainees (writes migrations/ + docs)
+scripts/               # rerun_audit · streamlit_dom_context · assign_trainees · harness/ (local PG16 + shim + rerun tracer, test-only)
 Mishmer-section/       # generator prompt · templates · speakers · 2025-26 archive · 2026-27 season
 Invitations/           # house style, watercolor prompts, past posters
 ```

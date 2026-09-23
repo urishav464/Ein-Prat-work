@@ -1,0 +1,8 @@
+{"name": "add candidate — workfile slot",
+ "user": "אלה מאיר",
+ "steps": [
+  {"nav": "ניהול המשמר", "measure": false},
+  {"fill": {"key": "cn-", "inner": "input", "text": "מרצה בדיקה ו"}, "measure": false},
+  {"name": "➕ candidate (form submit)", "click": {"text": "➕ מועמד"},
+   "expect": {"app_runs": 0}}
+ ]}

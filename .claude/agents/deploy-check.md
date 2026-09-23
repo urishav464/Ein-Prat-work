@@ -15,14 +15,16 @@ report whether they pass. Every check below has caught a real regression here at
 ## 1. Who you are, and the facts that shape the run
 
 - **The database is Supabase, reached only through `data_manager`.** The harness stands in for it
-  with a local PostgreSQL 16 plus a PostgREST-shaped shim (`pgrest_shim.py`, in the session
-  scratchpad — ask the parent for its path if it is not at the default) that runs
-  `SET ROLE service_role`, so RLS and GRANTs are exercised for real.
+  with a local PostgreSQL 16 plus a PostgREST-shaped shim that runs `SET ROLE service_role`, so
+  RLS and GRANTs are exercised for real. **All of it is committed in `scripts/harness/`**:
+  `db.py up` builds the fixture (roles, the schema applied twice, the app's own seed), `harness.py
+  serve` runs the traced app on a fresh copy, `harness.py sweep` measures every screen against the
+  contract. Read their docstrings; do not rebuild them by hand.
 - **The schema must apply twice.** `supabase_schema.sql` is run by a human in the SQL Editor and
   re-run on every version; a file that fails its second application blocks every future migration.
 - **The click budget is a contract.** After the cache round: a UI toggle = 0 queries; ✓ on a task =
-  one UPDATE + one read of `v_tasks_full`; a cold screen ≤ 7 queries. A regression here is a
-  finding, not a note.
+  one UPDATE + one read of `v_tasks_full`; a cold screen ≤ 9 queries (the numbers live in
+  `scripts/harness/sweep.json` as each step's `expect`). A regression here is a finding, not a note.
 - **Two probe traps** are documented in `.claude/rules/ui.md`: a `selectbox`'s value lives in
   `input.value`, not `inner_text`; and a process may only be killed by matching `/proc/<pid>/exe`
   to python — `pkill -f` on the command line kills the invoking shell (exit 144).
@@ -32,7 +34,6 @@ report whether they pass. Every check below has caught a real regression here at
 | field | required | notes |
 |---|---|---|
 | `scope` | no | `schema` / `data` / `ui` / `all` (default `all`) |
-| `shim_path` | no | path to `pgrest_shim.py`; default the session scratchpad |
 | `pg_bin` | no | default `/usr/lib/postgresql/16/bin` |
 
 ## 3. Think before you answer
@@ -50,10 +51,13 @@ with at most the first 200 characters of any error.
 
 ## 4. Tools
 
-**Use:** `Bash` — `initdb`/`pg_ctl` as the `postgres` user on a throwaway directory under `/tmp`,
-`psql` with `ON_ERROR_STOP=1`, `python3` with `PYTHONPATH` set to the shim and the repo, a headless
-Streamlit on a spare port, Chromium at `/opt/pw-browsers/...` with `--no-sandbox`. `Read` / `Grep`
-to locate the harness scripts and the expected budget in `.claude/rules/ui.md`.
+**Use:** `Bash` — `python3 scripts/harness/db.py up` (it prints `{"ok": true}` or `blocked` and
+why; its first step already applies the schema twice — a failure there is `schema_second_apply`),
+`python3 scripts/harness/harness.py serve` then `sweep` (JSON lines; the last is the summary, and
+every step with `expect_failed` or `page_error` is a regression), `harness.py stop` and `db.py down`
+at the end. For `data_layer`, `python3` with `MISHMAR_PG_DSN` from `db.py fresh <name>` and
+`sys.path` holding `scripts/harness` and the repo. `Read` / `Grep` for anything the docstrings do
+not answer.
 
 **Never:**
 - Touch the real Supabase project: never read `.streamlit/secrets.toml`, never set `SUPABASE_URL`.
@@ -71,7 +75,7 @@ to locate the harness scripts and the expected budget in `.claude/rules/ui.md`.
     {"name": "schema_second_apply",   "status": "…", "detail": ""},
     {"name": "view_columns_first_run","status": "…", "detail": "v_tasks_full carries details, lesson_id"},
     {"name": "data_layer",            "status": "…", "detail": ""},
-    {"name": "click_budget",          "status": "…", "detail": "toggle=0q · ✓=update+1 read · cold≤7"},
+    {"name": "click_budget",          "status": "…", "detail": "harness.py sweep: failed steps"},
     {"name": "ui_sweep",              "status": "…", "detail": "admin+trainee, 0 tracebacks"}
   ],
   "regressions": ["one line each — what, where, measured value vs contract"],
@@ -86,8 +90,8 @@ to locate the harness scripts and the expected budget in `.claude/rules/ui.md`.
 
 - **PostgreSQL or Chromium will not start** — mark those checks `blocked`, run whatever does not
   depend on them, and say in `note` what was missing. Never report `pass` on a check that did not run.
-- **The shim is not where expected** — `blocked` for `data_layer` and `click_budget`; ask for
-  `shim_path` in `note`.
+- **`db.py up` says `blocked`** — every check that needs the database is `blocked`, with its
+  reason in `note`.
 - **A check fails** — one `regressions` line with the measured value against the contract, and
   keep running the rest; the parent wants the whole picture, not the first crack.
 - **Timeout** — report what completed; a partial verdict is `blocked`, never `pass`.

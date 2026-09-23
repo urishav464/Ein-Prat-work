@@ -61,15 +61,16 @@ paths:
 
 ## Verifying changes — no live Supabase reachable from a sandbox
 
-Run the schema against a local PostgreSQL 16 and drive `data_manager` through a PostgREST-shaped shim, so query construction is genuinely exercised:
+Run the schema against a local PostgreSQL 16 and drive `data_manager` through a PostgREST-shaped shim, so query construction is genuinely exercised. **All of it is committed in `scripts/harness/`:**
 
 ```bash
-apt-get install -y postgresql
-su postgres -c "/usr/lib/postgresql/16/bin/initdb -D /tmp/pgd -A trust"
-su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/pgd -o '-p 5433 -k /tmp' start"
+python3 scripts/harness/db.py up             # initdb on first use, Supabase roles, schema ×2, seed → template
+python3 scripts/harness/db.py fresh mytest   # a throwaway copy; prints its DSN
+MISHMAR_PG_DSN="host=/tmp port=55432 dbname=mytest user=postgres" python3 -c \
+  "import sys; sys.path[:0]=['scripts/harness','.']; import pgrest_shim, data_manager as dm; dm.set_client(pgrest_shim.FakeSupabase()); ..."
 ```
 
-Create roles mirroring Supabase (`anon`, `authenticated`, `service_role`) before applying the schema, or the REVOKE/GRANT statements fail. A shim turning `.select().eq().execute()` into SQL is ~150 lines; **have it `SET ROLE service_role`** — connecting as the owner bypasses RLS and makes the test meaningless. Also have it serialize like PostgREST does (datetime→string, Decimal→float), or the shim is more forgiving than production and hides real bugs. Inject with `dm.set_client(FakeSupabase())`.
+The roles mirroring Supabase (`anon`, `authenticated`, `service_role`) exist before the schema, or the REVOKE/GRANT statements fail. The shim (`pgrest_shim.py`) **runs `SET ROLE service_role`** — connecting as the owner bypasses RLS and makes the test meaningless — and serializes like PostgREST (datetime→string, Decimal→float), or it would be more forgiving than production and hide real bugs. `db.py` rebuilds the fixture only when the schema, the seed file or itself changed. PostgreSQL missing → it prints `blocked` and the install command, never a silent pass.
 
 **Reset restores a uniform template, not the Markdown.** `reset_mishmar` deletes the evening's own
 rows (never `speaker_outreach`) and `reseed_mishmar_tasks` inserts `DEFAULT_TASK_TEMPLATE` — one

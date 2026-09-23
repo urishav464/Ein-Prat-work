@@ -1,0 +1,10 @@
+{"name": "add candidate — search screen",
+ "user": "אלה מאיר",
+ "steps": [
+  {"nav": "חיפוש מרצים", "measure": false},
+  {"fill": {"label": "נושא המשמר", "text": "האם אדם יכול לשכתב את העבר?"}, "measure": false},
+  {"fill": {"label": "נושא השיעור", "text": "זיכרון והיסטוריה"}, "measure": false},
+  {"name": "build the map", "click": {"text": "בנה מפה"}},
+  {"name": "scan", "click": {"text": "סרוק את הרשת"}},
+  {"name": "➕ add as candidate", "click": {"key": "cand-"}}
+ ]}

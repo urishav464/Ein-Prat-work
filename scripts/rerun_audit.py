@@ -10,6 +10,11 @@ unless you trace it:
   rerun      `write(); st.rerun()`      → the page runs TWICE (only legitimate right
                                           after a form_submit_button, which already reran,
                                           or to close a dialog)
+  bare       a widget with no callback outside a form → changing it reruns its scope
+             (the sidebar nav radio is one; at page scope it is a whole-app run)
+
+A static map, not the territory: runtime causes (a value set by code, the cache
+TTL, a reconnect) need scripts/harness/ — the trace names the line of each run.
 
 Prints one row per site and exits 1 if any `rerun` outside a form/dialog/nav
 exists (a double run); `page` sites are listed for review — a regression fails loudly, like the hook. stdlib only.
@@ -21,8 +26,12 @@ from pathlib import Path
 SRC = Path(sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "app.py")
 AS_JSON = "--json" in sys.argv
 BUTTON_ATTRS = {"button", "form_submit_button"}
+# every widget that can cause a run; radio (the sidebar nav), text_area and
+# file_uploader were missing, so the nav — the commonest app run — was invisible
 WIDGET_ATTRS = BUTTON_ATTRS | {"selectbox", "checkbox", "number_input", "text_input",
-                               "feedback", "segmented_control", "pills", "toggle"}
+                               "feedback", "segmented_control", "pills", "toggle",
+                               "radio", "text_area", "file_uploader", "multiselect",
+                               "date_input", "time_input", "slider", "download_button"}
 
 
 def _kwarg(call, name):
@@ -133,6 +142,17 @@ def main():
                 if isinstance(n, ast.If):
                     yield n
 
+        def in_form(n):
+            """Inside `with <x>.form(...)`: no run until the submit."""
+            while n in parents:
+                n = parents[n]
+                if isinstance(n, ast.With) and any(
+                        isinstance(i.context_expr, ast.Call)
+                        and isinstance(i.context_expr.func, ast.Attribute)
+                        and i.context_expr.func.attr == "form" for i in n.items):
+                    return True
+            return False
+
         def test_names(t):
             return {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
 
@@ -148,6 +168,10 @@ def main():
                     sites.append(Site(node.lineno, _label(node), "callback", scope, attr))
                 elif attr == "form_submit_button":
                     sites.append(Site(node.lineno, _label(node), "form-submit", scope, attr))
+                elif attr not in BUTTON_ATTRS and not in_form(node):
+                    # no callback, not inside a form: changing its value reruns
+                    # the scope on its own (the sidebar nav is exactly this)
+                    sites.append(Site(node.lineno, _label(node), "bare", scope, attr))
                 elif attr == "button":
                     # `if st.button(...)`: what does the body do? navigation and
                     # opening a dialog are reruns by nature — not a regression.

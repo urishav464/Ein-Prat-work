@@ -1,0 +1,31 @@
+[
+ {"name": "trainee home", "user": "אלה מאיר", "steps": [
+   {"name": "✓ a task on the hero", "click": {"text": "✓ הושלם"},
+    "expect": {"app_runs": 0, "fragment_runs": 1, "tables": ["update tasks", "select v_tasks_full"]}}
+ ]},
+ {"name": "workfile", "user": "אלה מאיר", "steps": [
+   {"name": "open the workfile (cold)", "nav": "ניהול המשמר", "expect": {"app_runs": 1, "queries_max": 9}},
+   {"name": "✓ a slot task", "click": {"key": "ib-lt-"},
+    "expect": {"app_runs": 0, "fragment_runs": 1, "tables": ["update tasks", "select v_tasks_full"]}},
+   {"name": "open the task editor popover", "press": {"key": "ib-ed-wf", "what": "button"},
+    "expect": {"app_runs": 0, "fragment_runs": 0}},
+   {"name": "close it", "press": {"key": "ib-ed-wf", "what": "button"}, "measure": false},
+   {"name": "open the slot dialog", "click": {"key": "ib-ed-", "inner": "button"},
+    "expect": {"app_runs": 0}},
+   {"name": "cancel the slot dialog (a dialog close is an app run by design)",
+    "click": {"text": "ביטול"}, "expect": {"app_runs": 1, "queries_max": 0}}
+ ]},
+ {"file": "scenarios/add_candidate_workfile.json"},
+ {"name": "speaker index", "user": "Uri", "steps": [
+   {"name": "open the index (cold)", "nav": "מאגר המרצים", "expect": {"app_runs": 1, "queries_max": 9}},
+   {"name": "search the index", "fill": {"label": "חיפוש", "text": "תשובה", "commit": "Enter"},
+    "expect": {"queries_max": 0}},
+   {"name": "a domain filter", "click": {"key": "speaker_domain_filter", "inner": "button", "nth": 1},
+    "expect": {"queries_max": 0}}
+ ]},
+ {"name": "dashboard", "user": "Uri", "steps": [
+   {"name": "to the index and back (cached)", "nav": "מאגר המרצים", "measure": false},
+   {"name": "back to the dashboard", "nav": "לוח הבקרה", "expect": {"queries_max": 0}}
+ ]},
+ {"file": "scenarios/add_candidate_search.json"}
+]

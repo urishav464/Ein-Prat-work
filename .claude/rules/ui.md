@@ -11,7 +11,7 @@ paths:
 
 `_goto(nav, mishmar_id, section, lesson_focus)` deep-links any screen/section. **Writing a widget's session key after that widget was drawn in the same run raises StreamlitAPIException** — and the sidebar nav always draws before any button — so `_goto` parks the request under `_goto_req` and `_apply_goto()` lands it at the top of `main()` before a single widget exists. The workfile uses a keyed `wf_section` radio (constants `WF_SECTIONS`) because `st.tabs` cannot be selected programmatically; `wf_focus_lesson` accepts a lesson id or the sentinel `"first_open_speaker"`; `task_focus=<task id>` (staged as `wf_focus_task`) lets the instructor's dashboard open a task's slot WITHOUT loading 21 timelines — the landing page resolves it (`tasks.lesson_id`, else `suggest_lesson_for_task`) and highlights that slot with «⤴ כאן סוגרים את המשימה». The tasks board pins an always-open «⏰ עברו את התאריך המומלץ» group above the phase accordion (spanning `after` and `יום המשמר`, which the accordion routes elsewhere) — a late task can never sit folded inside a shut phase while the dashboard shouts about it.
 
-**Clicks cost one run, not two, and reruns are partial.** Measured with a 150 ms simulated Supabase round-trip: opening a task editor was 2 runs / 16 queries / 2.8 s and a section switch 1.9 s; after the fix, 2–34 ms and zero queries, a ✓ on a task ~400–650 ms with exactly `[update tasks, select v_tasks_full]`. Two rules made it so and must hold: (1) a button that writes or toggles state uses `on_click=` (`_set_status`, `_toggle`, `_set_state`, or the `dm` write itself) — the callback runs BEFORE the run that follows the click, so `write(); st.rerun()` is a duplicate full run; selectboxes and number inputs use `on_change=`. (2) The workfile body under the picker (`_workfile_body`) and the chat panel are `@st.fragment`s — a click inside reruns only them, over cached reads. `_goto` and the chat turn's final rerun are `st.rerun(scope="app")` because they must restart the page from the top. The stale-element dimming users called «the slow animation» is Streamlit's `opacity 1s ease-in 0.5s` on runs longer than half a second — it vanishes when runs are fast; do not hide it with CSS, it is the regression alarm. Harness: a scratch `run_app_perf.py` wraps the shim's `execute` with a counter and `time.sleep(RTT)`; guard the patch with a module flag — the script re-executes per rerun and re-wrapped itself 14 deep the first time.
+**Clicks cost one run, not two, and reruns are partial.** Measured with a 150 ms simulated Supabase round-trip: opening a task editor was 2 runs / 16 queries / 2.8 s and a section switch 1.9 s; after the fix, 2–34 ms and zero queries, a ✓ on a task ~400–650 ms with exactly `[update tasks, select v_tasks_full]`. Two rules made it so and must hold: (1) a button that writes or toggles state uses `on_click=` (`_set_status`, `_toggle`, `_set_state`, or the `dm` write itself) — the callback runs BEFORE the run that follows the click, so `write(); st.rerun()` is a duplicate full run; selectboxes and number inputs use `on_change=`. (2) The workfile body under the picker (`_workfile_body`) and the chat panel are `@st.fragment`s — a click inside reruns only them, over cached reads. `_goto` and the chat turn's final rerun are `st.rerun(scope="app")` because they must restart the page from the top. The stale-element dimming users called «the slow animation» is Streamlit's `opacity 1s ease-in 0.5s` on runs longer than half a second — it vanishes when runs are fast; do not hide it with CSS, it is the regression alarm. Harness: `scripts/harness/` (committed — it used to be a scratch `run_app_perf.py` that vanished with every container, so no later session could measure anything); the tracer wraps the shim's `execute` with `time.sleep(RTT)` and guards every patch in `tracer.install()` — the script re-executes per rerun and a naive patch re-wrapped itself 14 deep the first time.
 
 **The workfile is two columns, not tabs.** Under RTL `st.columns` mirrors, so declaring `[evening, tasks]` puts the evening on the RIGHT (verified: x=626 vs x=80) and Streamlit stacks them on a phone. The evening column is three expanders (`WF_STRUCTURE` / `WF_LOGISTICS` / `WF_AFTER`); the tasks column is the ONLY task board, so `_tasks_tab` now renders every phase including «אחרי» — routing a phase elsewhere would make it disappear. A deep link opens a panel by setting `wf_panel` **and bumping `wf_panel_nonce`**, which is part of the expander's `key`: an expander remembers its open state client-side, so remounting is the only reliable way to force one open. A Mishmar with no topic skips the columns entirely — there is one thing to do and two columns of empty panels would hide it.
 
@@ -120,6 +120,20 @@ never by eye.
 No `[auth]` in secrets → name-only login, development only. `[auth]` present → Google OIDC **and the name box is removed entirely** — leaving it would keep the "type Uri" bypass open beside real authentication.
 
 ## Verifying the UI actually renders
+
+**The harness is committed: `scripts/harness/`.** `db.py up` builds a local PostgreSQL 16 fixture
+(the schema twice, the app's own seed, two evenings with a timeline); `harness.py serve [--root DIR]`
+runs `app.py` — or a scratch copy carrying a candidate fix — over it, **traced**; `harness.py
+scenario FILE.json` replays steps in Chromium and prints, per step, the runs it caused
+(`app` / `fragment` / `dialog`), **what caused each** (the callback and its widget's line, an
+`if st.button` line, a widget whose value changed without a callback, an `st.rerun(scope=…)` line,
+a page load), the tables its writes invalidated, and the real round-trips by table;
+`harness.py sweep` runs `sweep.json` — every screen cold plus one click per kind, each with this
+file's contract as its `expect`. Measured on it (150 ms simulated round-trip): ✓ on a task = one
+fragment run, `[update tasks, select v_tasks_full]`; the task-editor popover = no run at all; the
+slot dialog's «ביטול» = a dialog run, then `st.rerun(scope="app")` at the dialog, then a full app
+run. The `app-reviewer` agent drives all of this; `deploy-check` runs the sweep as its click
+budget.
 
 `curl` proves nothing — Streamlit executes the script only when a browser session connects. Run headless and drive with the pre-installed Chromium (`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`, `--no-sandbox`). **Streamlit renders tracebacks into the DOM** — check `inner_text` for "Traceback"/"AttributeError", a `pageerror` listener won't catch them. `st.dataframe` draws to canvas, so its cells never appear in `inner_text`. A running Streamlit process caches imported modules — after editing `data_manager.py`, restart the process, or you are testing stale code.
 
@@ -323,8 +337,9 @@ More probe traps that produced false test results here: **input placeholders nev
 - **`scripts/rerun_audit.py` is the click-cost contract**: one row per widget site — `callback`
   (on_click/on_change), `fragment`, `page`, `nav` (body calls `_goto`/`logout`/opens a dialog),
   `form-submit`, `rerun` (legitimate only after a submit, to close a dialog, or for nav/auth).
-  Exit 1 on a `page` site or a `DOUBLE RUN`. The `rerun-audit` agent runs it and, on request,
-  measures representative clicks on the harness. The search screen's «אמת» / «הוסף למאגר» are the
+  `bare` (no callback, outside a form — changing it reruns its scope; the sidebar nav radio is
+  one). Exit 1 only on a `DOUBLE RUN`; `page` sites are listed for review. It is the static map —
+  `app-reviewer` pairs it with the harness trace, which sees the runtime causes the AST cannot. The search screen's «אמת» / «הוסף למאגר» are the
   sanctioned `page` sites: the screen is not a fragment and each runs a long verify — noted, not
   hidden.
 - **Dashboard ✓ / ▶ and the trainee home's ✓ / ▶ / ↩ are fragment runs** (`_dashboard_body`,
