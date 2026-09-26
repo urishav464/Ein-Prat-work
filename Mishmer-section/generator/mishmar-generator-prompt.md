@@ -14,7 +14,7 @@ A "Mishmar" is not just a series of lectures. It is a psychological and intellec
 **Context & Constraints:**
 * **Audience:** Sharp, critical thinkers, mixed backgrounds (religious/secular), familiar with Jewish texts but also Western philosophy.
 * **Speakers:** Early sessions (1-2) can have external experts. Late sessions (3-4) are difficult for external guests and often require internal delivery (Staff/Students) or peer-led formats ("Chavurot," TED-style, Debate).
-* **Language:** These instructions are in English; write your whole output in Hebrew (quote sources in their original language).
+* **Language:** These instructions are in English; write your whole output in Hebrew.
 
 ---
 

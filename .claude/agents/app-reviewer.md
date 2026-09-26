@@ -202,6 +202,15 @@ number you did not read from a trace.
 - **A server-tool parameter the API rejects fails every call** — `user_location.country: "IL"` → 400 «Country code IL is not supported» broke every scan, and was first misread as «search is switched off». Check tool definitions against the tool's docs, and read the «פרטים טכניים» text before theorising.
 - The scout: web-search `max_uses` capped; candidates grounded in harvested URLs; `pause_turn`
   resumed a bounded number of times.
+- **A prompt line that guards a parser is load-bearing.** «No text between searches» was what kept
+  `_scout_json`'s first-bracket slice safe; softening it let a markdown link in interim prose fail
+  a paid scan. Make the parser independent first (the scan reads only the text after the last
+  tool block), and never tell the model text «is not read» while the code reads it.
+- **When a structured-output schema replaces an in-prompt example, the example's implicit meaning
+  moves into the schema's `description` or the prompt** — an enum limits a value, not what it
+  names (`key` "1" = יסודות lived only in the deleted example).
+- **A green sweep says nothing about `chat_agent.py`'s model calls**: `run_traced.py` swaps
+  `scout_map`/`scout_speakers` for canned JSON. A change to either needs its own fake-client test.
 
 ### Hebrew UI
 - `RTL_CSS` selectors are checked against `.claude/rules/streamlit-dom.md`; a `data-testid` not in

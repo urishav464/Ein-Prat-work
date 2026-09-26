@@ -527,7 +527,7 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
     mishmar_id = ctx.get("mishmar_id")
     student_id = ctx.get("student_id")
 
-    needs_mishmar = {"close_topic", "save_lesson", "add_task"}
+    needs_mishmar = {"close_topic", "save_lesson", "add_task", "update_task"}
     if name in needs_mishmar and not mishmar_id:
         return {"error": "לא נבחר משמר. בקש מהחניך לבחור משמר בראש העמוד."}
 
@@ -853,8 +853,8 @@ MAP_SYSTEM = """\
   קולות, מכון הדר, בתי מדרש, או מקום של עשייה — מה שמתאים לסוג האדם.
 - `why` — משפט אחד: איך התחום הזה מדבר עם הנושא הספציפי.
 - `reading` — משפט אחד: על מה הנושא באמת, במילים של שדה מחקר. `field` — שם
-  התחום של הזווית.
-- אם נבחרה זווית — החזר רק אותה. אחרת החזר את שלושתן.
+  התחום של הזווית. `key` — מספר הזווית כפי שממוספרת למעלה (1, 2 או 3).
+- אם נבחרה זווית — החזר רק אותה, עם המספר שלה. אחרת החזר את שלושתן.
 - עברית בלבד.
 """
 
@@ -868,7 +868,8 @@ MAP_SCHEMA = {
         "angles": {"type": "array", "items": {
             "type": "object",
             "properties": {
-                "key": {"type": "string", "enum": ["1", "2", "3"]},
+                "key": {"type": "string", "enum": ["1", "2", "3"],
+                        "description": "מספר הזווית: 1 יסודות, 2 ערעור / טוויסט, 3 זווית מפתיעה"},
                 "label": {"type": "string"},
                 "field": {"type": "string"},
                 "who": {"type": "string"},
@@ -1078,8 +1079,13 @@ def scout_map(topic: str, lesson_topic: str = "", angle: str = "") -> dict:
         return {"error": f"{type(exc).__name__}: {exc}", "reason": "error",
                 "angles": []}
     angles = []
-    for a in data.get("angles") or []:
-        if not isinstance(a, dict) or str(a.get("key")) not in ANGLES:
+    got = [a for a in (data.get("angles") or []) if isinstance(a, dict)]
+    if angle in ANGLES and len(got) == 1:
+        # one angle was asked for and one came back: it IS that angle, whatever
+        # number the model gave it — a mislabelled key used to drop the map
+        got[0]["key"] = angle
+    for a in got:
+        if str(a.get("key")) not in ANGLES:
             continue
         key = str(a["key"])
         if angle in ANGLES and key != angle:
@@ -1330,7 +1336,14 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
                 raise
             usages.append(_usage_of(msg))
             _harvest_sources(msg.content, sources, queries)
-            text += "".join(getattr(b, "text", "") for b in (msg.content or [])
+            # the answer is the text AFTER the last search/fetch — prose written
+            # between searches is not read (SCOUT_SYSTEM rule 7): a markdown link
+            # or a brace in it used to reach _scout_json's first-bracket slice
+            # and fail a paid scan as «error»
+            blocks = list(msg.content or [])
+            last = max((i for i, b in enumerate(blocks)
+                        if getattr(b, "type", None) != "text"), default=-1)
+            text += "".join(getattr(b, "text", "") for b in blocks[last + 1:]
                             if getattr(b, "type", None) == "text")
             if getattr(msg, "stop_reason", None) == "pause_turn" and attempt < SCOUT_MAX_CONTINUES:
                 attempt += 1
