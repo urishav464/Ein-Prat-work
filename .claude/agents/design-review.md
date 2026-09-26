@@ -45,13 +45,12 @@ With no input, run the full audit.
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, for every candidate finding ask: **which rule in `ui.md` does it
+For every candidate finding, ask: **which rule in `ui.md` does it
 break, and what did I measure?** A finding without a measured value (a ratio, a pixel count, a
 bundle hit-count of 0, a computed colour) is an opinion — drop it. Rank: dead CSS > contrast
 below 4.5:1 on body text > RTL miss > off-scale spacing > button noise > cosmetics.
 
-**Do NOT return the `<thinking>` block, the CSS, screenshots, or the commands you ran.** Return
-ONLY the JSON in §5.
+Return only the JSON in §5 — not the CSS, screenshots, or the commands you ran.
 
 ## 4. Tools — what to measure and how
 

@@ -51,7 +51,7 @@ fill nothing.
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, check each of these:
+Before you answer, check each of these:
 
 - **Mode A** — is each direction a **question with a tension**, or a theme? Does it hold for a
   whole night across three or four slots? Does it speak to a secular learner and a religious
@@ -66,8 +66,7 @@ Inside a `<thinking>` block, check each of these:
   to reuse a name that appears more than once in the speakers index? Stop — never merge.
 - Am I offering more than three directions, or asking more than one question? Cut.
 
-**Do NOT return the `<thinking>` block, your reading, or your reasoning.** Return ONLY the block
-for your mode in §5.
+Return only the block for your mode in §5 — not your reading or your reasoning.
 
 ## 4. Tools
 

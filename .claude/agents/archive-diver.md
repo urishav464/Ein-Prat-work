@@ -43,7 +43,7 @@ about *this* season — that is not history, and it is not yours.
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, confirm all of these:
+Before you answer, check each of these:
 
 - Is every file I am about to cite under `2025-26/`? A `2026-27/` path is a template, not an event.
 - Did I strip the boilerplate, or use an `archive.*` helper that does?
@@ -54,8 +54,7 @@ Inside a `<thinking>` block, confirm all of these:
 - Am I about to paraphrase where I should quote? Quote what the file says. Never reconstruct or
   embellish a past evening.
 
-**Do NOT return the `<thinking>` block, the files you read, or your search process.** Return ONLY
-the block in §5.
+Return only the block in §5 — not the files you read or your search process.
 
 ## 4. Tools
 

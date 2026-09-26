@@ -15,7 +15,7 @@ This system is built for **one cohort only**:
 > **שנה ב' · תשפ"ז · 5787 · 2026-2027 · מדרשת עין פרת**
 
 - **21 Mishmarim**, all Thursdays, 3.9.2026 → 11.2.2027. The authoritative list is `Mishmer-section/2026-27/schedule.md`.
-- **10 trainees** (`חניך 1`–`חניך 10`, placeholders until the real names arrive), assigned in pairs to Mishmarim #03–21. **#01 and #02 are staff-built.**
+- **8 trainees**, named in `students_tasks.md` (the roster's source), assigned in pairs to Mishmarim #03–21. **#01 and #02 are staff-built.**
 - Do **not** build "current year" abstractions, year-switchers, or multi-programme support. Hardcode תשפ"ז.
 
 **One deliberate exception:** the speaker database is **cross-year**. It is a historical asset, not a generalisation — a speaker who taught in 2025-26 is a live lead for תשפ"ז.
@@ -26,47 +26,9 @@ This system is built for **one cohort only**:
 
 - **Frontend:** Streamlit. **Backend:** Python.
 - **Data layer:** all reads/writes go through a single seam (`data_manager.py`). Nothing else in the codebase opens the database or touches files directly.
+- **Storage:** Supabase, through that seam only. How storage, seeding, the read cache and the speaker search work is repo knowledge — it lives in `CLAUDE.md` and `.claude/rules/` (`database.md`, `chat-agent.md`), not here.
 
-### Decision 1 — SQLite, not flat files
-Dynamic data (tasks, budget) lives in **SQLite** (Python standard library), not `.md`/`.csv`. Streamlit serves every user session on its own thread and reruns the script on each interaction; concurrent writes to a flat file lose data.
-
-Three settings are what actually make this safe, and they are not optional:
-
-| הגדרה | למה |
-|---|---|
-| `PRAGMA journal_mode=WAL` | קוראים מקבילים לצד כותב אחד. בלעדיו — "database is locked" |
-| `check_same_thread=False` | Streamlit מריץ כל סשן ב-thread נפרד |
-| `timeout=10` | ממתין לנעילה במקום ליפול מיד |
-
-**Schema — five tables** plus `Assignments` (pair ownership is many-to-many) and `_meta`: `Mishmarim` · `Students` · `Tasks` · `Budget` · `Speakers`. `Speakers.source_type` separates `original_44` from `web_search`, so we can measure whether the index is actually growing past the original 44.
-
-`budget_used` is a **view** computed from `Budget`, never a stored column — a stored copy drifts from its source the moment an expense is edited.
-
-### Decision 2 — Migration & deprecation of the Markdown
-On first run `data_manager.migrate_and_archive_md()` reads `students_tasks.md`, loads it into SQLite, then **renames** it to `students_tasks_ARCHIVED.md`. From that moment **SQLite is the sole source of truth for tasks** — there is no second home. Rename rather than delete: it holds 193 hand-written task lines and a rename is reversible.
-
-> **Not yet executed against the repo.** Tested repeatedly on sandboxed copies. `app.py` now exists and the work-files and template already point at the app, so the first real `streamlit run app.py` will archive `students_tasks.md` cleanly.
-
-**Speakers after the migration — two files, two jobs.** `Mishmer-section/speakers/database.md` stays as the **seed and the paste-block** for running the generator prompt in an external chat window. But once the app is running, the live index is the `Speakers` table: that is where web-search finds, feedback, and status changes are written. Do not ask a trainee to hand-edit the Markdown.
-
-### Decision 3 — Web search via DDGS, no paid APIs
-V1 uses the free **`ddgs`** library (formerly `duckduckgo-search`; the class is `DDGS`). Implemented in `speaker_search.py`.
-
-**Two parallel paths, neither a fallback for the other:**
-
-| | פונקציה | מה היא עושה |
-|---|---|---|
-| **גילוי** | `search_candidates(topic, lesson)` | יורה שאילתות רחבות (כולל `site:ac.il`) ו**מחלצת שמות מהתוצאות**. זה מה שמעלה מרצה שאף אחד לא הכיר — פוסט-דוקטורנט חדש, חוקר מצוין ולא מפורסם |
-| **אימות** | `verify_speaker(name, topic)` | ממכן את צ'קליסט `⚠️ לאמת` על שם מכל מקור — חי? עדיין בתחום? איפה גר? מרצה בפועל? |
-
-חילוץ השמות (`extract_names`) הוא מה שהופך את הגילוי לאמיתי. בלעדיו המודול יכול רק לאמת שמות שמישהו כבר הכיר — כלומר להציע שוב ושוב את אותם מפורסמים.
-
-**הסינתזה נעשית בצ'אט, לא באפליקציה.** `format_for_chat()` מייצר בלוק מוכן להעתקה. אין קריאת API בתשלום ב-v1.
-
-**מה שנבנה נגד חסימות** — הצוואר הוא *פרץ*, לא נפח (עונה שלמה ≈ 300–600 שאילתות, אבל זוג חניכים יורה 25 בשלוש דקות): מטמון ב-SQLite (60 יום להצלחה, **שעה בלבד לכישלון**, אחרת תקלה רגעית מרעילה את המטמון לחודשיים) · מרווח מינימלי של 4 שניות שנאכף ב-`threading.Lock` ברמת המודול · cooldown מדורג 60s→5m→15m · סבב backends. **כל חסימה נופלת רכות לקישור חיפוש ידני** — לעולם לא נופלים על הדף.
-
-> **המכונה משותפת** — כל החניכים מאחורי IP אחד, ולכן ה-throttle גלובלי לתהליך והמטמון משותף לכולם.
-- **⚠️ Streamlit has no native RTL.** The entire UI is Hebrew. RTL is injected as CSS at app entry. Expect this to be the first thing that breaks.
+**Speakers — two homes, two jobs.** `Mishmer-section/speakers/database.md` is the **seed and the paste-block** for running the generator prompt in an external chat window. Once the app runs, the live index is the `speakers` table: that is where search finds, feedback, and status changes are written. Do not ask a trainee to hand-edit the Markdown.
 
 **Your engineering role:** help write the Python that bridges the data to the Streamlit UI — while staying the Mishmar Co-Manager, not turning into a generic coding assistant. Pedagogy and logistics remain the point; the app is the delivery mechanism.
 
@@ -193,10 +155,10 @@ That feeds the running total, so at any point in the year Uri can see total Mish
 
 | מידע | המקור |
 |---|---|
-| משימות (קנבן) | SQLite (`mishmar.db`) דרך `data_manager.py` |
+| משימות (קנבן) | Supabase, דרך `data_manager.py` |
 | תאריכים, שיבוץ, פנימי/חיצוני | `Mishmer-section/2026-27/schedule.md` |
-| מרצים | טבלת `Speakers` + `speaker_search.py` (גילוי ואימות) |
-| פניות שכבר נעשו השנה | `Mishmer-section/2026-27/speakers.md` |
+| מרצים | טבלת `speakers` + מסך «חיפוש מרצים» |
+| פניות שכבר נעשו השנה | היומן המשותף (`speaker_outreach`), דרך `data_manager.py` |
 | תוכן המשמר עצמו | `Mishmer-section/2026-27/mishmarim/NN-*/workfile.md` |
 
 Each fact has exactly one home. Do not duplicate between them.

@@ -40,7 +40,7 @@ Nothing is strictly required; with no input, produce the full brief.
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, verify:
+Before you answer, check:
 
 - Did I derive every item from a row I actually read (`get_all_mishmarim`, `get_all_tasks`,
   `get_overdue_tasks`, `get_all_lessons`, `get_all_outreach`, `get_owners_by_mishmar`,
@@ -50,8 +50,7 @@ Inside a `<thinking>` block, verify:
 - Is every "do first" item something a human can act on this week — a name, a Mishmar, one verb?
 - Have I kept the tone soft where the deadline rule demands it?
 
-**Do NOT return the `<thinking>` block, the rows, or the queries you ran.** Return ONLY the JSON
-in §5.
+Return only the JSON in §5 — not the rows or the queries you ran.
 
 ## 4. Tools
 

@@ -45,7 +45,7 @@ these people — so a wrong detail costs someone a real embarrassing call.
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, verify every one of these before writing a single candidate:
+Before writing a single candidate, check each of these:
 
 - **Alive and active?** Any doubt at all → drop the name. Never propose someone who is not living.
 - **The dead-thinker trap**: Spinoza, Levinas, Kafka, Agnon, Rav Kook are texts to study, not
@@ -59,8 +59,7 @@ Inside a `<thinking>` block, verify every one of these before writing a single c
 - **Same name, several index rows?** They are different people until a human says otherwise.
   Never merge.
 
-**Do NOT return the `<thinking>` block, your search queries, the pages you read, or your reasoning.**
-Return ONLY the JSON in §5.
+Return only the JSON in §5 — not your search queries, the pages you read, or your reasoning.
 
 ## 4. Tools
 

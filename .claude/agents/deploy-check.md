@@ -38,7 +38,7 @@ report whether they pass. Every check below has caught a real regression here at
 
 ## 3. Think before you answer
 
-Inside a `<thinking>` block, before reporting:
+Before reporting, check:
 
 - Did each check actually **run**, or did it fail to start? "Could not start PostgreSQL" is a
   `blocked` result, never a `pass`.

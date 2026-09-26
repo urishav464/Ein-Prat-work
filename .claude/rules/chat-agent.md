@@ -23,7 +23,7 @@ A turn re-sends its whole history on every API call, and a tool-using turn makes
 - `save_lesson` takes `duration_minutes`, never a start time — times are derived (`recompute_lesson_times`) and every save reflows the evening; the tool returns the recomputed schedule so the model reports real times.
 - `add_candidate_speaker` / `close_speaker` / `set_source_sheet` / `add_task(slot_order=…)` resolve `slot_order` inside the context's Mishmar only — a task the model ties to a slot gets an explicit `tasks.lesson_id`; the model never sees a lesson id. `close_speaker` is the «סגרתי את X» flow: X becomes the lesson's speaker, the journal logs ✅, the other candidates are removed.
 - `close_topic` returns `phase_opened` (the newly-current phase + open tasks) and `index_matches` — **a closed topic is a sentence, so the matcher falls back to its meaningful words** — and builds the default timeline when the evening is empty. An iron rule makes the model unfold all of that in the SAME response.
-- **Phones never enter chat context.** `render_context` shows candidates as name+status only; the test suite asserts a phone string does not appear.
+- **Phones never enter chat context.** `render_context` shows candidates as name+status only — nothing checks this automatically, so a change to `render_context` is checked by reading it.
 
 ## The scout (the speaker-search screen) — map → people → fit, TWO calls per search
 
@@ -32,13 +32,15 @@ snippets with regex and hand the survivors to ONE curation call — which is why
 made the search narrower instead of wider, and why a topic phrased as a question found nobody.
 Now:
 
-1. **`scout_map(topic, lesson_topic, angle)`** — no tools, `effort: low`, ~1k tokens. Reads the
+1. **`scout_map(topic, lesson_topic, angle)`** — no tools, `effort: low`, structured output
+   (`MAP_SCHEMA`; the scan cannot use one — web search returns citations), `max_tokens` 4000. Reads the
    topic as FIELDS: per angle a discipline, the kind of person, 2–4 **broad Hebrew terms — never
    the topic phrase**, where such people sit, and one line on why the field speaks to the topic.
    Cached in `session_state["scout_map"]` on `(topic, lesson_topic, angle)`; the trainee edits it
    (terms as a text line, a checkbox per angle) before anything expensive runs.
 2. **`scout_speakers(topic, lesson, lesson_topic, progress, scout_map_result)`** — the model
-   searches the web itself: `web_search_20260318` (`max_uses` = 2 per angle + 1, ceiling
+   searches the web itself (`max_tokens` 16000, streamed — thinking counts toward it, and one real
+   scan used 5.3k output): `web_search_20260318` (`max_uses` = 2 per angle + 1, ceiling
    `SCOUT_MAX_SEARCHES = 8` — a single-angle scan used to be allowed all 8,
    `allowed_callers: ["direct"]`, no `user_location` — the API rejects `country: "IL"` with a 400 «Country code IL is not supported», which failed every scan until the «פרטים טכניים» text named it) + `web_fetch_20260318`
    (`max_uses` = angles + 1, ceiling 4; `max_content_tokens = 5000` — an average page is ~2.5k;

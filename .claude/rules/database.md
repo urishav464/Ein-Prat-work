@@ -90,7 +90,7 @@ panel instead of on a slot.
   idempotent. Per ordinary slot: «סגירת מרצה — שיעור N» + «דף מקורות — שיעור N». Per חבורות slot:
   «מי מעביר את התוכן — חבורות», «דפי מקורות למעבירי החבורות», «חלוקת חללים למעבירי החבורות». Every
   row carries `lesson_id`. It creates what is missing, retires OUR OWN wording when a slot changes
-  shape (`_slot_owned_texts` — a hand-written task linked to the slot is never touched), and clears
+  shape (`_is_generated` — a hand-written task linked to the slot is never touched), and clears
   open tasks whose slot is gone. **DONE rows are never touched.** `create_default_timeline` calls
   it, so a new Mishmar is born synced; an existing one catches up from «🔄 סנכרן משימות למקטעים».
 - **Ownership is PROVENANCE, not wording: `tasks.generated` (schema 7).** `sync_lesson_tasks` is the
@@ -121,20 +121,11 @@ panel instead of on a slot.
   one slot never share a key, and a slot that changed KIND shares none, so it still retires. This
   is the only thing that touches a DONE row, and only its label — without it a DONE
   «דף מקורות — שיעור 3» sat forever beside a freshly created «— שיעור 2» for the same work.
-- **Our wording is recognised by pattern, not by index, and orphans are adopted.**
-  This was the schema-6 answer, now superseded by the flag above but still the reason the
-  reconciler is index-free: `_is_slot_owned_text` (`^(סגירת מרצה|דף מקורות) — שיעור \d+$`, the three
-  חבורות texts, `סידור <one of the four rooms>`) replaced `_slot_owned_texts(i)`, which retired only «… שיעור i»
-  for slot i — so a task born when its slot was #2 outlived a deletion before it or the slot
-  turning into חבורות while the numbering shifted («סגירת מרצה — שיעור 2» on the alumni evening's
-  חבורות round was exactly that). And a task with `lesson_id = NULL` in our wording (a slot deleted
-  the bare way, an older sync) was invisible to the sync: it created a second copy beside it, and
-  the orphan's «פתח» door guessed a slot from «שיעור 2» → `slots[1]` → the חבורות round. Now a slot
-  that still expects the text **adopts** the orphan (`link_task_to_lesson`, same row, `adopted`
-  counted in the result), and open orphans nobody expects are retired. Still: DONE never touched,
-  a human-written task never touched. Proven on the shim: role→חבורות, a number shift, an
-  adoptable orphan, a stray orphan, a DONE row and a human row — then idempotent. The slot editor's
-  save and both «➕ הוסף» buttons now call the sync themselves; a slot is born with its tasks.
+- **Orphans are adopted.** A generated task with `lesson_id = NULL` (a slot deleted the bare
+  way, an older sync) is adopted by the slot that still expects its text (`link_task_to_lesson`,
+  same row, counted as `adopted`); open orphans nobody expects are retired. DONE rows and
+  human-written tasks are never touched. The reconciler is index-free: a slot's number is never
+  the test of what it owns.
 - **A new row goes LAST: `_next_slot_order` = max + 1, and `recompute_lesson_times` renumbers.**
   `len(rows) + 1` collided after a deletion — orders 1,2,4,5 produced 5 again, and the new break
   sorted next to the old 5, mid-evening. `get_lessons` orders by `slot_order` then `id`; the
