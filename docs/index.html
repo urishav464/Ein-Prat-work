@@ -171,15 +171,15 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
       </div>
     </div>
     <div class="fixed-note" id="separate-info" hidden>שבת נפרדת: קבלת שבת ישראלית במצפה — ובגשם בחדר האוכל. ארוחת הערב בחדר האוכל.
-      בית המדרש (סידור ב-8:00) וחדר האוכל (ניקיון ב-13:00) — שלנו.</div>
+      בית המדרש (סידור ב-8:00, ומצטרפים למטבח ב-8:45) וחדר האוכל (ניקיון ב-14:00, חניכים שלא בהכנות) — שלנו.</div>
     <div id="shared-box" hidden>
       <div class="f" role="group" aria-labelledby="ovens-l">
         <span id="ovens-l" class="q">התנורים שלנו ביום שישי <small class="small">(סוגרים עם שנה א')</small></span>
         <div class="cards">
           <label class="opt"><input type="radio" name="ovens" data-r="ovens" value="עד 11:00"><b>עד 11:00</b>
-            <small>ההכנות ב-8:00 (חלות ב-7:00). אנחנו מסדרים את בית המדרש בשישי, ומנקים את חדר האוכל במוצ"ש.</small></label>
+            <small>ההכנות ב-8:00 (חלות ב-7:00). אנחנו מסדרים את בית המדרש בשישי (וב-8:45 מצטרפים למטבח), ומנקים את חדר האוכל במוצ"ש.</small></label>
           <label class="opt"><input type="radio" name="ovens" data-r="ovens" value="מ-11:00"><b>מ-11:00</b>
-            <small>ההכנות ב-11:00 (חלות ב-10:00, ארוחת הצהריים מתבשלת מ-9:00). מנקים את חדר האוכל בשישי ב-14:00, ואת בית המדרש במוצ"ש.</small></label>
+            <small>ההכנות ב-11:00 (חלות ב-10:00, ארוחת הצהריים מתבשלת מ-9:00). צוות חדר האוכל מצטרף להכנות ב-11:00 ומנקה את חדר האוכל ב-14:00. במוצ"ש מנקים את בית המדרש.</small></label>
         </div>
       </div>
       <p class="hint" style="margin-top:12px">את המקום לקבלת שבת ישראלית ולארוחת הערב מתאמים עם שנה א'. שעה — רק אם שונה מהלו"ז.</p>
@@ -519,7 +519,7 @@ function refreshSelects(){
 // ---- what depends on the Shabbat and its kind ---------------------------------
 function helpLabel(k){
   return k === 'late' ? 'עזרה מצוות חדר האוכל ב-11:00' : k === 'separate' ? 'עזרה מבית המדרש ב-8:45' :
-         k === 'early' ? 'עזרה מבית המדרש ב-10:00' : 'עזרה מתורנות שישי';
+         k === 'early' ? 'עזרה מבית המדרש ב-8:45' : 'עזרה מתורנות שישי';
 }
 function refresh(){
   const d = cur(), k = kind(), late = k === 'late';
@@ -543,7 +543,7 @@ function refresh(){
           : 'ההכנות מתחילות ב-8:00, החלות ב-7:00.') + ' מתכון הוא בונוס.';
   document.querySelectorAll('.help-label').forEach(el => el.textContent = helpLabel(k));
   $('clean-fri-box').hidden = !(k === 'separate' || late);
-  $('clean-fri-when').textContent = late ? 'מצטרפים להכנות ב-11:00, ומנקים ב-14:00' : 'ב-13:00, אחרי ארוחת הצהריים';
+  $('clean-fri-when').textContent = late ? 'מצטרפים להכנות ב-11:00, ומנקים ב-14:00' : 'ב-14:00 — חניכים שלא בהכנות ולא בבית המדרש';
   $('clean-bm-box').hidden = !(k === 'separate' || late);
   $('clean-ha-box').hidden = !(k === 'separate' || k === 'early');
   $('motz-kind').hidden = !!k;

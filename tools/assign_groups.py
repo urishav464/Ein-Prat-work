@@ -241,6 +241,7 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
     stages = [s for s in bw.STAGES if any(g["stage"] == s for g in plan)]
     stages += [g["stage"] for g in plan if g["stage"] not in stages]      # שלב לא מוכר — בסוף
     points_of = {g["name"]: g["points"] for g in plan}
+    stage_of = {g["name"]: g["stage"] for g in plan}
     promised = {n: list(gs) for n, gs in pins.items()}          # הצמדות + אחראים = התחייבויות
     for group, name in leaders.items():
         promised.setdefault(name, []).append(group)
@@ -310,7 +311,13 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
             g["size"] = max(peak(tasks, g["name"]), fixed.get(g["name"], 0))
 
         score = {n: past.get(n, 0) + week_points[n] + committed[n] for n in pool}
-        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins, group_blocks=group_blocks)
+        blocks = {n: set(gs) for n, gs in group_blocks.items()}  # bw.APART: מי שכבר בשלב הקודם לא נכנס/ת
+        for g in stage_plan:
+            for gname, members in groups.items():
+                if stage_of.get(gname) in bw.APART.get(g["name"], ()):
+                    for n in members:
+                        blocks.setdefault(n, set()).add(g["name"])
+        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins, group_blocks=blocks)
         groups.update(result)
         done.update(stage_names)
         for g in stage_plan:

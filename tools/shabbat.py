@@ -70,6 +70,10 @@ def checks(date, workbook, out_dir):
                 problems.append("{} ב«{}» למרות שאינו/ה זמין/ה ב{}".format(n, g["name"], g["stage"]))
             if g["name"] in blocked_groups.get(n, ()) and g["name"] not in chosen.get(n, ()):
                 problems.append("{} ב«{}» למרות שהקבוצה חסומה לו/ה (לא בקבוצה)".format(n, g["name"]))
+            for other in data["groups"]:                 # bw.APART: מנקי חדר האוכל בשישי — לא מההכנות
+                if (other["stage"] in bw.APART.get(g["name"], ()) and n in other["members"]
+                        and g["name"] not in chosen.get(n, ())):
+                    problems.append("{} גם ב«{}» וגם ב«{}»".format(n, other["name"], g["name"]))
 
     for g in data["groups"]:                             # לכל חבר קבוצה יש משימה
         mine = [t for t in data["tasks"] if t["group"] == g["name"]]

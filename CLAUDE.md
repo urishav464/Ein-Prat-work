@@ -121,7 +121,10 @@ script writes, grey = computed.
   optional event its name or `בלי <name>`. The `תנאי` column (`;` = OR) of `schedule_template.csv`,
   `task_library.csv` and `group_plan.csv` selects rows by tag — that is how the Friday בית מדרש / Friday
   dining-room group, the Motzash cleanings, the work start (08:00/11:00) and the קבלת שבת ישראלית place change
-  per kind. `HELP_RULES` picks who joins the preps and when (בית מדרש 08:45 / 10:00, dining room +0);
+  per kind. `HELP_RULES` picks who joins the preps and when (בית מדרש 08:45; 10:00 only for a shared week with no
+  oven window, like 18.9; dining room +0). `bw.APART` keeps the Friday dining-room cleaners (14:00 in both
+  separate and ovens-from-11 weeks) out of every הכנות שישי group: `assign_all` adds it to `group_blocks`
+  from the groups already assigned, and `shabbat.py` fails on an overlap (pins excepted);
   `LUNCH_RULES` starts Friday-lunch cooking at 09:00 when our ovens are from 11:00. `import_form` must call
   `tags_for` with the message's values, because `weeks.csv` is written after `build()`.
 - **Four stages** (`bw.STAGES`, the last is תורנות מוצ"ש) order the work. A person takes at most one group per
