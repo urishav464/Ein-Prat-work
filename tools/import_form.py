@@ -10,7 +10,8 @@
                                  ל«לא זמין בשלב», ומעבירי החבורות — «לא בקבוצה: ארוחת צהריים שבת»
   data/preps/<תאריך>.csv      — ההכנות, ארוחת צהריים שישי, מספרי המנקים וארוחת מוצ"ש
   data/menu/<תאריך>.csv       — קייטרינג, סלטי קייטרינג, הסלטים שלפני הארוחה וחלוקת העוגות
-  data/schedule/<תאריך>.csv   — מי מעביר טיש/חבורות/שיעור, סעודה שלישית, ערב חברה, מקומות
+  data/schedule/<תאריך>.csv   — מי מעביר טיש/חבורות/שיעור, סעודה שלישית (ואצל שקד — גם היציאה
+                                 רבע שעה לפני), ערב חברה, מקומות
                                  (רק שורות «מקור=טופס» מוחלפות; שורות שהוספו ידנית נשמרות)
   data/recipes/<תאריך>.csv    — המתכונים שצורפו (ומנה חדשה נכנסת גם ל-data/recipes.csv)
   data/weeks.csv               — שבת משותפת, וחלון התנורים שלנו
@@ -32,6 +33,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 SECTION = re.compile(r"^—\s*(.+?)\s*—$")
 TIME = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+SHAKED = "אצל שקד"
+SHAKED_WALK = "יציאה לסעודה שלישית אצל שקד"
 PREP_FIELDS = ["הכנה", "יום", "שעה", "עוגן", "משימה", "כמות", "אנשים", "אחראי", "עזרה", "מתכון", "הערה"]
 MENU_FIELDS = ["ארוחה", "מנה", "כמות", "הערה"]
 SCHED_FIELDS = ["יום", "אירוע", "מקום", "בסיס", "היסט", "עיגול", "הערה", "פעולה", "מקור"]
@@ -85,7 +88,7 @@ def parse(text):
 
 
 def fields(line):
-    """«חלות · כמה: 10 ק"ג · אנשים: 5» → ("חלות", {כמה: ..., אנשים: ...})."""
+    """«חלות · כמות: 10 ק"ג · אנשים: 5» → ("חלות", {כמות: ..., אנשים: ...})."""
     parts = [p.strip() for p in line.split(" · ")]
     return parts[0], kv(" · ".join(parts[1:]))
 
@@ -203,8 +206,8 @@ def build(msg, warn):
 
     # --- לו"ז: מי מעביר, אירועים אופציונליים, מקומות --------------------------------
     sched = []
-    def event(day, name, place="", when="", note=""):
-        sched.append({"יום": day, "אירוע": name, "מקום": place, "בסיס": "קבוע" if when else "",
+    def event(day, name, place="", when="", note="", base=""):
+        sched.append({"יום": day, "אירוע": name, "מקום": place, "בסיס": base or ("קבוע" if when else ""),
                       "היסט": when, "עיגול": "", "הערה": note, "פעולה": "", "מקור": FORM})
 
     tish = keyed(sec.get("טיש", []))
@@ -238,9 +241,11 @@ def build(msg, warn):
         if on:
             people = [who(x) or x for x in names_of(s.get(people_key))]
             note = " · ".join(x for x in (s.get("מה", ""), (people_key + ": " + ", ".join(people)) if people else "") if x)
-            event(day, name, when=clock(s.get("שעה"), name), note=note)
-        return on
-    seuda = optional("סעודה שלישית", "שבת", "סעודה שלישית", "מעבירים")
+            event(day, name, place=s.get("מקום", ""), when=clock(s.get("שעה"), name), note=note)
+        return on, s.get("מקום", "")
+    seuda, seuda_at = optional("סעודה שלישית", "שבת", "סעודה שלישית", "מעבירים")
+    if seuda and seuda_at == SHAKED:                    # הליכה לשקד — יוצאים רבע שעה לפני
+        event("שבת", SHAKED_WALK, base="סעודה שלישית", when="-15", note="הליכה לסעודה השלישית אצל שקד")
     optional("ערב חברה", "שישי", "ערב חברה", "מכינים")
 
     if msg["shared"]:
@@ -265,8 +270,11 @@ def build(msg, warn):
         if n:
             nofri[n] = line.split(" · ", 1)[1].strip() if " · " in line else ""
     leave = {who(n) for n in sec.get('עוזבים לפני מוצ"ש', [])} - {None}
-    for raw in sec.get("לא ברשימה", []):
-        if roster.match_name(raw, names)[0] is None:
+    left = roster.left_names()
+    for raw in sec.get("לא ברשימה", []):                 # קטע מהטופס הישן — כבר לא בטופס
+        if " ".join(raw.split()) in left:
+            warn("«{}» עזב/ה את המדרשה (data/left.csv) — לא נכנס/ת".format(raw))
+        elif roster.match_name(raw, names)[0] is None:
             warn("«{}» לא ברשימת החניכים — מוסיפים ל-data/students.csv ומריצים שוב".format(raw))
     havurot_all = last_havurot()
     present = [n for n in names if n not in out]
@@ -320,9 +328,12 @@ def build(msg, warn):
         name, d = fields(line)
         if not d.get("אנשים", "").isdigit() or int(d["אנשים"]) < 1:
             warn("ל«{}» חסר כמה אנשים".format(name))
-        prep(הכנה=name, שעה="-60" if name.startswith("חלות") else "", כמות=d.get("כמה", ""),
+        note = "\n".join(x for x in (d.get("הערה", ""),
+                                      "המצרכים נמצאים ב: " + d["מצרכים נמצאים"] if d.get("מצרכים נמצאים") else "",
+                                      "בסיום מאחסנים ב: " + d["אחסון"] if d.get("אחסון") else "") if x)
+        prep(הכנה=name, שעה="-60" if name.startswith("חלות") else "", כמות=d.get("כמות") or d.get("כמה", ""),
              אנשים=d.get("אנשים", ""), אחראי=lead(d.get("אחראי", ""), name), עזרה=d.get("עזרה", ""),
-             מתכון=dish(name), הערה=d.get("הערה", ""))
+             מתכון=dish(name), הערה=note)
     for line in sec.get("ארוחת צהריים שישי", []):
         d = kv(line)
         prep(הכנה=bw.FRIDAY_LUNCH, כמות=d.get("מה", ""), אנשים=d.get("אנשים", "2"),
@@ -404,7 +415,8 @@ def main():
         print("  · {:<22} {:<16} {} אנשים{}{}".format(p["הכנה"], p["כמות"] or p["משימה"][:16], p["אנשים"],
               " · אחראי: " + p["אחראי"] if p["אחראי"] else "", " · עזרה: " + p["עזרה"] if p["עזרה"] else ""))
     for s in sched:
-        print("  ◷ {} {}{}{}".format(s["יום"], s["אירוע"], " " + s["היסט"] if s["היסט"] else "",
+        when = s["היסט"] if s["בסיס"] in ("", "קבוע") else "{} {}".format(s["בסיס"], s["היסט"])
+        print("  ◷ {} {}{}{}".format(s["יום"], s["אירוע"], " " + when if when else "",
                                     " — " + " · ".join(x for x in (s["מקום"], s["הערה"]) if x) if s["מקום"] or s["הערה"] else ""))
     for label, key in (("שינויים בלו\"ז", 'לו"ז'), ("הערות", "הערות")):
         for line in msg["sections"].get(key, []):

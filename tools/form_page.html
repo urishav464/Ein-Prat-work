@@ -54,11 +54,13 @@ section.step > h2 .n{font-size:14px;color:var(--accent-ink);background:var(--acc
   min-width:26px;height:26px;display:inline-grid;place-items:center}
 .hint{color:var(--muted);font-size:14px;margin:-6px 0 0}
 .panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px}
-label.f{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:500}
+label.f,div.f{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:500}
 label.f small{font-weight:400;color:var(--muted)}
+label.f .lab{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .row3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
-@media (max-width:520px){.row2,.row3{grid-template-columns:1fr}}
+.row3eq{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width:520px){.row2,.row3,.row3eq{grid-template-columns:1fr}}
 input,select,textarea{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);
   border-radius:8px;padding:9px 11px;width:100%;min-width:0}
 textarea{min-height:64px;resize:vertical}
@@ -183,11 +185,11 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
       <p class="hint" style="margin-top:12px">את המקום לקבלת שבת ישראלית ולארוחת הערב מתאמים עם שנה א'. שעה — רק אם שונה מהלו"ז.</p>
       <div class="row2">
         <label class="f">קבלת שבת ישראלית — איפה<input id="pl-kabbalat" placeholder="לדוגמה: הדק של שנה א'"></label>
-        <label class="f">שעה <small>(לא חובה)</small><input id="tm-kabbalat" type="time"></label>
+        <label class="f"><span class="lab">שעה <small>(לא חובה)</small></span><input id="tm-kabbalat" type="time"></label>
       </div>
       <div class="row2">
         <label class="f">ארוחת הערב — איפה<input id="pl-dinner" placeholder="חדר אוכל"></label>
-        <label class="f">שעה <small>(לא חובה)</small><input id="tm-dinner" type="time"></label>
+        <label class="f"><span class="lab">שעה <small>(לא חובה)</small></span><input id="tm-dinner" type="time"></label>
       </div>
     </div>
     <label class="f">מי ממלא/ת
@@ -205,9 +207,6 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
     <button type="button" id="all-in">כל מי שלא סומן — בשבת</button>
   </div>
   <div id="roster"></div>
-  <label class="f">מי שלא ברשימה <small>שם בכל שורה</small>
-    <textarea id="extra" placeholder="לדוגמה: חניך חדש שהצטרף השבוע"></textarea>
-  </label>
 </section>
 
 <section class="step" id="s3">
@@ -223,13 +222,13 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
       <label class="f">אחראי/ת<select id="lunch-lead" class="lead"></select></label>
     </div>
     <details class="recipe" id="lunch-recipe"><summary>מצרכים ומתכון</summary>
-      <label class="f">מצרכים <small>שורה לכל מצרך</small><textarea id="lunch-ing"></textarea></label>
+      <label class="f"><span class="lab">מצרכים <small>שורה לכל מצרך</small></span><textarea id="lunch-ing"></textarea></label>
       <label class="f">אופן ההכנה<textarea id="lunch-steps"></textarea></label>
     </details>
   </div>
   <div class="panel" id="clean-fri-box" hidden>
     <h3 style="font-size:16px">ניקיון חדר האוכל בשישי</h3>
-    <label class="f">כמה מנקים <small id="clean-fri-when"></small>
+    <label class="f"><span class="lab">כמה מנקים <small id="clean-fri-when"></small></span>
       <input id="clean-fri" type="number" min="1" inputmode="numeric"></label>
   </div>
 </section>
@@ -241,7 +240,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
     <h3 style="font-size:16px">מהקייטרינג</h3>
     <label class="f">ארוחת ערב<input id="m-dinner" placeholder="לדוגמה: פרגית בגריל, קוסקוס, מוקפץ טבעוני"></label>
     <label class="f">ארוחת צהריים<input id="m-lunch" placeholder="לדוגמה: כתף בקר, אורז לבן, תפו״א ובטטה"></label>
-    <label class="f">סלטי קייטרינג <small>בנוסף לסלטים שאנחנו מכינים</small><input id="m-salads" placeholder="לדוגמה: סלק אדום, ירקות מוחמצים, חומוס"></label>
+    <label class="f"><span class="lab">סלטי קייטרינג <small>בנוסף לסלטים שאנחנו מכינים</small></span><input id="m-salads" placeholder="לדוגמה: סלק אדום, ירקות מוחמצים, חומוס"></label>
   </div>
   <div class="panel">
     <h3 style="font-size:16px">סלטים שמכינים לפני הארוחה</h3>
@@ -278,11 +277,11 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
   </div>
   <div class="panel">
     <h3 style="font-size:16px">חבורות אחרי הקידוש</h3>
-    <p class="hint" style="margin:0">2–3 חניכים שמעבירים את החבורות. הם לא ישובצו לתורנות ארוחת הצהריים.</p>
-    <div class="row3">
+    <p class="hint" style="margin:0">2 או 3 חניכים שמעבירים את החבורות — השלישי לא חובה. הם לא ישובצו לתורנות ארוחת הצהריים.</p>
+    <div class="row3eq">
       <select id="hav-1" class="present" aria-label="מעביר/ה 1"></select>
       <select id="hav-2" class="present" aria-label="מעביר/ה 2"></select>
-      <select id="hav-3" class="present" aria-label="מעביר/ה 3"></select>
+      <select id="hav-3" class="present" data-blank="— שלישי/ת (לא חובה) —" aria-label="מעביר/ה 3 (לא חובה)"></select>
     </div>
     <label class="check"><input type="checkbox" id="havurot-later"> עוד לא נקבע — נעדכן את אורי</label>
   </div>
@@ -313,13 +312,19 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
       <label><input type="radio" name="seuda" data-r="seuda" value="כן"> יש סעודה שלישית</label>
     </div>
     <div id="seuda-box" hidden style="display:flex;flex-direction:column;gap:12px">
+      <div class="f"><span class="lab">איפה</span>
+        <div class="seg" role="radiogroup" aria-label="איפה הסעודה השלישית">
+          <label><input type="radio" name="seuda-at" data-r="seuda-at" value="בקמפוס"> בקמפוס</label>
+          <label><input type="radio" name="seuda-at" data-r="seuda-at" value="אצל שקד"> אצל שקד</label>
+        </div>
+      </div>
+      <p class="fixed-note" id="shaked-note" style="margin:0" hidden></p>
       <label class="f">מה עושים<input id="seuda-what" placeholder="לדוגמה: דבר תורה ושירה"></label>
       <div class="row3">
-        <label class="f">שעה <small id="seuda-default"></small><input id="seuda-time" type="time"></label>
+        <label class="f"><span class="lab">שעה <small id="seuda-default"></small></span><input id="seuda-time" type="time"></label>
         <label class="f">מי מעביר/ה<select id="seuda-by-1" class="present"></select></label>
         <label class="f">ועוד<select id="seuda-by-2" class="present"></select></label>
       </div>
-      <p class="hint" style="margin:0">העוגות לסעודה שלישית — בשלב 4.</p>
     </div>
   </div>
   <div class="panel">
@@ -331,7 +336,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
     <div id="chevra-box" hidden style="display:flex;flex-direction:column;gap:12px">
       <label class="f">מה עושים<input id="chevra-what"></label>
       <div class="row3">
-        <label class="f">שעה <small id="chevra-default"></small><input id="chevra-time" type="time"></label>
+        <label class="f"><span class="lab">שעה <small id="chevra-default"></small></span><input id="chevra-time" type="time"></label>
         <label class="f">מי מכין/ה<select id="chevra-by-1" class="present"></select></label>
         <label class="f">ועוד<select id="chevra-by-2" class="present"></select></label>
       </div>
@@ -346,16 +351,16 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
       <label class="f" id="clean-bm-box" hidden>ניקיון בית המדרש — כמה<input id="clean-bm" type="number" min="1" inputmode="numeric"></label>
       <label class="f" id="clean-ha-box" hidden>ניקיון חדר האוכל — כמה<input id="clean-ha" type="number" min="1" inputmode="numeric"></label>
     </div>
-    <label class="f">ארוחת ערב במוצ"ש — מה מבשלים <small>5 מכינים</small>
+    <label class="f"><span class="lab">ארוחת ערב במוצ"ש — מה מבשלים <small>5 מכינים</small></span>
       <input id="z-dinner" placeholder="לדוגמה: פסטה ברוטב עגבניות">
     </label>
     <details class="recipe" id="z-recipe"><summary>מצרכים ומתכון</summary>
-      <label class="f">מצרכים <small>שורה לכל מצרך</small><textarea id="z-ing"></textarea></label>
+      <label class="f"><span class="lab">מצרכים <small>שורה לכל מצרך</small></span><textarea id="z-ing"></textarea></label>
       <label class="f">אופן ההכנה<textarea id="z-steps"></textarea></label>
     </details>
   </div>
   <div class="panel">
-    <label class="f">שינויים נוספים בלו"ז <small>רק מה שלא נכנס למעלה: אירוע שזז, נוסף או בוטל</small>
+    <label class="f"><span class="lab">שינויים נוספים בלו"ז <small>רק מה שלא נכנס למעלה: אירוע שזז, נוסף או בוטל</small></span>
       <textarea id="sched"></textarea>
     </label>
   </div>
@@ -396,9 +401,9 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
 const D = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
 const KEY = 'ein-prat-shabbat-form-v2', OLD_KEY = 'ein-prat-shabbat-form-v1';
-const OTHER = '__other';
+const OTHER = '__other', SHAKED = 'אצל שקד';
 const STATES = [["", "— לבחור —"], ["in", "✓ בשבת"], ["nofri", "לא בשישי בבוקר"], ["leave", "עוזב/ת לפני מוצ״ש"], ["out", "✗ לא בשבת"]];
-const FIELDS = ["filler","extra","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","lunch-what","lunch-ppl","lunch-lead",
+const FIELDS = ["filler","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","lunch-what","lunch-ppl","lunch-lead",
   "lunch-ing","lunch-steps","clean-fri","m-dinner","m-lunch","m-salads","m-tish","m-kiddush","m-seuda","tish-by","tish-other",
   "hav-1","hav-2","hav-3","shiur-time","shiur-by","shiur-other","shiur-place","seuda-what","seuda-time","seuda-by-1",
   "seuda-by-2","chevra-what","chevra-time","chevra-by-1","chevra-by-2","clean-bm","clean-ha","z-dinner","z-ing","z-steps",
@@ -407,8 +412,8 @@ const CHECKS = ["havurot-later"];
 // מה ששייך לשבת מסוימת — מתאפס כשמחליפים תאריך
 const WEEK = ["shared","ovens","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","tish-by","tish-other","tish-ok","hav-1","hav-2",
   "hav-3","havurot-later","shiur","shiur-time","shiur-by","shiur-other","shiur-place","shiur-ok","seuda","seuda-what","seuda-time",
-  "seuda-by-1","seuda-by-2","chevra","chevra-what","chevra-time","chevra-by-1","chevra-by-2","m-seuda"];
-const DEFAULTS = {"clean-fri":"12","clean-bm":"12","clean-ha":"12","pl-dinner":"חדר אוכל","shiur-place":"בית המדרש",
+  "seuda-at","seuda-by-1","seuda-by-2","chevra","chevra-what","chevra-time","chevra-by-1","chevra-by-2","m-seuda"];
+const DEFAULTS = {"seuda-at":"בקמפוס","clean-fri":"12","clean-bm":"12","clean-ha":"12","pl-dinner":"חדר אוכל","shiur-place":"בית המדרש",
   "chevra-what":"משחק, ולהביא משחקי קופסא לחדר האוכל"};
 const DEFAULT_SALADS = ["סלט כרוב מרענן", "סלט טחינה ביתית"];
 const blankSalads = () => ({eve: DEFAULT_SALADS.map(name => ({name, ing:'', steps:''})),
@@ -488,10 +493,10 @@ $('all-in').addEventListener('click', () => {
 const people = statuses => D.students.map(s => s.name).filter(n => statuses.includes(state.att[n]));
 const fridayPeople = () => people(['in', 'leave']);           // אחראים על הכנות — בשישי בבוקר
 const shabbatPeople = () => people(['in', 'nofri', 'leave']);  // חבורות, סעודה שלישית, ערב חברה
-function options(list, cur){
+function options(list, cur, blank){
   const names = list.slice();
   if (cur && !names.includes(cur)) names.unshift(cur);
-  return '<option value="">— לבחור —</option>' + names.map(n => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  return `<option value="">${esc(blank || '— לבחור —')}</option>` + names.map(n => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('');
 }
 function staffOptions(cur){
   const d = cur_(), staff = d ? d.staff : [];
@@ -507,7 +512,7 @@ function selValue(s){
 }
 function refreshSelects(){
   document.querySelectorAll('select.lead').forEach(s => s.innerHTML = options(fridayPeople(), selValue(s)));
-  document.querySelectorAll('select.present').forEach(s => s.innerHTML = options(shabbatPeople(), selValue(s)));
+  document.querySelectorAll('select.present').forEach(s => s.innerHTML = options(shabbatPeople(), selValue(s), s.dataset.blank));
   document.querySelectorAll('select.staff').forEach(s => s.innerHTML = staffOptions(selValue(s)));
 }
 
@@ -533,7 +538,7 @@ function refresh(){
   }
   $('shared-box').hidden = state.shared !== 'כן';
   $('separate-info').hidden = state.shared !== 'לא';
-  $('prep-hint').textContent = 'אתם מחליטים מה מכינים. לכל הכנה: כמה, כמה אנשים צריך, ומי אחראי/ת. ' +
+  $('prep-hint').textContent = 'אתם מחליטים מה מכינים. לכל הכנה: כמות, כמה אנשים צריך, מי אחראי/ת, איפה המצרכים ואיפה מאחסנים בסיום. ' +
     (late ? 'ההכנות מתחילות ב-11:00 (התנורים שלנו מ-11:00); החלות ב-10:00, ארוחת הצהריים מתבשלת מ-9:00.'
           : 'ההכנות מתחילות ב-8:00, החלות ב-7:00.') + ' מתכון הוא בונוס.';
   document.querySelectorAll('.help-label').forEach(el => el.textContent = helpLabel(k));
@@ -549,13 +554,18 @@ function refresh(){
   $('chevra-box').hidden = state.chevra !== 'כן';
   $('tish-other-box').hidden = state['tish-by'] !== OTHER;
   $('shiur-other-box').hidden = state['shiur-by'] !== OTHER;
-  $('seuda-default').textContent = d ? `(ריק = ${timeOf('שבת|סעודה שלישית')})` : '';
+  const shaked = state['seuda-at'] === SHAKED, seudaAt = mins(clean(state['seuda-time']) || timeOf('שבת|סעודה שלישית'));
+  $('seuda-default').textContent = d ? `(ריק = ${timeOf('שבת|סעודה שלישית')}` +
+    (shaked && seudaAt !== null && !clean(state['seuda-time']) ? ` · יוצאים ${hhmm(seudaAt - 15)}` : '') + ')' : '';
+  $('shaked-note').hidden = !shaked;
+  $('shaked-note').textContent = 'יוצאים לשקד רבע שעה לפני הסעודה' +
+    (seudaAt !== null ? ` — ב-${hhmm(seudaAt - 15)}` : '') + ', בגלל ההליכה. זה נכנס ללו"ז.';
   $('chevra-default').textContent = d ? `(ריק = ${hhmm(tishAt() === null ? null : tishAt() + 75)})` : '';
   $('shiur-limit').textContent = d ? `לפני צאת השבת (${timeOf('שבת|הבדלה')}) — ולפני הסעודה השלישית, אם יש.` : '';
 }
 
 // ---- preps ---------------------------------------------------------------
-function blankPrep(){ return {what:'', qty:'', ppl:'', lead:'', help:'', note:'', ing:'', steps:''}; }
+function blankPrep(){ return {what:'', qty:'', ppl:'', lead:'', help:'', note:'', where:'', store:'', ing:'', steps:''}; }
 function renderPreps(){
   $('preps').innerHTML = state.preps.map((p, i) => `
   <div class="prep" data-i="${i}">
@@ -563,16 +573,20 @@ function renderPreps(){
       <button type="button" class="ghost" data-remove="${i}" aria-label="הסרת הכנה ${i + 1}">הסרה</button></div>
     <div class="row2">
       <label class="f">מה מכינים<input id="prep-${i}-what" data-k="what" list="dishes" value="${esc(p.what)}" placeholder="חלות, עוגת דבש, סלט…"></label>
-      <label class="f">כמה <small>ק״ג קמח, תבניות, יחידות</small><input id="prep-${i}-qty" data-k="qty" value="${esc(p.qty)}" placeholder="10 ק״ג קמח"></label>
+      <label class="f"><span class="lab">כמות <small>ק״ג קמח, תבניות, יחידות</small></span><input id="prep-${i}-qty" data-k="qty" value="${esc(p.qty)}" placeholder="10 ק״ג קמח"></label>
     </div>
     <div class="row3">
       <label class="f">אחראי/ת<select id="prep-${i}-lead" data-k="lead" class="lead">${options(fridayPeople(), p.lead)}</select></label>
       <label class="f">כמה אנשים<input id="prep-${i}-ppl" data-k="ppl" type="number" min="1" inputmode="numeric" value="${esc(p.ppl)}"></label>
       <label class="f"><span class="help-label">${helpLabel(kind())}</span><input id="prep-${i}-help" data-k="help" type="number" min="0" inputmode="numeric" value="${esc(p.help)}" placeholder="0"></label>
     </div>
-    <label class="f">הערה <small>לדוגמה: לסמן 3 פסים לסעודה שלישית</small><input id="prep-${i}-note" data-k="note" value="${esc(p.note)}"></label>
+    <label class="f"><span class="lab">הערה <small>לדוגמה: לעטוף בנייר אלומיניום ולרשום ״שנה ב׳״</small></span><input id="prep-${i}-note" data-k="note" value="${esc(p.note)}"></label>
+    <div class="row2">
+      <label class="f">איפה המצרכים<input id="prep-${i}-where" data-k="where" value="${esc(p.where)}" placeholder="לדוגמה: המחסן ליד המטבח"></label>
+      <label class="f">איפה מאחסנים בסיום<input id="prep-${i}-store" data-k="store" value="${esc(p.store)}" placeholder="לדוגמה: המקרר הגדול בחדר האוכל"></label>
+    </div>
     <details class="recipe"${p.ing || p.steps ? ' open' : ''}><summary>מתכון (בונוס)</summary>
-      <label class="f">מצרכים <small>שורה לכל מצרך</small><textarea id="prep-${i}-ing" data-k="ing">${esc(p.ing)}</textarea></label>
+      <label class="f"><span class="lab">מצרכים <small>שורה לכל מצרך</small></span><textarea id="prep-${i}-ing" data-k="ing">${esc(p.ing)}</textarea></label>
       <label class="f">אופן ההכנה<textarea id="prep-${i}-steps" data-k="steps">${esc(p.steps)}</textarea></label>
     </details>
   </div>`).join('');
@@ -601,7 +615,7 @@ function renderSalads(){
           <button type="button" class="ghost" data-sremove>הסרה</button></div>` +
         (known ? `<span class="ok-note">✓ יש מתכון: ${esc(known)}</span>` : clean(s.name) ?
           `<details class="recipe"${s.ing || s.steps ? ' open' : ''}><summary>מתכון (בונוס) — סלט חדש</summary>
-            <label class="f">מצרכים <small>שורה לכל מצרך</small><textarea data-s="ing">${esc(s.ing)}</textarea></label>
+            <label class="f"><span class="lab">מצרכים <small>שורה לכל מצרך</small></span><textarea data-s="ing">${esc(s.ing)}</textarea></label>
             <label class="f">אופן ההכנה<textarea data-s="steps">${esc(s.steps)}</textarea></label></details>` : '') +
         `</div>`; }).join('');
   });
@@ -621,7 +635,7 @@ document.querySelectorAll('[data-sadd]').forEach(b => b.addEventListener('click'
 
 // ---- simple fields, radios, checkboxes & draft --------------------------------
 FIELDS.forEach(id => { const el = $(id); const ev = el.tagName === 'SELECT' ? 'change' : 'input';
-  el.addEventListener(ev, () => { state[id] = el.value; if (el.tagName === 'SELECT') refresh(); save(); }); });
+  el.addEventListener(ev, () => { state[id] = el.value; if (el.tagName === 'SELECT' || id === 'seuda-time') refresh(); save(); }); });
 CHECKS.forEach(id => $(id).addEventListener('change', () => { state[id] = $(id).checked; save(); }));
 document.querySelectorAll('input[type=radio][data-r]').forEach(r => r.addEventListener('change', () => {
   state[r.dataset.r] = r.value;
@@ -643,7 +657,7 @@ function load(){
     const o = JSON.parse(localStorage.getItem(OLD_KEY) || 'null');
     if (o && o.att) {
       const keep = {att: o.att, why: o.why || {}, preps: o.preps || []};
-      ["filler","extra","lunch-what","lunch-ppl","lunch-lead","m-dinner","m-lunch","m-salads","m-tish","m-kiddush",
+      ["filler","lunch-what","lunch-ppl","lunch-lead","m-dinner","m-lunch","m-salads","m-tish","m-kiddush",
        "z-dinner","sched","notes"].forEach(k => { if (o[k] !== undefined) keep[k] = o[k]; });
       return keep;
     }
@@ -672,7 +686,6 @@ function message(){
   L.push('— לא בשבת —', ...by('out'));
   L.push('— לא בשישי —', ...by('nofri').map(n => state.why[n] ? `${n} · ${clean(state.why[n])}` : n));
   L.push('— עוזבים לפני מוצ"ש —', ...by('leave'));
-  L.push('— לא ברשימה —', ...block(state.extra));
   if (shared) L.push('— מקומות —', `קבלת שבת ישראלית: ${clean(state['pl-kabbalat'])} · שעה: ${clean(state['tm-kabbalat'])}`,
                      `סעודת שבת: ${clean(state['pl-dinner'])} · שעה: ${clean(state['tm-dinner'])}`);
   L.push('— טיש —', `מעביר/ה: ${who('tish-by', 'tish-other') || 'טרם'} · סגרנו: ${state['tish-ok'] === 'כן' ? 'כן' : 'לא'}`);
@@ -681,6 +694,7 @@ function message(){
   if (state.shiur === 'כן') L.push('— שיעור —', [`שעה: ${clean(state['shiur-time'])}`, `מעביר/ה: ${who('shiur-by', 'shiur-other')}`,
     `מקום: ${clean(state['shiur-place'])}`, `סגרנו: ${state['shiur-ok'] === 'כן' ? 'כן' : 'לא'}`].join(' · '));
   L.push('— סעודה שלישית —', state.seuda === 'כן' ? [`קורה: כן`, `שעה: ${clean(state['seuda-time'])}`,
+    ...(state['seuda-at'] === SHAKED ? [`מקום: ${SHAKED}`] : []),
     `מה: ${clean(state['seuda-what'])}`, `מעבירים: ${list(['seuda-by-1', 'seuda-by-2']).join(', ')}`].join(' · ') : 'קורה: לא');
   L.push('— ערב חברה —', state.chevra === 'כן' ? [`קורה: כן`, `שעה: ${clean(state['chevra-time'])}`,
     `מה: ${clean(state['chevra-what'])}`, `מכינים: ${list(['chevra-by-1', 'chevra-by-2']).join(', ')}`].join(' · ') : 'קורה: לא');
@@ -690,11 +704,13 @@ function message(){
     if (name && (block(ing).length || block(steps).length) && !recipes.some(r => r[0] === name)) recipes.push([name, ing, steps]); };
   state.preps.filter(p => clean(p.what)).forEach(p => {
     const parts = [clean(p.what)];
-    if (clean(p.qty)) parts.push('כמה: ' + clean(p.qty));
+    if (clean(p.qty)) parts.push('כמות: ' + clean(p.qty));
     parts.push('אנשים: ' + clean(p.ppl));
     if (p.lead) parts.push('אחראי: ' + p.lead);
     if (+p.help > 0) parts.push('עזרה: ' + (+p.help));
     if (clean(p.note)) parts.push('הערה: ' + clean(p.note));
+    if (clean(p.where)) parts.push('מצרכים נמצאים: ' + clean(p.where));
+    if (clean(p.store)) parts.push('אחסון: ' + clean(p.store));
     L.push(parts.join(' · '));
     recipe(p.what, p.ing, p.steps);
   });
@@ -732,7 +748,7 @@ function problems(){
   const preps = state.preps.filter(p => clean(p.what));
   if (!preps.length) out.push(['s3', 'לפחות הכנה אחת']);
   preps.forEach(p => { if (!(+p.ppl > 0)) out.push(['s3', `כמה אנשים צריך ל«${clean(p.what)}»`]); });
-  state.preps.forEach((p, i) => { if (!clean(p.what) && (clean(p.qty) || p.ppl || p.lead || +p.help > 0 || clean(p.note) ||
+  state.preps.forEach((p, i) => { if (!clean(p.what) && (clean(p.qty) || p.ppl || p.lead || +p.help > 0 || clean(p.note) || clean(p.where) || clean(p.store) ||
     block(p.ing).length || block(p.steps).length)) out.push(['s3', `להכנה ${i + 1} חסר «מה מכינים»`]); });
   if (!clean(state['lunch-what'])) out.push(['s3', 'מה מבשלים לארוחת צהריים שישי']);
   [['eve', 'לארוחת הערב'], ['noon', 'לארוחת הצהריים']].forEach(([m, t]) => {

@@ -204,7 +204,7 @@ h1{font-size:26pt}
 th.hour,td.hour{width:20mm;text-align:center;font-family:'Rubik',sans-serif;font-weight:700;font-size:12pt}
 td.hour .day{display:block;font-family:'Heebo',sans-serif;font-weight:400;font-size:9pt;color:#5A6572;margin-bottom:.5mm}
 td.task{font-size:12pt}
-td.task .note{display:block;margin-top:1mm;font-size:9.5pt;color:#5A6572}
+td.task .note{display:block;margin-top:1mm;font-size:9.5pt;color:#5A6572;white-space:pre-line}
 th.names,td.names{width:60mm;font-size:11pt}
 .empty{margin-top:8mm;text-align:center;color:#8A94A0;font-size:12pt}
 .recipe{margin-top:7mm;border:1px solid #1F2430;padding:4mm 5mm;page-break-inside:avoid}

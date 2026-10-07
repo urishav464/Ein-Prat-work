@@ -88,12 +88,13 @@ def demo_state(students, kind, shabbat):
     att[names[10]] = att[names[11]] = "nofri"
     att[names[20]] = "leave"
     state = {"date": shabbat["iso"], "filler": names[30], "att": att,
-             "why": {names[10]: "שמירה בליל חמישי", names[11]: "מגיע ב-12:00"}, "extra": "",
+             "why": {names[10]: "שמירה בליל חמישי", names[11]: "מגיע ב-12:00"},
              "preps": [
                  {"what": "חלות", "qty": '8 ק"ג קמח', "ppl": "4", "lead": names[31], "help": "6", "note": "",
-                  "ing": "", "steps": ""},
+                  "where": "המחסן ליד המטבח", "store": "", "ing": "", "steps": ""},
                  {"what": "עוגת גזר", "qty": "6 תבניות", "ppl": "3", "lead": names[32], "help": "",
-                  "note": "לסמן 2 תבניות לסעודה שלישית", "ing": "1 ק\"ג גזר\n6 ביצים\n2 כוסות קמח",
+                  "note": "לסמן 2 תבניות לסעודה שלישית",
+                  "where": "", "store": "המקרר הגדול בחדר האוכל", "ing": "1 ק\"ג גזר\n6 ביצים\n2 כוסות קמח",
                   "steps": "מגררים את הגזר\nמערבבים הכול\nאופים 40 דקות ב-180"}],
              "lunch-what": "שקשוקה ולחם", "lunch-ppl": "3", "lunch-lead": names[33],
              "lunch-ing": "30 ביצים\n2 ק\"ג עגבניות", "lunch-steps": "מטגנים בצל\nמוסיפים עגבניות וביצים",
@@ -112,7 +113,8 @@ def demo_state(students, kind, shabbat):
         seuda = shabbat["times"].get("שבת|סעודה שלישית", "16:00")
         shiur = "{:02d}:{:02d}".format(*divmod(int(seuda[:2]) * 60 + int(seuda[3:]) - 75, 60))
         state.update({"shared": "לא", "shiur": "כן", "shiur-time": shiur, "shiur-by": staff[0], "shiur-ok": "כן",
-                      "seuda": "כן", "seuda-what": "דבר תורה ושירה", "seuda-by-1": names[42]})
+                      "seuda": "כן", "seuda-at": "אצל שקד", "seuda-what": "דבר תורה ושירה",
+                      "seuda-by-1": names[42]})
     elif kind == "early":
         state.update({"shared": "כן", "ovens": bw.OVENS_EARLY, "pl-kabbalat": "הדק של שנה א'",
                       "clean-ha": "10"})

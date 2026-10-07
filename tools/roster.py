@@ -3,7 +3,9 @@
 
 מזהה אוטומטית כל קובץ .xlsx/.csv ששמו מכיל "חניכ" או "students" (למשל ייצוא של
 טופס גוגל), לוקח את עמודת השמות ומייצר רשימה נקייה. אם אין קובץ — נוצרים
-placeholders, כדי שהמערכת תמשיך לעבוד עד שהרשימה האמיתית תגיע.
+placeholders, כדי שהמערכת תמשיך לעבוד עד שהרשימה האמיתית תגיע. מי שכבר ב-students.csv
+נשאר (עם התוכנית, הצוות וההערות שלו), ומי שב-data/left.csv (עזבו) יוצא — גם אם עדיין
+מופיע בקובץ המקור.
 
     python3 tools/roster.py
 """
@@ -16,7 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 OUT = DATA / "students.csv"
-HEADERS = ["שם", "תוכנית", "קבוצה קבועה", "הערה"]
+LEFT = DATA / "left.csv"
+HEADERS = ["שם", "תוכנית", "צוות שבת", "קבוצה קבועה", "הערה"]
 PLACEHOLDER_COUNT = 40
 
 CANONICAL = {"מישל דויד": "מישל דוד", "מעין דינר": "מעיין רחל דינר",
@@ -119,9 +122,20 @@ def _norm(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def left_names():
+    """מי שעזב את המדרשה (data/left.csv) — לא חוזר לרשימה כשמריצים שוב."""
+    if not LEFT.exists():
+        return set()
+    with LEFT.open(encoding="utf-8-sig", newline="") as fh:
+        return {" ".join(r["שם"].split()) for r in csv.DictReader(fh) if (r.get("שם") or "").strip()}
+
+
 def main():
+    left = left_names()
     names, source = load_names()
+    names = [n for n in names if n not in left]
     elul_names, elul_source = load_names(elul=True)
+    elul_names = [n for n in elul_names if n not in left]
     existing = {}
     if OUT.exists():                                   # שימור נעילות והערות קיימות
         with OUT.open(encoding="utf-8-sig", newline="") as fh:
@@ -130,18 +144,22 @@ def main():
     with OUT.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=HEADERS)
         writer.writeheader()
+        listed = names + [n for n in elul_names if n not in names]
+        kept = [n for n in existing if n not in listed and n not in left]   # כבר ברשימה ולא עזב
         for name, program in ([(n, "מדרשה") for n in names]
-                              + [(n, "אלול") for n in elul_names if n not in names]):
+                              + [(n, "אלול") for n in elul_names if n not in names]
+                              + [(n, "") for n in kept]):
             prev = existing.get(name, {})
             writer.writerow({"שם": name,
-                             "תוכנית": program,
+                             "תוכנית": prev.get("תוכנית") or program,
+                             "צוות שבת": prev.get("צוות שבת", ""),
                              "קבוצה קבועה": prev.get("קבוצה קבועה", ""),
                              "הערה": prev.get("הערה", "")})
 
-    print("{} חניכי מדרשה (מקור: {}) + {} חניכי אלול (מקור: {}) ← {}".format(
+    print("{} חניכי מדרשה (מקור: {}) + {} חניכי אלול (מקור: {}) + {} שכבר ברשימה ← {}".format(
         len(names), source or "placeholder", len(elul_names),
-        elul_source or "—", OUT.relative_to(ROOT)))
-    return names + elul_names
+        elul_source or "—", len(kept), OUT.relative_to(ROOT)))
+    return names + elul_names + kept
 
 
 if __name__ == "__main__":

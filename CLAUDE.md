@@ -39,6 +39,12 @@ no guessing into `data/attendance|preps|menu|schedule|recipes/<date>.csv`, `data
 `import_form.parse/build` together and re-run the end-to-end check (below). Staff names in the form (tish /
 shiur) are the educators of `shabbatot.csv` «אנשי צוות» — never matched against the student roster (first
 names collide); the student Shabbat team is the `צוות שבת` column of `data/students.csv`.
+`data/students.csv` is the roster of record: `roster.py` keeps its rows and fields on a rerun and only drops
+names listed in `data/left.csv` (students who left — remove them from students.csv and add them there).
+The form has no free-text "not on the list" box any more; the importer still reads that section from old
+messages. Prep lines carry `כמות:` (old `כמה:` still read) plus optional `מצרכים נמצאים:` / `אחסון:`,
+folded into the prep's הערה as extra lines (`td.task .note` is `pre-line`). Seuda `מקום: אצל שקד` adds
+the event «יציאה לסעודה שלישית אצל שקד» (base סעודה שלישית, −15).
 `docs/מדריך לאחראי שבת.png` (`tools/guide.py`) is the leaders' checklist.
 
 **Per-date files keep old Shabbatot reproducible** — never edit another date's preps/menu/schedule to
@@ -134,7 +140,8 @@ script writes, grey = computed.
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
-  silently defeat a pin. Elul students are spread across groups by ratio.
+  silently defeat a pin. Elul students are spread across groups by ratio (none left since 7.10 —
+  the ones who stayed are `מדרשה` now).
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
