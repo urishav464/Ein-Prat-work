@@ -29,7 +29,8 @@ pipeline run and exits 1 on any problem; see also "Verifying changes".
 standalone document built by `tools/form_page.py` from `tools/form_page.html` (roster, the closed Shabbatot of
 `data/shabbatot.csv` with their staff, book and computed schedule, and recipe names embedded as JSON) and served
 by **GitHub Pages** from the `Shabbat` branch `/docs` folder: https://urishav464.github.io/Ein-Prat-work/ —
-rebuild and push to update it. (A claude.ai Artifact was tried first: it does not open for people without a
+rebuild and push to update it. `docs/404.html` (static, hand-written) catches any wrong path under the site —
+a link copied with `**`, a comma, a hidden RTL mark, `/docs/` or the old file name — and redirects to the form. (A claude.ai Artifact was tried first: it does not open for people without a
 Claude account; the old artifact now only points to the Pages URL.) The page composes one structured message
 (`📋 טופס שבת v2 · <date>`, header lines `שנה א'` / `תנורים` / `מילא/ה`, then `— section —` blocks whose lines
 are `key: value` pairs joined by ` · `) that the leader sends by WhatsApp. `tools/import_form.py` parses it with
