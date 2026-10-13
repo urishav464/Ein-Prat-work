@@ -9,6 +9,7 @@ and RTL. Work happens on the `Shabbat` branch. See `README.md` for the user-faci
 
 ```bash
 python3 tools/guide.py                           # docs/מדריך לאחראי שבת.pdf|png (student checklist; exits 1 if not one page)
+python3 tools/points.py                          # docs/ניקוד תורנויות.pdf|png (points per duty, from group_plan.csv)
 python3 tools/form_page.py                       # docs/index.html (the leaders' form; --demo separate|early|late --out X for a filled test page)
 python3 tools/import_form.py < message.txt       # the form's message → attendance/preps/menu/weeks (--dry-run)
 python3 tools/shabbat.py 2026-10-16              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
@@ -45,7 +46,12 @@ names listed in `data/left.csv` (students who left — remove them from students
 The form has no free-text "not on the list" box any more; the importer still reads that section from old
 messages. Prep lines carry `כמות:` (old `כמה:` still read) plus optional `מצרכים נמצאים:` / `אחסון:`,
 folded into the prep's הערה as extra lines (`td.task .note` is `pre-line`). Seuda `מקום: אצל שקד` adds
-the event «יציאה לסעודה שלישית אצל שקד» (base סעודה שלישית, −15).
+the event «יציאה לסעודה שלישית אצל שקד» (base סעודה שלישית, −15). The `— דבר תורה —` section (Friday-night
+dvar torah: separate week שקד or a staff member, shared week בנצי or שקד — `DVAR` in the page) is a reminder only:
+the page warns until it's closed and `import_form` prints it and warns; it never reaches the schedule or flyers.
+`tools/points.py` renders the students' points table from `group_plan.csv` + `bw.PREP_POINTS`; every group needs
+a `DUTIES` text there (it exits otherwise), and «only in…» comes from the group's `תנאי` via `TAG_TEXT`. It and
+`guide.py` share `guide.one_page(build, stem)` (measure → fit ≥ MIN_FIT → exactly one page or exit 1).
 `docs/מדריך לאחראי שבת.png` (`tools/guide.py`) is the leaders' checklist.
 
 **Per-date files keep old Shabbatot reproducible** — never edit another date's preps/menu/schedule to
@@ -140,13 +146,20 @@ script writes, grey = computed.
   staff pick for that group), `צוות שבת` (extra staff for that week; standing staff is the
   `צוות שבת` column of `students.csv` — staff become a group's אחראי/ת, count inside the group
   size and stay out of ordinary slots unless pinned), `לא בקבוצה` (groups the ranking never puts
-  this person in — the havurot presenters are kept out of ארוחת צהריים שבת; pins still win; automatic
+  this person in — the havurot presenters are kept out of both Shabbat-lunch groups (`import_form.HAVURA_BLOCK`); pins still win; automatic
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
   silently defeat a pin. Elul students are spread across groups by ratio (none left since 7.10 —
   the ones who stayed are `מדרשה` now).
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
+- **Meal duties are split** (since 13.10): Friday dinner and Shabbat lunch are each `הכנת …` (staff-led, 4
+  including the staff lead) and `פינוי …` (4 students, no staff); Friday lunch and the Motzash dinner stay single.
+  Each פינוי group keeps an hourless whole-group washing task, so pins beyond 4 still get a task and lunch-clear
+  never empties when סעודה שלישית is off. «ארוחת ערב» / «ארוחת צהריים» are still *menu* keys and event names —
+  never search-and-replace them. A pin, «אחראי על» or «לא בקבוצה» naming a group not in the week's plan is
+  reported by `assign_groups.stale_groups` (printed by assign_groups, a warning in `shabbat.py`).
+  `assign_groups.MAX_STAGES` is the `--max-stages` default (the points table quotes it).
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after
@@ -222,10 +235,13 @@ read and written as `utf-8-sig`. Name matching for pasted lists goes through
   task and every group has tasks, tasks only in planned groups, every staff-led group has a leader,
   every task anchored, no leftover `{…}` (task or recipe), every recipe dish in «מתכונים», one-page
   flyers; plus warnings (events without an hour / out of order, a closed Shabbat without tish leader or
-  havurot presenters). Expected diff when re-running 2026-09-18 on a scratch copy: only ניקיונות
-  19:40→19:45 and the two new Motzash events (ארוחת ערב מוצ"ש, כריכה לכריכה).
-  To show a refactor changes nothing, snapshot the tasks/groups/events of an existing date via
-  `export_pdf.read_workbook`, re-run that date and diff.
+  havurot presenters, groups named by a pin / «אחראי על» / «לא בקבוצה» that aren't in the plan).
+  **2026-09-18 no longer reproduces:** since the meal split its pins and «אחראי על» name groups that no longer
+  exist (they are reported and ignored), and those pins were commitments that shaped every stage — the committed
+  `shabbatot/2026-09-18*` and its duty_history rows are the record; never re-run it in place, and don't use
+  `new_shabbat --from` with a file from before the split. To show a refactor changes nothing, run a demo week
+  (form_page `--demo` → import_form → shabbat.py 2026-10-16) before and after, and diff
+  `export_pdf.read_workbook` snapshots.
 - **Re-running a past date is destructive.** It rewrites `shabbatot/<date>*` (already sent to
   the students) and replaces that date's rows in `data/duty_history.csv`. Test on a copy or
   restore afterwards: `git checkout -- shabbatot/<date>.xlsx shabbatot/<date>/ data/duty_history.csv`

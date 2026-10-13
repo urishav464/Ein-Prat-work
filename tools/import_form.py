@@ -7,7 +7,7 @@
 ההודעה נפתחת ב«📋 טופס שבת v2 · <תאריך>», ובנויה מקטעים «— שם —» של שורות «מפתח: ערך»
 מחוברות ב-« · ». הכלי כותב:
   data/attendance/<תאריך>.csv — כל החניכים פחות «לא בשבת»; «לא בשישי» / «עוזבים» הופכים
-                                 ל«לא זמין בשלב», ומעבירי החבורות — «לא בקבוצה: ארוחת צהריים שבת»
+                                 ל«לא זמין בשלב», ומעבירי החבורות — «לא בקבוצה» להכנת ולפינוי ארוחת הצהריים בשבת
   data/preps/<תאריך>.csv      — ההכנות, ארוחת צהריים שישי, מספרי המנקים וארוחת מוצ"ש
   data/menu/<תאריך>.csv       — קייטרינג, סלטי קייטרינג, הסלטים שלפני הארוחה וחלוקת העוגות
   data/schedule/<תאריך>.csv   — מי מעביר טיש/חבורות/שיעור, סעודה שלישית (ואצל שקד — גם היציאה
@@ -42,7 +42,8 @@ WEEK_FIELDS = ["תאריך", "שבת משותפת", "תנורים", "הערה"]
 FORM = "טופס"                                    # «מקור» של שורות לו"ז שהייבוא כותב
 FRIDAY = "הכנות שישי;תורנות שישי"
 MOTZASH = bw.STAGES[-1]
-HAVURA_BLOCK = "ארוחת צהריים שבת"                # מעבירי החבורות (11:45) לא בעריכת השולחן
+# מעבירי החבורות לא בתורנות ארוחת הצהריים בשבת — לא בהכנה (11:45, עריכת השולחן) וגם לא בפינוי
+HAVURA_BLOCK = ("הכנת ארוחת צהריים שבת", "פינוי ארוחת צהריים שבת")
 MOTZASH_DINNER = 'ארוחת ערב מוצ"ש'
 DEFAULT_CLEANERS = "12"
 CLEANING = {"חדר האוכל בשישי": (bw.FRIDAY_DINING, "שישי"),
@@ -217,6 +218,16 @@ def build(msg, warn):
     if tish_by:
         event("שישי", "טיש", note="מעביר/ה: " + tish_by)
 
+    # דבר תורה בערב שבת — רק תזכורת לסגור לפני השבת: לא נכנס ללו"ז, לפליירים או לשיבוץ
+    dvar = keyed(sec.get("דבר תורה", []))
+    dvar_by = (dvar.get("נותן/ת") or "").strip()
+    if dvar_by in ("", "טרם"):
+        dvar_by = ""
+        warn("עוד לא נקבע מי נותן את דבר התורה בערב שבת" if "דבר תורה" in sec else
+             "אין בהודעה דבר תורה בערב שבת (טופס ישן?) — לברר מי נותן")
+    elif dvar.get("סגרנו") != "כן":
+        warn("דבר התורה בערב שבת עוד לא נסגר עם {}".format(dvar_by))
+
     havurot = [n for n in (who(x) for x in names_of(keyed(sec.get("חבורות", [])).get("מעבירים"))) if n]
     if not havurot:
         warn("מעבירי החבורות עוד לא נקבעו")
@@ -289,7 +300,7 @@ def build(msg, warn):
         if n in havurot:
             note = " · ".join(x for x in (note, "מעביר/ה חבורה") if x)
         att.append({"שם": n, "תוכנית": program.get(n, ""), "חבורה": havurot_all.get(n, ""), "זמין לתורנות": "כן",
-                    "לא זמין בשלב": blocked, "לא בקבוצה": HAVURA_BLOCK if n in havurot else "",
+                    "לא זמין בשלב": blocked, "לא בקבוצה": ";".join(HAVURA_BLOCK) if n in havurot else "",
                     "צוות שבת": "", "שיבוץ ידני": "", "אחראי על": "", "הערה": note})
 
     # --- הכנות ----------------------------------------------------------------
@@ -299,6 +310,9 @@ def build(msg, warn):
     friday_ok = set(present) - set(nofri)
     tags = bw.tags_for(msg["shared"], msg["ovens"])
     groups = {r["קבוצה"]: r for r in bw.read_csv("group_plan.csv")}
+    for g in HAVURA_BLOCK:
+        if g not in groups:
+            warn("«{}» (חסימת מעבירי החבורות) אינה קבוצה ב-data/group_plan.csv".format(g))
 
     def lead(name, group):
         if not name:
@@ -380,7 +394,7 @@ def build(msg, warn):
         for x in names_of(fresh.get(key)):
             kinds.setdefault(x, "סלטים")
             if not dish(x):
-                warn("אין מתכון ל«{}» — הפלייר של תורני הארוחה יוצג בלי המצרכים שלו".format(x))
+                warn("אין מתכון ל«{}» — הפלייר של הכנת הארוחה יוצג בלי המצרכים שלו".format(x))
     frm = keyed(sec.get("מההכנות", []))                 # רק בהודעה בגרסה הקודמת
     add("מההכנות לערב", frm.get("לערב", ""), split=False)
     add("מההכנות לצהריים", frm.get("לצהריים", ""), split=False)
@@ -392,7 +406,8 @@ def build(msg, warn):
         add(k, cakes.get(k, ""), split=False)
 
     qty = {p["הכנה"]: p["כמות"] for p in preps}
-    return att, preps, menu, recipes, sched, {"kinds": kinds, "qty": qty}
+    return att, preps, menu, recipes, sched, {"kinds": kinds, "qty": qty,
+                                              "dvar": (dvar_by, dvar.get("סגרנו") == "כן")}
 
 
 def main():
@@ -418,6 +433,8 @@ def main():
         when = s["היסט"] if s["בסיס"] in ("", "קבוע") else "{} {}".format(s["בסיס"], s["היסט"])
         print("  ◷ {} {}{}{}".format(s["יום"], s["אירוע"], " " + when if when else "",
                                     " — " + " · ".join(x for x in (s["מקום"], s["הערה"]) if x) if s["מקום"] or s["הערה"] else ""))
+    if extra["dvar"][0]:
+        print("  ✎ דבר תורה בערב שבת: {} ({})".format(extra["dvar"][0], "סגרנו" if extra["dvar"][1] else "עוד לא נסגר"))
     for label, key in (("שינויים בלו\"ז", 'לו"ז'), ("הערות", "הערות")):
         for line in msg["sections"].get(key, []):
             print("  ✎ {} (לטיפול ידני): {}".format(label, line))

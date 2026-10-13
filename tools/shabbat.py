@@ -90,7 +90,9 @@ def checks(date, workbook, out_dir):
         if t["group"] and t["group"] not in names:
             problems.append("משימה «{}» בקבוצה שלא בתכנית: {}".format(t["task"][:40], t["group"]))
 
-    needs = {g["name"] for g in assign_groups.read_plan(date) if g["needs_staff"]}
+    plan = assign_groups.read_plan(date)
+    needs = {g["name"] for g in plan if g["needs_staff"]}
+    warnings += assign_groups.stale_groups(date, {g["name"] for g in plan})
     for g in data["groups"]:                             # לכל קבוצה שדורשת אחראי — יש
         if g["name"] in needs and not g["leader"]:
             problems.append("ל«{}» אין אחראי/ת".format(g["name"]))

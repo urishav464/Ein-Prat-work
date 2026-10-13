@@ -114,6 +114,7 @@ def demo_state(students, kind, shabbat):
         shiur = "{:02d}:{:02d}".format(*divmod(int(seuda[:2]) * 60 + int(seuda[3:]) - 75, 60))
         state.update({"shared": "לא", "shiur": "כן", "shiur-time": shiur, "shiur-by": staff[0], "shiur-ok": "כן",
                       "seuda": "כן", "seuda-at": "אצל שקד", "seuda-what": "דבר תורה ושירה",
+                      "dt-by": "שקד", "dt-ok": "כן",
                       "seuda-by-1": names[42]})
     elif kind == "early":
         state.update({"shared": "כן", "ovens": bw.OVENS_EARLY, "pl-kabbalat": "הדק של שנה א'",
@@ -123,6 +124,7 @@ def demo_state(students, kind, shabbat):
                       "seuda": "כן", "seuda-what": "שירה", "seuda-time": "", "chevra": "כן",
                       "chevra-what": "משחק מחבואים, ולהביא משחקי קופסא", "chevra-by-1": names[43],
                       "tish-by": "__other", "tish-other": "אבישי", "tish-ok": "לא", "havurot-later": True,
+                      "dt-by": "בנצי", "dt-ok": "לא",
                       "hav-1": "", "hav-2": "", "clean-fri": "10"})
     return state
 

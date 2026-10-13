@@ -31,6 +31,7 @@ SECTIONS = [                       # בסדר הקריאה: 1 | 2, אחר כך 3
         "האם <b>שנה א'</b> איתנו בשבת?",
     ]),
     ('2', 'לו"ז — מה אתם סוגרים', [
+        '<b>דבר תורה</b> בערב שבת: לבד — שקד או איש צוות; עם שנה א\' — בנצי או שקד. סוגרים לפני השבת',
         '<b>הטיש</b>: אחד מאנשי הצוות שבקמפוס מעביר — סוגרים איתו/ה מראש',
         '<b>חבורות</b> אחרי הקידוש: 2 או 3 חניכים שמעבירים',
         '<b>שיעור בצהריים</b> (לא חובה): שעה, ואיש צוות שמעביר',
@@ -53,7 +54,7 @@ SECTIONS = [                       # בסדר הקריאה: 1 | 2, אחר כך 3
         '<b>חלוקת העוגות</b>: טיש, קידוש, סעודה שלישית',
     ]),
     ('5', 'מוצ"ש', [
-        '<b>ניקיונות</b> 20 דקות אחרי צאת שבת — 12 בכל מקום שעלינו',
+        '<b>ניקיונות</b> כחצי שעה אחרי צאת שבת (20 דקות, מעוגל לרבע שעה) — 12 בכל מקום שעלינו',
         '<b>ארוחת ערב</b> שעה ורבע אחר כך — 5 מכינים: מה מבשלים, ומתכון',
         '<b>כריכה לכריכה</b> בתנ"ך עם אבישי — חצי שעה אחרי הארוחה',
     ]),
@@ -146,6 +147,30 @@ def guide_html(fit=1.0, measure=False):
         send=nodash(SEND), auto=nodash(AUTO), script=MEASURE_SCRIPT if measure else "")
 
 
+def one_page(build, stem, what="המדריך"):
+    """build(fit, measure) → HTML של עמוד A4 אחד; כותב docs/<stem>.pdf|png. מודד, מכווץ עד MIN_FIT,
+    ובודק שיצא עמוד אחד — אחרת יוצא בשגיאה והקבצים הקודמים ב-docs/ נשארים כמו שהם."""
+    ratio, avail, used, view_h = measure(build(1.0, True))
+    fit = 1.0 if ratio >= 1.0 else round(ratio * 0.99, 3)      # 1% מרווח ביטחון לעיגולים
+    print("מדידה: תוכן {}px מתוך {}px פנויים (יחס {:.3f}) → כיווץ {}".format(used, avail, ratio, fit))
+    if fit < MIN_FIT:
+        raise SystemExit("שגיאה: {} — התוכן ארוך מדי לעמוד אחד; היה צריך לכווץ ל-{} והמינימום הוא {}. "
+                         "צריך לצופף את הריווח ב-CSS (הקבצים ב-docs/ לא השתנו)".format(what, fit, MIN_FIT))
+    OUT.mkdir(exist_ok=True)
+    pdf, png = OUT / "{}.pdf".format(stem), OUT / "{}.png".format(stem)
+    html_text = build(fit, False)
+    with tempfile.TemporaryDirectory() as tmp:        # קודם לבדוק, ורק אז להחליף את מה שב-docs/
+        tmp_pdf, tmp_png = Path(tmp) / "page.pdf", Path(tmp) / "page.png"
+        pages = ep.render(html_text, tmp_pdf)
+        if pages != 1:
+            raise SystemExit("שגיאה: {} — יצאו {} עמודים במקום עמוד אחד; "
+                             "הקבצים ב-docs/ לא השתנו".format(what, pages))
+        screenshot(html_text, tmp_png, view_h)
+        shutil.move(str(tmp_pdf), str(pdf))
+        shutil.move(str(tmp_png), str(png))
+    print("{} (עמוד אחד, כיווץ {})\n{}".format(pdf.relative_to(ROOT), fit, png.relative_to(ROOT)))
+
+
 def shot_binary():
     """הדפדפן לצילום ה-PNG — ep.shot_binary (headless_shell מצייר את כל החלון). אם הוא חסר,
     screenshot מגדיל את החלון בהפרש שנמדד."""
@@ -168,7 +193,7 @@ def measure(html_text):
     match = re.search(r"GUIDE:([0-9.]+)\|AVAIL:([0-9]+)\|USED:([0-9]+)\|VIEW:([0-9]+)",
                       result.stdout.decode("utf-8", "replace"))
     if not match:
-        raise SystemExit("שגיאה: מדידת המדריך נכשלה — Chromium לא החזיר את גובה העמוד")
+        raise SystemExit("שגיאה: המדידה נכשלה — Chromium לא החזיר את גובה העמוד")
     return float(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4))
 
 
@@ -180,25 +205,7 @@ def screenshot(html_text, out_png, view_h):
 
 
 def main():
-    ratio, avail, used, view_h = measure(guide_html(measure=True))
-    fit = 1.0 if ratio >= 1.0 else round(ratio * 0.99, 3)      # 1% מרווח ביטחון לעיגולים
-    print("מדידה: תוכן {}px מתוך {}px פנויים (יחס {:.3f}) → כיווץ {}".format(used, avail, ratio, fit))
-    if fit < MIN_FIT:
-        raise SystemExit("שגיאה: המדריך ארוך מדי לעמוד אחד — היה צריך לכווץ ל-{} והמינימום הוא {}. "
-                         "צריך לצופף את הריווח ב-CSS (הקבצים ב-docs/ לא השתנו)".format(fit, MIN_FIT))
-    OUT.mkdir(exist_ok=True)
-    pdf, png = OUT / "מדריך לאחראי שבת.pdf", OUT / "מדריך לאחראי שבת.png"
-    html_text = guide_html(fit=fit)
-    with tempfile.TemporaryDirectory() as tmp:        # קודם לבדוק, ורק אז להחליף את מה שב-docs/
-        tmp_pdf, tmp_png = Path(tmp) / "guide.pdf", Path(tmp) / "guide.png"
-        pages = ep.render(html_text, tmp_pdf)
-        if pages != 1:
-            raise SystemExit("שגיאה: המדריך יצא {} עמודים במקום עמוד אחד — "
-                             "הקבצים ב-docs/ לא השתנו".format(pages))
-        screenshot(html_text, tmp_png, view_h)
-        shutil.move(str(tmp_pdf), str(pdf))
-        shutil.move(str(tmp_png), str(png))
-    print("{} (עמוד אחד, כיווץ {})\n{}".format(pdf.relative_to(ROOT), fit, png.relative_to(ROOT)))
+    one_page(lambda fit, measure: guide_html(fit=fit, measure=measure), "מדריך לאחראי שבת")
 
 
 if __name__ == "__main__":

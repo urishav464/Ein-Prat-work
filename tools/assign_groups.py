@@ -59,6 +59,19 @@ def read_plan(date=None):
     return plan
 
 
+MAX_STAGES = 2                      # בכמה שלבים חניך/ה יכול/ה להיות בשבת אחת (--max-stages)
+
+
+def stale_groups(date, known):
+    """הצמדות, «אחראי על» ו«לא בקבוצה» שמציינות קבוצה שאינה בתכנית — אחרת הן פשוט לא משפיעות.
+    כך שם ישן (למשל «ארוחת ערב» מלפני הפיצול להכנה ופינוי) לא נבלע בשקט."""
+    refs = [("שיבוץ ידני", n, g) for n, v in attendance_mod.load_pins(date).items() for g in v.split(";")]
+    refs += [("אחראי על", n, g) for g, n in attendance_mod.load_leaders(date).items()]
+    refs += [("לא בקבוצה", n, g) for n, gs in attendance_mod.load_group_blocks(date).items() for g in gs]
+    return ["«{}» של {}: «{}» — אין קבוצה כזו בשבת הזו".format(kind, n, g.strip())
+            for kind, n, g in refs if g.strip() and g.strip() not in known]
+
+
 def history_points():
     """ניקוד מצטבר לכל חניך מכל השבתות הקודמות."""
     points = Counter()
@@ -391,7 +404,8 @@ def main():
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-18")
     ap.add_argument("--seed", type=int, help="זרע אקראיות (לשחזור אותה חלוקה)")
     ap.add_argument("--file", help="נתיב קובץ השבת")
-    ap.add_argument("--max-stages", type=int, default=2, help="בכמה שלבים חניך יכול להיות (ברירת מחדל 2)")
+    ap.add_argument("--max-stages", type=int, default=MAX_STAGES,
+                    help="בכמה שלבים חניך יכול להיות (ברירת מחדל {})".format(MAX_STAGES))
     ap.add_argument("--dry-run", action="store_true", help="הדפסה בלבד")
     args = ap.parse_args()
 
@@ -419,6 +433,8 @@ def main():
     for t in tasks:
         if t["group"] and t["group"] not in known:
             print("⚠ משימה «{}» משויכת לקבוצה לא מוכרת: {}".format(t["task"], t["group"]))
+    for msg in stale_groups(date, known):
+        print("⚠ " + msg)
 
     past = {n: p for n, p in history_points().items()}
     for r in bw.read_history():                       # השבת הזו לא נספרת נגד עצמה
