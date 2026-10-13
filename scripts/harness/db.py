@@ -136,8 +136,8 @@ state["done"] = len(done)
 # real calendar: once an evening has happened the app's daily auto-close
 # (dm.close_past_mishmar_tasks) would close them, and the sweep would break on
 # a date, not on a change. Those two are marked closed-already, so they keep
-# their open tasks whatever the date; every other past evening closes here,
-# exactly as the app closes it on the first run of a day.
+# their open tasks whatever the date; every other past evening closes here —
+# all but its feedback task — exactly as the app closes it on the first run of a day.
 dm._t("app_meta").upsert({"key": dm._PAST_CLOSED_KEY, "value": "3,5"},
                          on_conflict="key").execute()
 state["past_closed"] = dm.close_past_mishmar_tasks()

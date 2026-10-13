@@ -51,7 +51,7 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   (נושא → מרצים ותוכן → לוגיסטיקה → אחרי הערב) and `mishmar_progress()` derives where an evening
   stands. The trainee home shows only the current phase, the dashboard sorts by it, the workfile
   accordion opens on it. It takes preloaded rows, so a 21-Mishmar list costs two queries, not 42.
-  An evening that has happened closes its tasks once — all but category `אחרי`
+  An evening that has happened closes its tasks once — all but its feedback task
   (`close_past_mishmar_tasks`, run daily); late tasks on the dashboard and the home are folded
   per Mishmar, phases inside (`_late_by_mishmar`).
 - **Slots own their tasks.** `lessons` is the evening's structure; `tasks.lesson_id` ties a task to

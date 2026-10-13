@@ -577,8 +577,11 @@ def bootstrap() -> dict:
 #   * "לוגיסטיקה" before "תוכן", so "סידור חדרי חבורות (ביום המשמר)" is not
 #     read as content work merely because it mentions חבורות.
 _CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("אחרי",      ("(אחרי)", "סיכום ולקחים", "תודות", "עדכון מאגר", "משוב")),
-    ("יום המשמר", ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני", "הצעת שתי")),
+    # «תודה»: «לשלוח תודה למרצים» read as «מרצים» and was dated two weeks early
+    ("אחרי",      ("(אחרי)", "סיכום ולקחים", "תודות", "תודה", "עדכון מאגר", "משוב")),
+    # «מתנות»: the gifts for speakers who came for free are handed over on the
+    # evening itself (the instructor, 13.10) — not after it, and not «מרצים»
+    ("יום המשמר", ("ביום המשמר", "סידור חדר", "חדרים", "קבלת פני", "הצעת שתי", "מתנות")),
     ("נושא",      ("סגירת נושא", "בחירת נושא", "נושא המשמר")),
     ("מרצים",     ("מרצים", "מרצה")),
     ("הזמנה",     ("הזמנה", "הזמנת", "קנבה", "הדפסה", "הפצה")),
@@ -950,39 +953,56 @@ def phase_of(task: dict) -> dict:
     return next(p for p in PHASES if p["key"] == key)
 
 
-# The after-evening tasks are the only ones a past evening keeps open: the
-# template's «מתנות למרצים…» + «משוב וסיכום», the seed's «עדכון מאגר המרצים…»
-# + «משוב על המשמר», #01's «תודות» + «סיכום ולקחים» — all category «אחרי».
-AFTER_CATEGORY = "אחרי"
 _PAST_CLOSED_KEY = "past_closed"
 
 
-def close_past_mishmar_tasks(today: Optional[_date] = None) -> dict:
-    """An evening that has happened closes its tasks — all but the
-    after-evening ones. Trainees were drowning in «סגירת מרצה» and «כיבוד»
-    cards that went on being «late» for weeks after the night itself.
+def is_feedback_task(task: dict) -> bool:
+    """The evening's feedback task — the template's «משוב וסיכום», the seed's
+    «משוב על המשמר — …». The one task a past evening keeps open (the
+    instructor: «רק המשוב חשוב לי שיהיה עדיין פתוח»), and the one the
+    feedback form closes when it is sent — one predicate for both."""
+    return "משוב" in (task.get("task_description") or "")
 
-    ONCE per Mishmar: the ids already closed are remembered in
-    `app_meta.past_closed`, so a task a pair reopens afterwards (↩), or adds
-    after the evening, stays open — the closer never fights a human. The
-    evening's own day is not past: the night runs to 02:00. Idempotent;
-    costs one app_meta read when nothing is newly past."""
+
+def close_past_mishmar_tasks(today: Optional[_date] = None) -> dict:
+    """An evening that has happened closes its tasks — all but its feedback
+    task (`is_feedback_task`). Trainees were drowning in «סגירת מרצה» and
+    «כיבוד» cards that went on being «late» for weeks after the night itself,
+    and the instructor wants only the feedback left open: the gifts are
+    handed over on the night, the thanks and the index update are not what
+    a pair should still be chased for.
+
+    ONCE per evening: `app_meta.past_closed` remembers «id@d.m.Y» for every
+    evening already closed, so a task a pair reopens afterwards (↩), or adds
+    after the evening, stays open — the closer never fights a human. The DATE
+    is part of the memory: an evening whose date is moved (a postponement,
+    fixed in SQL) is a new evening to the closer and closes again when the new
+    date passes. A bare «id» — the first deploy's format, and the harness
+    fixture's exemption — matches the evening whatever its date. The evening's
+    own day is not past: the night runs to 02:00. Idempotent; costs one
+    app_meta read when nothing is newly past.
+
+    Undo (a wrongly closed evening): every row this closes carries the same
+    `updated_at` stamp — `UPDATE tasks SET status = 'TO DO' WHERE mishmar_id =
+    N AND updated_at = '<stamp>'` in the SQL Editor."""
     today = today or _date.today()
     row = _one(_t("app_meta").select("value").eq("key", _PAST_CLOSED_KEY).execute())
-    done = {int(x) for x in ((row or {}).get("value") or "").split(",") if x.strip().isdigit()}
-    newly = sorted(m["id"] for m in get_all_mishmarim()
-                   if m["id"] not in done
-                   and (d := parse_gregorian(m.get("gregorian_date"))) and d < today)
+    marks = {x.strip() for x in ((row or {}).get("value") or "").split(",") if x.strip()}
+    past = {m["id"]: m["gregorian_date"].strip() for m in get_all_mishmarim()
+            if (d := parse_gregorian(m.get("gregorian_date"))) and d < today}
+    newly = sorted(mid for mid, when in past.items()
+                   if str(mid) not in marks and f"{mid}@{when}" not in marks)
     if not newly:
         return {"mishmarim": [], "closed": 0}
-    rows = _rows(_t("tasks").select("id,category")
+    rows = _rows(_t("tasks").select("id,task_description")
                  .in_("mishmar_id", newly).neq("status", "DONE").execute())
-    ids = [r["id"] for r in rows if r.get("category") != AFTER_CATEGORY]
+    ids = [r["id"] for r in rows if not is_feedback_task(r)]
     if ids:
         _t("tasks").update({"status": "DONE", "updated_at": _now_iso()}) \
             .in_("id", ids).execute()
+    marks |= {f"{mid}@{past[mid]}" for mid in newly}
     _t("app_meta").upsert({"key": _PAST_CLOSED_KEY,
-                           "value": ",".join(str(i) for i in sorted(done | set(newly)))},
+                           "value": ",".join(sorted(marks, key=lambda s: (int(s.split("@")[0]), s)))},
                           on_conflict="key").execute()
     return {"mishmarim": newly, "closed": len(ids)}
 
@@ -1672,7 +1692,7 @@ DEFAULT_TASK_TEMPLATE: tuple[tuple[str, str], ...] = (
     ("כיבוד",     "כיבוד להפסקות"),
     ("יום המשמר", "סידור הבית מדרש"),
     ("יום המשמר", "קבלת פנים ופתיחה"),
-    ("אחרי",      "מתנות למרצים אשר הגיעו בחינם"),
+    ("יום המשמר", "מתנות למרצים אשר הגיעו בחינם"),
     ("אחרי",      "משוב וסיכום"),
 )
 

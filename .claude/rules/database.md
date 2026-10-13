@@ -35,18 +35,26 @@ paths:
 
 - **Outreach is a log, not a field.** `speaker_outreach` records each approach; current status is derived by `v_speaker_status` from the newest row. **`record_outreach()` is the only writer** — `upsert_lesson()` delegates to it rather than setting `speaker_status` itself. Before this, closing a speaker wrote only to one Mishmar's lesson row, the shared index never learned, and the next pair got a stale answer.
 - **Task deadlines are derived, never typed.** `classify_task()` maps text to a category and `compute_due_date()` offsets from the Mishmar date (topic −21d, speakers −14d, invitation/refreshments/decoration −7d). Two ordering rules in `_CATEGORY_RULES` carry weight: `אחרי` before `מרצים` (so "עדכון מאגר המרצים" is not dated two weeks early) and `לוגיסטיקה` before `תוכן`.
-- **An evening that has happened closes its tasks — all but the after-evening ones.**
+- **An evening that has happened closes its tasks — all but its feedback task.**
   `close_past_mishmar_tasks(today)` marks every open task of a Mishmar whose date is past DONE,
-  except category `אחרי` (the two «after» tasks: template «מתנות למרצים…» + «משוב וסיכום», seed
-  «עדכון מאגר המרצים…» + «משוב על המשמר»). The evening's own day is not past — the night runs to
-  02:00. **Once per Mishmar**: the closed ids live in `app_meta.past_closed` («1,2,3,4»), so a task a
-  pair reopens afterwards (↩) or adds after the evening stays open — the closer never fights a
-  human. `app.py` runs it once per day per process (`_close_past_today`, a `cache_resource` keyed on
+  except the feedback task (`is_feedback_task`: «משוב» in the text — the template's «משוב וסיכום»,
+  the seed's «משוב על המשמר — …»; the feedback form closes tasks by the same predicate). By the
+  instructor's call only the feedback stays open: «עדכון מאגר המרצים», #01's «תודות» and «סיכום
+  ולקחים» close too, and «מתנות למרצים אשר הגיעו בחינם» is an evening-day task (template and
+  classifier say `יום המשמר`; `migrations/2026-10-gifts-task-day-of.sql` moves rows an earlier reset
+  created — optional, idempotent). The evening's own day is not past — the night runs to 02:00. **Once per evening**: `app_meta.past_closed` remembers «id@d.m.Y» («3@24.9.2026,…»), so a
+  task a pair reopens afterwards (↩) or adds after the evening stays open — the closer never
+  fights a human — and **the date is part of the memory**: a postponed evening (its date moved in
+  SQL) closes again when the new date passes. A bare «id» matches whatever the date (the first
+  deploy's format, and the harness fixture's exemption). Undo a wrong close: every row it closed
+  carries one `updated_at` stamp — `UPDATE tasks SET status='TO DO' WHERE mishmar_id=N AND
+  updated_at='<stamp>'`. The classifier: `אחרי` also catches «תודה», `יום המשמר` catches «מתנות»
+  (both read as «מרצים» before, and were dated two weeks early). A failure is not cached (the next run retries) and is printed to stderr. `app.py` runs it once per day per process (`_close_past_today`, a `cache_resource` keyed on
   the date, right after `bootstrap`): one `app_meta` read on the first run of a day, the close
   itself when an evening has just passed. In `_WRITES` as `(tasks, app_meta)`. The harness fixture
   marks #03 and #05 closed-already, because the sweep clicks open tasks on them and the fixture's
-  dates are the real calendar. Upserts on `app_meta` pass `on_conflict="key"` — the shim, like
-  PostgREST, needs the conflict target.
+  dates are the real calendar. Upserts on `app_meta` pass `on_conflict="key"`: PostgREST would use the
+  primary key anyway, but the shim falls back to `id` and raised a duplicate key.
 - **`tasks.student_id` is nullable** — NULL means the task belongs to the Mishmar, i.e. to both owners in the pair.
 - **`lessons` is deliberately not four rows** — `slot_order` is 1..N, `lesson_role` free text (the archive holds ceremonies and song circles).
 - **`budget_used` is a view**, never a stored column.
@@ -210,7 +218,8 @@ panel instead of on a slot.
   never blocked. `set_candidate_source` holds one source sheet per presenter.
   Both live on `lesson_speakers` (`room`, `source_url` — schema v6).
 - **`DEFAULT_TASK_TEMPLATE`** now holds only what the EVENING owns: נושא · «הזמנה — עיצוב והפצה»
-  (one row) · כיבוד · יום המשמר ×2 · «מתנות למרצים אשר הגיעו בחינם» · משוב. Anything belonging to a
+  (one row) · כיבוד · יום המשמר ×3 (the third is «מתנות למרצים אשר הגיעו בחינם» — handed over on
+  the night) · משוב. Anything belonging to a
   slot is created by `sync_lesson_tasks` and dies with the slot.
 - **`upload_source_sheet` returns `(url, error)`** — the old silent `None` turned a Storage
   misconfiguration into a button that looked broken.

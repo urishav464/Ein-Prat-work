@@ -360,7 +360,9 @@ More probe traps that produced false test results here: **input placeholders nev
   «משמר #NN» chip each, and neither the instructor nor the trainees could tell whose a card was.
   Now one `st.expander` per Mishmar (date order; label = number · date · topic · pair · «N באיחור»;
   opens by itself only when it is the only one), the four `dm.PHASES` as headings inside
-  (`dm.phase_of`), and under each one `lt-`-grammar row per task: red «⏰ text · nudge», «פתח ↗»
+  (`dm.phase_of`), and under each one `lt-`-grammar row per task: «⏰ **text**» in ink with the
+  nudge in red on the line under it (an all-red small line read oddly — the instructor; beside the
+  name it broke mid-phrase on a phone), the label's «**משמר #NN**» in bold, «פתח ↗»
   (an `ibw-` door, `task_focus` → the slot; none for `הזמנה`) and the ✓ box (`ib-ov-`). Headings,
   not expanders in an expander — the instructor's choice and Streamlit's advice (1.64 allows the
   nesting; its docs say don't). **The expander is KEYED** (`ovx-{screen}-{mid}`): its label's count

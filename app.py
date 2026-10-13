@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import os
+import sys
 from typing import Optional
 
 import streamlit as st
@@ -82,14 +83,15 @@ def _close_past_today(day: str) -> dict:
     close itself when an evening has just passed), every later run nothing.
     `day` is only the cache key. An exception is NOT cached, so a failed
     attempt is retried on the next run instead of skipping the whole day."""
-    return dm.close_past_mishmar_tasks()
+    return dm.close_past_mishmar_tasks(_date_cls.fromisoformat(day))
 
 
 def _close_past() -> None:
     try:
         _close_past_today(_date_cls.today().isoformat())
-    except Exception:                 # never take a screen down over a tidy-up
-        pass
+    except Exception as exc:          # never take a screen down over a tidy-up —
+        # but say so: a silent failure retried on every run is invisible
+        print(f"close_past_mishmar_tasks: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------
@@ -553,6 +555,8 @@ RTL_CSS = """
      content-width chips made a staircase of left edges with a ✓ on every step */
   [class*="st-key-lt-"] { padding: 4px var(--sp-2) !important; gap: 0 !important; border-radius: 8px !important; }
   [class*="st-key-lt-"] [data-testid="stMarkdownContainer"] p { margin: 0; font-size: .82rem; }
+  [class*="st-key-lt-ov-"] [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+  [class*="st-key-lt-ov-"] [data-testid="stMarkdownContainer"] p { font-size: .9rem; line-height: 1.45; }
   /* an icon box that carries a word: same 2rem height and hairline as `ib-` */
   [class*="st-key-ibw-"] button {
       height: 2rem; min-height: 2rem; padding: 0 var(--sp-2) !important; font-size: .85rem;
@@ -1558,11 +1562,12 @@ def _late_by_mishmar(tasks: list[dict], mishmarim: list[dict],
     for mid in order:
         m = m_by_id.get(mid) or {"id": mid}
         late = by_mid[mid]
-        topic = (m.get("topic") or "בלי נושא").replace("*", "").replace("`", "")
+        topic = (m.get("topic") or "בלי נושא").replace("*", "").replace("`", "").replace("_", " ")
         if len(topic) > 48:
             topic = topic[:47] + "…"
         who = " + ".join(sorted(owners.get(mid, []))) or "צוות"
-        label = (f"משמר #{mid:02d} · {_fmt_date(m.get('gregorian_date'))} · {topic}"
+        # the evening's number in bold: the eye finds the Mishmar first
+        label = (f"**משמר #{mid:02d}** · {_fmt_date(m.get('gregorian_date'))} · {topic}"
                  f" · 👥 {who} — {len(late)} באיחור")
         with st.expander(label, expanded=len(order) == 1, key=f"ovx-{prefix}-{mid}"):
             for ph in dm.PHASES:
@@ -1577,11 +1582,14 @@ def _late_by_mishmar(tasks: list[dict], mishmarim: list[dict],
                     with st.container(border=True, key=f"lt-ov-{prefix}-{t['id']}"):
                         row = st.container(horizontal=True, wrap=False, gap="small",
                                            vertical_alignment="center")
+                        # the task in bold ink, the lateness beside it in red —
+                        # one small all-red line read oddly (the instructor)
+                        # the nudge on its own line: beside the name it broke
+                        # mid-phrase on a phone
                         row.markdown(
-                            "<span class='card-meta' style='color:#b42318;font-weight:600'>"
-                            f"⏰ {_clean(t['task_description'])}</span>"
-                            + (f"<span class='card-meta'> · {_clean(t['nudge'])}</span>"
-                               if t.get("nudge") else ""),
+                            f"⏰ <b>{_clean(t['task_description'])}</b>"
+                            + (f"<br><span class='card-meta' style='color:#b42318'>"
+                               f"{_clean(t['nudge'])}</span>" if t.get("nudge") else ""),
                             unsafe_allow_html=True, width="stretch")
                         # the invitation is designed and sent outside the app:
                         # there is nowhere for a door to lead
@@ -3517,9 +3525,13 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
     all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
     done = [t for t in all_tasks if t["status"] == "DONE"]
 
+    # said from what the board holds, not from the date alone: a closer that
+    # failed, or an evening marked closed-already, must not read «נסגרו»
     evening = _parse_date((progress.get("mishmar") or {}).get("gregorian_date"))
-    if evening and evening < _date_cls.today():
-        st.caption("🌙 הערב התקיים — המשימות נסגרו, מלבד אלה של אחרי הערב.")
+    open_now = [t for t in all_tasks if t["status"] != "DONE"]
+    if (evening and evening < _date_cls.today()
+            and all(dm.is_feedback_task(t) for t in open_now)):
+        st.caption("🌙 הערב התקיים — כל המשימות נסגרו, נשאר רק המשוב.")
     # No pinned «overdue» block: the five groups below ARE the board, and each
     # folded phase declares its own lateness in its header.
     for i, ph in enumerate(progress["phases"]):
@@ -3616,7 +3628,7 @@ def _after_tab(mid: int) -> None:
                 on_click=_save_feedback_clicked,
                 args=(mid, entries, my_titles,
                       [t["id"] for t in tasks
-                       if "משוב" in t["task_description"] and t["status"] != "DONE"]))
+                       if dm.is_feedback_task(t) and t["status"] != "DONE"]))
 
     if existing:
         with st.expander(f"משוב שנרשם ({len(existing)})"):
