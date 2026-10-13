@@ -35,6 +35,18 @@ paths:
 
 - **Outreach is a log, not a field.** `speaker_outreach` records each approach; current status is derived by `v_speaker_status` from the newest row. **`record_outreach()` is the only writer** — `upsert_lesson()` delegates to it rather than setting `speaker_status` itself. Before this, closing a speaker wrote only to one Mishmar's lesson row, the shared index never learned, and the next pair got a stale answer.
 - **Task deadlines are derived, never typed.** `classify_task()` maps text to a category and `compute_due_date()` offsets from the Mishmar date (topic −21d, speakers −14d, invitation/refreshments/decoration −7d). Two ordering rules in `_CATEGORY_RULES` carry weight: `אחרי` before `מרצים` (so "עדכון מאגר המרצים" is not dated two weeks early) and `לוגיסטיקה` before `תוכן`.
+- **An evening that has happened closes its tasks — all but the after-evening ones.**
+  `close_past_mishmar_tasks(today)` marks every open task of a Mishmar whose date is past DONE,
+  except category `אחרי` (the two «after» tasks: template «מתנות למרצים…» + «משוב וסיכום», seed
+  «עדכון מאגר המרצים…» + «משוב על המשמר»). The evening's own day is not past — the night runs to
+  02:00. **Once per Mishmar**: the closed ids live in `app_meta.past_closed` («1,2,3,4»), so a task a
+  pair reopens afterwards (↩) or adds after the evening stays open — the closer never fights a
+  human. `app.py` runs it once per day per process (`_close_past_today`, a `cache_resource` keyed on
+  the date, right after `bootstrap`): one `app_meta` read on the first run of a day, the close
+  itself when an evening has just passed. In `_WRITES` as `(tasks, app_meta)`. The harness fixture
+  marks #03 and #05 closed-already, because the sweep clicks open tasks on them and the fixture's
+  dates are the real calendar. Upserts on `app_meta` pass `on_conflict="key"` — the shim, like
+  PostgREST, needs the conflict target.
 - **`tasks.student_id` is nullable** — NULL means the task belongs to the Mishmar, i.e. to both owners in the pair.
 - **`lessons` is deliberately not four rows** — `slot_order` is 1..N, `lesson_role` free text (the archive holds ceremonies and song circles).
 - **`budget_used` is a view**, never a stored column.

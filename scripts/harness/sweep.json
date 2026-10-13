@@ -2,6 +2,7 @@
  {
   "name": "trainee home",
   "user": "אלה מאיר",
+  "note": "the first login of the sweep is the process's first run and the day's first: it carries bootstrap (once per process) and the auto-close's app_meta read (close_past_mishmar_tasks, once per day) — 10, not 9, for that one reason",
   "steps": [
    {
     "name": "✓ a task on the hero",
@@ -19,7 +20,7 @@
    }
   ],
   "login_expect": {
-   "queries_max": 9
+   "queries_max": 10
   }
  },
  {
@@ -136,9 +137,20 @@
   },
   "steps": [
    {
-    "name": "✓ an overdue card",
+    "name": "open a Mishmar's late row",
     "click": {
-     "key": "ov-dn-"
+     "key": "ovx-dash-",
+     "inner": "summary"
+    },
+    "expect": {
+     "app_runs": 0,
+     "fragment_runs": 0
+    }
+   },
+   {
+    "name": "✓ a late task",
+    "click": {
+     "key": "ib-ov-dash-"
     },
     "expect": {
      "app_runs": 0,

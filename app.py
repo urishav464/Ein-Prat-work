@@ -75,6 +75,23 @@ def bootstrap() -> dict:
     return dm.bootstrap()
 
 
+@st.cache_resource(max_entries=1, show_spinner=False)
+def _close_past_today(day: str) -> dict:
+    """Close the tasks of evenings that have happened — once per day per
+    process: the first run of a new day pays one app_meta read (plus the
+    close itself when an evening has just passed), every later run nothing.
+    `day` is only the cache key. An exception is NOT cached, so a failed
+    attempt is retried on the next run instead of skipping the whole day."""
+    return dm.close_past_mishmar_tasks()
+
+
+def _close_past() -> None:
+    try:
+        _close_past_today(_date_cls.today().isoformat())
+    except Exception:                 # never take a screen down over a tidy-up
+        pass
+
+
 # --------------------------------------------------------------------------
 # 2. RTL
 # --------------------------------------------------------------------------
@@ -529,7 +546,6 @@ RTL_CSS = """
   /* Cards FILL their row instead of leaving a ragged stripe on the left: a
      fixed width is the flex-basis, and the leftover space is shared out. */
   .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-my-grid > * { flex: 1 1 240px !important; }
-  .st-key-overdue-grid > * { flex: 1 1 300px !important; }
   [data-testid="stMetric"] { flex: 1 1 150px; }
   /* A slot's task chips: a bordered container's default padding is a card's;
      a chip wants a sliver, so two fit beside each other in a half-width column. */
@@ -547,7 +563,6 @@ RTL_CSS = """
      lone card should use the whole column, not sit in a 340px stripe. */
   @media (min-width: 1101px) {
       .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-my-grid > * { max-width: 340px; }
-      .st-key-overdue-grid > * { max-width: 420px; }
   }
 
   /* Two workfile columns become one below 1100px — the width where a
@@ -571,7 +586,7 @@ RTL_CSS = """
       .chip { white-space: nowrap; }
       [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button { padding: .25rem .55rem; min-height: 2.1rem; }
       /* fixed-width cards fill the phone instead of leaving a stripe */
-      .st-key-pipeline-grid > *, .st-key-pipeline-past > *, .st-key-overdue-grid > *,
+      .st-key-pipeline-grid > *, .st-key-pipeline-past > *,
       .st-key-my-grid > * {
           flex: 0 0 100% !important; width: 100% !important; max-width: 100% !important; }
       .step { min-width: 48px; font-size: .62rem; }
@@ -952,10 +967,7 @@ def _dashboard_body() -> None:
     # one more round-trip after every ✓ / ▶ on this screen, for the same rows.
     # The predicate is the one the trainee home uses (annotate_deadline).
     owners = dm.get_owners_by_mishmar()
-    overdue = sorted(
-        ({**t, "owners": " + ".join(sorted(owners.get(t["mishmar_id"], []))) or "צוות"}
-         for t in all_tasks if dm.annotate_deadline(t)["overdue"]),
-        key=lambda t: (str(t.get("due_date")), t["mishmar_id"], t["id"]))
+    overdue = [t for t in all_tasks if dm.annotate_deadline(t)["overdue"]]
     over_by_mid: dict[int, int] = {}
     for t in overdue:
         over_by_mid[t["mishmar_id"]] = over_by_mid.get(t["mishmar_id"], 0) + 1
@@ -963,40 +975,13 @@ def _dashboard_body() -> None:
         st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
     else:
         st.caption(
-            f"{len(overdue)} משימות פתוחות עברו את התאריך המומלץ. "
-            "לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
+            f"{len(overdue)} משימות פתוחות ב-{len(over_by_mid)} משמרים עברו את התאריך "
+            "המומלץ. לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
         )
-        cards = [dm.annotate_deadline(t) for t in overdue]
-        # A wrapping flex row of fixed-width cards: 4 / 2 / 1 across as the
-        # viewport shrinks, laid out by the browser — no rerun, no breakpoint.
-        with st.container(horizontal=True, wrap=True, gap="small", key="overdue-grid"):
-            for t in cards:
-                with st.container(border=True, width=300, key=f"card-ov-{t['id']}"):
-                    chips = [_chip("באיחור", "red"),
-                             _chip(f"משמר #{t['mishmar_id']:02d}", "gray")]
-                    if t.get("category"):
-                        chips.append(_chip(t["category"], "gold"))
-                    st.markdown(
-                        f"<div class='task-desc'>{_clean(t['task_description'])[:80]}</div>"
-                        f"<div>{''.join(chips)}</div>"
-                        f"<div class='card-meta'>{_clean(t.get('owners') or 'צוות')} · "
-                        f"{_fmt_date(t['gregorian_date'])} · {_clean(t.get('nudge') or '')}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    # A door first: the instructor could see a task was late
-                    # and had no way to reach the Mishmar it belongs to.
-                    row = st.container(horizontal=True, wrap=False, gap="small")
-                    if t.get("category") != "הזמנה" and row.button(
-                            "פתח ↗", key=f"ov-go-{t['id']}",
-                            help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
-                        _goto(NAV_WORKFILE, t["mishmar_id"],
-                              _section_for_category(t.get("category")),
-                              task_focus=t["id"])
-                    row.button("✓ הושלם", key=f"ov-dn-{t['id']}", type="primary",
-                               on_click=_set_status, args=(t["id"], "DONE"))
-                    if t.get("category") != "הזמנה":
-                        row.button("▶ בתהליך", key=f"ov-ip-{t['id']}",
-                                   on_click=_set_status, args=(t["id"], "IN PROGRESS"))
+        # one folding row per Mishmar, the phases under it — a door to the
+        # evening on every task, because the instructor could see a task was
+        # late and had no way to reach the Mishmar it belongs to
+        _late_by_mishmar(overdue, mishmarim, owners, "dash")
 
     # ---- The pipeline: what the flat table never told anyone ----
     st.divider()
@@ -1552,6 +1537,65 @@ def _card_grid(items: list[dict], key_prefix: str, per_row: int = 2,
                 _task_card(t, key_prefix, show_mishmar=show_mishmar, link=link)
 
 
+def _late_by_mishmar(tasks: list[dict], mishmarim: list[dict],
+                     owners: dict[int, list[str]], prefix: str) -> None:
+    """Late tasks, one folding row per Mishmar and the build phases under it.
+
+    Both late sections — the instructor's dashboard and the trainee home —
+    used to be a flat wall of cards with a «משמר #NN» chip each; nobody could
+    tell at a glance which evening a card belonged to. The phases are
+    headings inside the row, not expanders in an expander — the instructor's
+    choice, and Streamlit's own advice (1.64 allows nesting, its docs say don't).
+    The expander is KEYED: its label carries a count that drops with every ✓,
+    and a keyed expander keeps its open state across that fragment run."""
+    by_mid: dict[int, list[dict]] = {}
+    for t in tasks:
+        by_mid.setdefault(t["mishmar_id"], []).append(dm.annotate_deadline(t))
+    m_by_id = {m["id"]: m for m in mishmarim}
+    far = _date_cls.max
+    order = sorted(by_mid, key=lambda mid: (
+        _parse_date((m_by_id.get(mid) or {}).get("gregorian_date")) or far, mid))
+    for mid in order:
+        m = m_by_id.get(mid) or {"id": mid}
+        late = by_mid[mid]
+        topic = (m.get("topic") or "בלי נושא").replace("*", "").replace("`", "")
+        if len(topic) > 48:
+            topic = topic[:47] + "…"
+        who = " + ".join(sorted(owners.get(mid, []))) or "צוות"
+        label = (f"משמר #{mid:02d} · {_fmt_date(m.get('gregorian_date'))} · {topic}"
+                 f" · 👥 {who} — {len(late)} באיחור")
+        with st.expander(label, expanded=len(order) == 1, key=f"ovx-{prefix}-{mid}"):
+            for ph in dm.PHASES:
+                here = sorted((t for t in late if dm.phase_of(t)["key"] == ph["key"]),
+                              key=lambda t: str(t.get("due_date") or "9999"))
+                if not here:
+                    continue
+                st.markdown(f"**{ph['icon']} {ph['label']}** ({len(here)})")
+                for t in here:
+                    # the workfile's slot-task row (`lt-`): text on the right,
+                    # the controls in one left column on every row
+                    with st.container(border=True, key=f"lt-ov-{prefix}-{t['id']}"):
+                        row = st.container(horizontal=True, wrap=False, gap="small",
+                                           vertical_alignment="center")
+                        row.markdown(
+                            "<span class='card-meta' style='color:#b42318;font-weight:600'>"
+                            f"⏰ {_clean(t['task_description'])}</span>"
+                            + (f"<span class='card-meta'> · {_clean(t['nudge'])}</span>"
+                               if t.get("nudge") else ""),
+                            unsafe_allow_html=True, width="stretch")
+                        # the invitation is designed and sent outside the app:
+                        # there is nowhere for a door to lead
+                        if t.get("category") != "הזמנה" and row.button(
+                                "פתח ↗", key=f"ibw-ovgo-{prefix}-{t['id']}",
+                                help="פותח את המשמר הזה, במקום שבו סוגרים את המשימה"):
+                            _goto(NAV_WORKFILE, mid, _section_for_category(t.get("category")),
+                                  task_focus=t["id"])
+                        row.button("✓", key=f"ib-ov-{prefix}-{t['id']}", help="סמן שבוצע",
+                                   on_click=_set_status,
+                                   args=(t["id"], "DONE",
+                                         f"«{_clean(t['task_description'])[:40]}» הושלם 🎉"))
+
+
 def _stepper_html(progress: dict) -> str:
     """The four phases as a horizontal stepper. RTL flex puts phase 1 on the
     right, where a Hebrew reader starts — no reversal needed here."""
@@ -1762,18 +1806,19 @@ def _student_body(student_id: int, student_name: str = "") -> None:
     hero = (min(upcoming, key=lambda m: _parse_date(m["gregorian_date"]) or today)
             if upcoming else mine[-1])
 
-    # Overdue anywhere is the one thing allowed to jump the phase queue.
+    # One read for the late rows, the hero AND the strip below it — the hero
+    # used to be drawn before this line existed, which is why it never named
+    # the partner.
+    owners = dm.get_owners_by_mishmar()
+
+    # Overdue anywhere is the one thing allowed to jump the phase queue —
+    # folded per Mishmar, so a card's evening is never a guess.
     overdue = [t for t in all_tasks
                if t.get("overdue") and t["mishmar_id"] != hero["id"]]
     if overdue:
         st.markdown(f"#### עבר התאריך המומלץ במשמרים אחרים ({len(overdue)})")
         st.caption("המלצה — לא חוק. אבל אלה קודמים לכל השאר.")
-        _card_grid(sorted(overdue, key=lambda t: str(t.get("due_date") or "9999")),
-                   "ovd", link=True)
-
-    # One read for the hero AND the strip below it — the hero used to be drawn
-    # before this line existed, which is why it never named the partner.
-    owners = dm.get_owners_by_mishmar()
+        _late_by_mishmar(overdue, mine, owners, "home")
 
     st.markdown("#### המשמר הבא שלי")
     _next_mishmar_hero(hero, progress[hero["id"]],
@@ -3472,6 +3517,9 @@ def _tasks_tab(mid: int, progress: dict, lessons: Optional[list[dict]] = None) -
     all_tasks = [t for ph in progress["phases"] for t in ph["tasks"]]
     done = [t for t in all_tasks if t["status"] == "DONE"]
 
+    evening = _parse_date((progress.get("mishmar") or {}).get("gregorian_date"))
+    if evening and evening < _date_cls.today():
+        st.caption("🌙 הערב התקיים — המשימות נסגרו, מלבד אלה של אחרי הערב.")
     # No pinned «overdue» block: the five groups below ARE the board, and each
     # folded phase declares its own lateness in its header.
     for i, ph in enumerate(progress["phases"]):
@@ -3794,6 +3842,10 @@ def main() -> None:
             "מהריפו והריצו. הקובץ אידמפוטנטי — הרצה חוזרת בטוחה. "
             "עד אז חלקים מהמסכים יופיעו ריקים."
         )
+
+    # before any screen reads a task: an evening that has happened keeps only
+    # its after-evening tasks open
+    _close_past()
 
     if info.get("seeded"):
         st.toast(

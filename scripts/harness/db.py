@@ -132,6 +132,15 @@ done = [t for t in dm.get_tasks_for_mishmar(3) if t.get("status") != "DONE"][:2]
 for t in done:
     dm.update_task_status(t["id"], "DONE")
 state["done"] = len(done)
+# The sweep clicks open tasks on #03 and #05, and the fixture's dates are the
+# real calendar: once an evening has happened the app's daily auto-close
+# (dm.close_past_mishmar_tasks) would close them, and the sweep would break on
+# a date, not on a change. Those two are marked closed-already, so they keep
+# their open tasks whatever the date; every other past evening closes here,
+# exactly as the app closes it on the first run of a day.
+dm._t("app_meta").upsert({"key": dm._PAST_CLOSED_KEY, "value": "3,5"},
+                         on_conflict="key").execute()
+state["past_closed"] = dm.close_past_mishmar_tasks()
 print(json.dumps({"seeded": seed.get("seeded"), "tasks": seed.get("tasks"), **state}))
 '''
     env = dict(os.environ, ROOT=str(ROOT), HERE=str(HERE), MISHMAR_NO_CACHE="1",

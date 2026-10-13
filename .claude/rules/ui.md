@@ -182,8 +182,8 @@ More probe traps that produced false test results here: **input placeholders nev
   widgets are called on that container (`row.button(...)`); text takes `width="stretch"`, inputs a
   px width. The browser lays it out; nothing reruns on resize.
 - **Grids are wrapping flex rows of fixed-width cards**: `st.container(horizontal=True, wrap=True)`
-  around `st.container(border=True, width=300)` — the dashboard's `_mishmar_card`s and its overdue
-  cards wrap 4 / 2 / 1 across. Below 740px the CSS forces those cards to 100% (keyed containers
+  around `st.container(border=True, width=300)` — the dashboard's `_mishmar_card`s wrap
+  4 / 2 / 1 across. Below 740px the CSS forces those cards to 100% (keyed containers
   `pipeline-grid` / `pipeline-past` → `.st-key-…`).
 - **The two workfile columns are the one media query**: `st.container(key="wf-cols").columns(...)`
   and `@media (max-width: 1100px) .st-key-wf-cols …` stacks them, evening first. The speaker
@@ -213,12 +213,12 @@ More probe traps that produced false test results here: **input placeholders nev
   and the link field live. It used to create a task and `_goto` back to the same panel — which is
   why it read as a dead button.
 - **The invitation task is done-or-not**: a task whose category is `הזמנה` shows no «פתח» in the
-  workfile card and no «▶ בתהליך» on the dashboard card. It is designed and sent outside the app.
+  workfile card nor on the late rows of the dashboard and the home. It is designed and sent outside the app.
 - **The rooms panel in לוגיסטיקה is derived**, not typed: it reads the חבורות presenters. The
   candidates are fetched ONCE in `_workfile_columns` and passed to both the structure panel and the
   rooms panel — calling `get_lesson_speakers` twice with different argument lists misses the memo
   and costs a second query (measured: 10 → 9 on a cold workfile).
-- **Cards fill their row**: `flex: 1 1 240px` on `.st-key-pipeline-grid` / `.st-key-overdue-grid`
+- **Cards fill their row**: `flex: 1 1 240px` on `.st-key-pipeline-grid` / `.st-key-pipeline-past`
   children, capped (`max-width`) only above 1101px so a lone card does not sit in a stripe, and
   forced to 100% below 740px. Measured 4 / 1 / 1 across at 1500 / 900 / 390 with no h-overflow.
 - **Closing a speaker happens next to the candidate** («✅ סגור מרצה» on each candidate row); there
@@ -355,6 +355,19 @@ More probe traps that produced false test results here: **input placeholders nev
   scoped, the run after the callback is 12 ms instead of 229, and 5 queries instead of 6. What is
   left (~0.8 s) is the callback's own five round-trips. The history list above the form does not
   redraw after an add — the toast confirms it and the next full run catches up.
+- **Late tasks are folded per Mishmar, on both screens** (`_late_by_mishmar`): the dashboard's
+  «עבר את התאריך המומלץ» and the trainee home's «…במשמרים אחרים» were a flat wall of cards, a
+  «משמר #NN» chip each, and neither the instructor nor the trainees could tell whose a card was.
+  Now one `st.expander` per Mishmar (date order; label = number · date · topic · pair · «N באיחור»;
+  opens by itself only when it is the only one), the four `dm.PHASES` as headings inside
+  (`dm.phase_of`), and under each one `lt-`-grammar row per task: red «⏰ text · nudge», «פתח ↗»
+  (an `ibw-` door, `task_focus` → the slot; none for `הזמנה`) and the ✓ box (`ib-ov-`). Headings,
+  not expanders in an expander — the instructor's choice and Streamlit's advice (1.64 allows the
+  nesting; its docs say don't). **The expander is KEYED** (`ovx-{screen}-{mid}`): its label's count
+  drops with every ✓, and the key is what keeps it open across that fragment run (measured at 390px:
+  open before, open after). «▶ בתהליך» is gone from these rows — it never took a task off the list.
+  Probe trap: each `ib-ov-` key matched two `button` nodes, one of them 0×0 — locate with
+  `filter(visible=True)` (the harness does), never a bare `.first`.
 - **Dashboard ✓ / ▶ and the trainee home's ✓ / ▶ / ↩ are fragment runs** (`_dashboard_body`,
   `_student_body`): the pipeline chips, the metrics and the hero's stepper read the same task list
   as the cards, and they all sit inside the same fragment, so one body run keeps them in step.

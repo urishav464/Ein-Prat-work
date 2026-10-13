@@ -943,6 +943,50 @@ def mishmar_progress(mishmar_id: Optional[int] = None,
     }
 
 
+def phase_of(task: dict) -> dict:
+    """The build phase a task belongs to — the PHASES entry. A task with no
+    category counts as content, exactly as `mishmar_progress` counts it."""
+    key = _PHASE_OF_CATEGORY.get(task.get("category") or "תוכן", "content")
+    return next(p for p in PHASES if p["key"] == key)
+
+
+# The after-evening tasks are the only ones a past evening keeps open: the
+# template's «מתנות למרצים…» + «משוב וסיכום», the seed's «עדכון מאגר המרצים…»
+# + «משוב על המשמר», #01's «תודות» + «סיכום ולקחים» — all category «אחרי».
+AFTER_CATEGORY = "אחרי"
+_PAST_CLOSED_KEY = "past_closed"
+
+
+def close_past_mishmar_tasks(today: Optional[_date] = None) -> dict:
+    """An evening that has happened closes its tasks — all but the
+    after-evening ones. Trainees were drowning in «סגירת מרצה» and «כיבוד»
+    cards that went on being «late» for weeks after the night itself.
+
+    ONCE per Mishmar: the ids already closed are remembered in
+    `app_meta.past_closed`, so a task a pair reopens afterwards (↩), or adds
+    after the evening, stays open — the closer never fights a human. The
+    evening's own day is not past: the night runs to 02:00. Idempotent;
+    costs one app_meta read when nothing is newly past."""
+    today = today or _date.today()
+    row = _one(_t("app_meta").select("value").eq("key", _PAST_CLOSED_KEY).execute())
+    done = {int(x) for x in ((row or {}).get("value") or "").split(",") if x.strip().isdigit()}
+    newly = sorted(m["id"] for m in get_all_mishmarim()
+                   if m["id"] not in done
+                   and (d := parse_gregorian(m.get("gregorian_date"))) and d < today)
+    if not newly:
+        return {"mishmarim": [], "closed": 0}
+    rows = _rows(_t("tasks").select("id,category")
+                 .in_("mishmar_id", newly).neq("status", "DONE").execute())
+    ids = [r["id"] for r in rows if r.get("category") != AFTER_CATEGORY]
+    if ids:
+        _t("tasks").update({"status": "DONE", "updated_at": _now_iso()}) \
+            .in_("id", ids).execute()
+    _t("app_meta").upsert({"key": _PAST_CLOSED_KEY,
+                           "value": ",".join(str(i) for i in sorted(done | set(newly)))},
+                          on_conflict="key").execute()
+    return {"mishmarim": newly, "closed": len(ids)}
+
+
 def get_all_tasks() -> list[dict]:
     """Every task with its Mishmar context, one query — for pipeline views."""
     return _rows(_t("v_tasks_full").select("*")
@@ -2681,6 +2725,7 @@ _WRITES = {
     "cache_put": ("search_cache",),
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),
+    "close_past_mishmar_tasks": ("tasks", "app_meta"),
     # a reset touches nearly every table — «not sure» is the honest answer
     "reset_mishmar": _ALL, "apply_trainee_roster": _ALL,
     "backfill_task_metadata": _ALL, "seed_from_markdown": _ALL,
