@@ -177,6 +177,14 @@ script writes, grey = computed.
 - **Automatic leaders:** after `assign_all`, `assign_groups.pick_leaders` gives every group with members and no
   אחראי/ת one of its members — Shabbat staff first, then most past duties (duty_history rows before the date),
   then name. Leaders from the form (`week_leaders`) or «אחראי על» are never replaced.
+- **Shabbat staff are ordinary since 15.10:** no group in `group_plan.csv` is «אחראי מצוות», and `assign_groups.main`
+  loads the staff list only when some group is — so `staff` is empty and all the staff code (lead pick, pool filter,
+  `STAFF_HELP_STAGES`, `lead_slots`, the shabbat.py staff warning) is inert until a group is marked again.
+- **Same day, other people first:** `assign` gets `days_of` (the days of each group's tasks) and `busy_days` (days the
+  person already works this week). A group on a day the person already works is a candidate only when
+  `same_day_needed` — fewer people left without a duty that day than open slots in that day's groups. So Friday-morning
+  workers go to the Saturday groups or Motzash, and Friday-night groups (dinner prep/clear, tish) are filled first by
+  people who didn't work Friday morning (the «לא בשישי בבוקר» ones arrive before Shabbat).
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after

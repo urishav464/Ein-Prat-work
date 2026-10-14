@@ -179,7 +179,7 @@ def shrink_to_fit(plan, tasks, budget, fixed_sizes):
 
 
 # ---------------------------------------------------------------------------
-def assign(plan, available, programs, score, seed, pins=None, group_blocks=None):
+def assign(plan, available, programs, score, seed, pins=None, group_blocks=None, days_of=None, busy_days=None):
     """משבץ חניכים לקבוצות של שלב אחד לפי גודל (g["size"]).
 
     סדר הקדימויות: הצמדות ידניות ← מובילים וחברים קבועים ← כל השאר לפי ניקוד
@@ -212,6 +212,19 @@ def assign(plan, available, programs, score, seed, pins=None, group_blocks=None)
     rng.shuffle(ranked)
     ranked.sort(key=lambda n: score.get(n, 0))
     elul_in = {g["name"]: sum(programs.get(m) == "אלול" for m in groups[g["name"]]) for g in plan}
+    # יום שבו כבר יש לחניך/ה תורנות (למשל הכנות בבוקר שישי) — קבוצה באותו יום (הכנת/פינוי ארוחת
+    # הערב, טיש) רק אם אין מספיק אחרים: מי שלא עבד באותו יום ממלא אותה קודם, והוא/היא עובר/ת ליום שבת
+    days_of, busy_days = days_of or {}, busy_days or {}
+    clash = lambda n, g: busy_days.get(n, set()) & days_of.get(g["name"], set())
+
+    def same_day_needed(g, rest):
+        """כמה מקומות פתוחים בקבוצות של הימים האלה, מול כמה שנשארו בלי תורנות באותם ימים."""
+        days = days_of.get(g["name"], set())
+        here = [h for h in plan if days_of.get(h["name"], set()) & days and open_slots(h) > 0]
+        free = sum(1 for m in rest if m not in taken and not (busy_days.get(m, set()) & days)
+                   and any(h["name"] not in group_blocks.get(m, ()) for h in here))
+        return free < sum(open_slots(h) for h in here)
+
     def at_risk(g, rest):
         """אחרי החניך/ה הזה/ו לא יישארו מספיק שמותר להם להיכנס לקבוצה — היא צריכה אותו/ה עכשיו.
         (למשל מנקי חדר האוכל: צוות השבת וההכנות חסומים שם, אז לא ממלאים קודם את בית המדרש בחניכים.)"""
@@ -222,14 +235,16 @@ def assign(plan, available, programs, score, seed, pins=None, group_blocks=None)
         if not any(open_slots(g) > 0 for g in plan):
             break
         candidates = [g for g in plan if open_slots(g) > 0 and g["name"] not in group_blocks.get(name, ())]
+        rest = ranked[i + 1:]
+        candidates = [g for g in candidates if not clash(name, g) or same_day_needed(g, rest)]
         if not candidates:
             continue
         if programs.get(name) == "אלול":
             target = min(candidates, key=lambda g: ((elul_in[g["name"]] + 1) / g["size"], -g["size"]))
             elul_in[target["name"]] += 1
         else:
-            rest = ranked[i + 1:]
-            target = next((g for g in candidates if at_risk(g, rest)), candidates[0])
+            target = next((g for g in candidates if at_risk(g, rest)),
+                          next((g for g in candidates if not clash(name, g)), candidates[0]))
         groups[target["name"]].append(name)
         taken.add(name)
 
@@ -365,7 +380,13 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
             g["size"] = max(peak(tasks, g["name"]), fixed.get(g["name"], 0))
 
         score = {n: past.get(n, 0) + week_points[n] + committed[n] for n in pool}
-        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins, group_blocks=blocks)
+        days_of = {g["name"]: {t["day"] for t in tasks if t["group"] == g["name"]} for g in plan}
+        busy_days = {}
+        for gname, members in groups.items():
+            for n in members:
+                busy_days.setdefault(n, set()).update(days_of.get(gname, set()))
+        result = assign(stage_plan, pool, programs, score, seed + i, pins=stage_pins, group_blocks=blocks,
+                        days_of=days_of, busy_days=busy_days)
         groups.update(result)
         done.update(stage_names)
         for g in stage_plan:
@@ -456,13 +477,15 @@ def main():
     if available is None:
         raise SystemExit("אין רשימת נוכחות ל-{} — הריצו קודם tools/attendance.py".format(args.date))
     pins = {n: [g.strip() for g in v.split(";") if g.strip()] for n, v in attendance_mod.load_pins(date).items()}
-    staff = attendance_mod.load_staff(date)
     blocked = attendance_mod.load_blocked(date)
     group_blocks = attendance_mod.load_group_blocks(date)
     leaders = dict(bw.week_leaders(date), **attendance_mod.load_leaders(date))
     havurot = attendance_mod.load_havurot(date)
 
     plan = read_plan(date)
+    # צוות השבת מקבל תפקיד מיוחד רק אם יש קבוצה שמסומנת «אחראי מצוות» ב-group_plan (כרגע אין —
+    # מאז 15.10 הם משובצים כמו כולם, ואחראי/ת נבחר/ה מתוך הקבוצה לפי ניסיון)
+    staff = attendance_mod.load_staff(date) if any(g["needs_staff"] for g in plan) else []
     tasks = read_tasks(path)
     known = {g["name"] for g in plan}
     for t in tasks:
