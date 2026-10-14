@@ -82,8 +82,15 @@ HELP_RULES = [("תנורים " + OVENS_LATE, FRIDAY_DINING, "+0"),
               ("נפרדת", "בית מדרש", "08:45"),
               ("תנורים " + OVENS_EARLY, "בית מדרש", "08:45"),
               ("", "בית מדרש", "10:00")]        # משותפת בלי חלון תנורים (כמו 18.9)
+# «אנשים = עזרה» בספריית המשימות: כמה שמצטרפים השבוע להכנות מהקבוצה הזו (סך «עזרה» בטופס).
+# כך בית המדרש = מי שעוזר בהכנות — מסדרים ב-8:00 ומצטרפים ב-8:45. בלי עזרה — המשימה נופלת.
+HELP_TOTAL = "עזרה"
+HELP_TASK = "עזרה בהכנת {}"            # משימת ההצטרפות; הפלייר של ההכנה מציג אותה כ«מצטרפים»
+# כשחסרים זמינים, shrink_to_fit מקטין קודם את הקבוצות האלה (ההכנות והעזרה נשארות מלאות)
+SHRINK_FIRST = (FRIDAY_DINING,)
 # מי שבקבוצה בשלב הזה לא משובץ/ת גם לקבוצה הזו: מנקי חדר האוכל בשישי הם לא מההכנות
-APART = {FRIDAY_DINING: ("הכנות שישי",)}
+# וגם בית המדרש: הם העזרה שמצטרפת להכנות ב-8:45, לא מי שכבר בהכנה (גם לא בחלות של 7:00)
+APART = {FRIDAY_DINING: ("הכנות שישי",), "בית מדרש": ("הכנות שישי",)}
 # כשהתנורים שלנו מ-11:00 ההכנות זזות ל-11:00, אבל הבישול לארוחת הצהריים מתחיל ב-9:00
 LUNCH_RULES = {"תנורים " + OVENS_LATE: ("09:00", "ארוחת צהריים")}
 
@@ -474,11 +481,24 @@ def task_rows(date=None, times=None, warn=True):
                 print("⚠ «{}» לא פעילה השבוע — אין מי שיצטרף ל«{}»".format(help_group, name))
                 continue
             helpers.append({"שלב": stage_of.get(help_group, STAGES[1]), "יום": "שישי", "שעה": help_hour,
-                            "קבוצה": help_group, "משימה": "עזרה בהכנת {}".format(name), "אנשים": helpers_n,
+                            "קבוצה": help_group, "משימה": HELP_TASK.format(name), "אנשים": helpers_n,
                             "מתכון": "", "עוגן": "תחילת עבודה", "הערה": ""})
 
     standing = [dict(r, הערה=_note(r.get("הערה"), week["shared"])) for r in library
                 if _task_key(r["קבוצה"], r["יום"], r["שעה"], r["עוגן"]) not in taken]
+    help_total = {}                                      # «אנשים = עזרה»: סך העזרה של הקבוצה השבוע
+    for h in helpers:
+        n = str(h["אנשים"]).strip()
+        help_total[h["קבוצה"]] = help_total.get(h["קבוצה"], 0) + (int(n) if n.isdigit() else 0)
+    resolved = []
+    for r in standing:
+        if (r.get("אנשים") or "").strip() == HELP_TOTAL:
+            n = help_total.get(r["קבוצה"], 0)
+            if date is not None and not n:
+                continue                                 # אף אחד לא מצטרף — אין את המשימה הזו השבוע
+            r = dict(r, אנשים=str(n) if n else "")
+        resolved.append(r)
+    standing = resolved
     rows = preps + standing                              # העזרה — מיד אחרי המשימות של הקבוצה שעוזרת
     last = max((i for i, r in enumerate(rows) if r["קבוצה"] == help_group), default=len(rows) - 1)
     rows = rows[:last + 1] + helpers + rows[last + 1:]

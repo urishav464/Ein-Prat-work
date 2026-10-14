@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
+<meta name="build" content="__BUILD__">
 <title>טופס שבת עין פרת</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&family=Rubik:wght@500;700&display=swap">
@@ -139,6 +140,9 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
 .soft{border:1px solid var(--warn);background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:8px 12px;font-size:14px}
 .todo{margin:0;border-radius:8px;padding:6px 12px;font-size:14px;font-weight:500;background:var(--warn-soft);color:var(--warn)}
 .ok-note{font-size:13px;color:var(--ok)}
+.update{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px;
+  border:1px solid var(--accent);background:var(--accent-soft);color:var(--ink);border-radius:10px;padding:10px 14px;font-size:15px}
+.update button{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 </style>
 </head>
 <body>
@@ -149,6 +153,8 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
   <p>ממלאים כאן את כל מה שצריך לשבת. בסוף נוצרת הודעה אחת ושולחים אותה לאורי, וממנה יוצאים השיבוץ, הפליירים ולו"ז הצל.
      התורנויות עצמן (ארוחות, טיש, קידוש, בית המדרש, ניקיונות) והשיבוץ — במערכת. את מי שמעביר את הטיש, את החבורות ואת ההכנות — סוגרים אתם.</p>
   <span class="deadline">שולחים עד שבוע לפני השבת</span>
+  <p class="fixed-note" id="restored" hidden>שחזרנו את מה שמילאתם — הכול נשמר בדפדפן הזה, גם אחרי טעינה מחדש.
+    ממשיכים מאיפה שעצרתם.</p>
 </header>
 
 <nav class="steps" aria-label="שלבי הטופס">
@@ -156,6 +162,10 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
   <a href="#s4"><b>4</b>מה מוגש</a><a href="#s5"><b>5</b>לו"ז ומוצ"ש</a><a href="#s6"><b>✓</b>שליחה</a>
 </nav>
 
+<div class="update" id="update" role="status" hidden>
+  <span>יש גרסה חדשה של הטופס. מה שמילאתם שמור — אפשר לטעון בלי לאבד כלום.</span>
+  <button type="button" id="reload">טעינה מחדש</button>
+</div>
 <form id="form" novalidate>
 <section class="step" id="s1">
   <h2><span class="n">1</span>השבת</h2>
@@ -215,6 +225,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
   <p class="hint" id="prep-hint"></p>
   <div id="preps"></div>
   <button type="button" id="add-prep">+ עוד הכנה</button>
+  <p class="fixed-note" id="help-total" hidden></p>
   <div class="panel">
     <h3 style="font-size:16px">ארוחת צהריים שישי</h3>
     <div class="row3">
@@ -546,6 +557,15 @@ function refreshSelects(){
 }
 
 // ---- what depends on the Shabbat and its kind ---------------------------------
+// בית המדרש = סך העזרה: מי שמסדר את בית המדרש ב-8:00 הוא מי שמצטרף להכנות ב-8:45
+function helpTotal(){
+  const k = kind(), n = state.preps.filter(p => clean(p.what)).reduce((a, p) => a + (+p.help > 0 ? +p.help : 0), 0);
+  $('help-total').hidden = !k;
+  $('help-total').textContent = k === 'late'
+    ? `מצוות חדר האוכל מצטרפים להכנות ב-11:00: ${n}` + (n ? '' : ' — אף אחד (לא ביקשתם עזרה)')
+    : n ? `בבית המדרש השבוע: ${n} — מסדרים ב-8:00 ומצטרפים להכנות ב-8:45 (סך העזרה שביקשתם)`
+        : 'אין עזרה בהכנות — ולכן אין השבוע תורנות בית מדרש';
+}
 function helpLabel(k){
   return k === 'late' ? 'עזרה מצוות חדר האוכל ב-11:00' : k === 'separate' ? 'עזרה מבית המדרש ב-8:45' :
          k === 'early' ? 'עזרה מבית המדרש ב-8:45' : 'עזרה מתורנות שישי';
@@ -571,6 +591,7 @@ function refresh(){
     (late ? 'ההכנות מתחילות ב-11:00 (התנורים שלנו מ-11:00); החלות ב-10:00, ארוחת הצהריים מתבשלת מ-9:00.'
           : 'ההכנות מתחילות ב-8:00, החלות ב-7:00.') + ' מתכון הוא בונוס.';
   document.querySelectorAll('.help-label').forEach(el => el.textContent = helpLabel(k));
+  helpTotal();
   $('clean-fri-box').hidden = !(k === 'separate' || late);
   $('clean-fri-when').textContent = late ? 'מצטרפים להכנות ב-11:00, ומנקים ב-14:00' : 'ב-14:00 — חניכים שלא בהכנות ולא בבית המדרש';
   $('clean-bm-box').hidden = !(k === 'separate' || late);
@@ -626,12 +647,12 @@ function renderPreps(){
 }
 ['input', 'change'].forEach(ev => $('preps').addEventListener(ev, e => {
   const box = e.target.closest('.prep'); const k = e.target.dataset.k;
-  if (box && k) { state.preps[+box.dataset.i][k] = e.target.value; save(); }
+  if (box && k) { state.preps[+box.dataset.i][k] = e.target.value; save(); if (k === 'help' || k === 'what') helpTotal(); }
 }));
 $('preps').addEventListener('click', e => {
   if (e.target.dataset.remove === undefined) return;
   state.preps.splice(+e.target.dataset.remove, 1); if (!state.preps.length) state.preps.push(blankPrep());
-  renderPreps(); save();
+  renderPreps(); helpTotal(); save();
 });
 $('add-prep').addEventListener('click', () => {
   state.preps.push(blankPrep()); renderPreps(); save();
@@ -683,7 +704,8 @@ $('date').addEventListener('change', () => {
 });
 function clearWeek(){ WEEK.forEach(k => { delete state[k]; if (k in DEFAULTS) state[k] = DEFAULTS[k]; }); }
 let saveTimer;
-function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }, 300); }
+function flushSave(){ clearTimeout(saveTimer); try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 300); }
 function load(){
   if (D.demo) return D.demo;
   try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && s.att) return s; } catch (e) {}
@@ -872,11 +894,29 @@ $('reset-yes').addEventListener('click', () => {
   applyState(); $('reset-confirm').hidden = true; $('done').hidden = true; $('errors').hidden = true;
 });
 
-state = Object.assign(fresh(), load() || {});
+const draft = load();
+state = Object.assign(fresh(), draft || {});
 Object.keys(DEFAULTS).forEach(k => { if (state[k] === undefined) state[k] = DEFAULTS[k]; });
 if (state.date && !dates.some(d => d.iso === state.date)) { clearWeek(); state.date = ''; }   // שבת שעברה
 applyState();
 if (D.demo) { showMessage(); $('check').textContent = problems().map(p => p[1]).join('\n'); }
+$('restored').hidden = !draft || !!D.demo;
+
+// ---- גרסה חדשה של הטופס: הטיוטה נשמרת בדפדפן, אז טעינה מחדש לא מוחקת כלום ----------------
+const BUILD = document.querySelector('meta[name="build"]').content;
+function checkUpdate(){
+  if (D.demo || location.protocol === 'file:') return;
+  fetch(location.pathname + '?v=' + Date.now(), {cache: 'no-store'})
+    .then(r => r.ok ? r.text() : '')
+    .then(t => { const m = /<meta name="build" content="([^"]+)"/.exec(t);
+                 if (m && m[1] !== BUILD) $('update').hidden = false; })
+    .catch(() => {});
+}
+$('reload').addEventListener('click', () => { flushSave(); location.reload(); });
+window.addEventListener('pagehide', flushSave);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushSave(); else checkUpdate(); });
+checkUpdate();
+setInterval(checkUpdate, 5 * 60 * 1000);
 })();
 </script>
 </body>

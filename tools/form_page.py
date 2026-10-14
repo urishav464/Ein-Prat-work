@@ -11,6 +11,7 @@ https://urishav464.github.io/Ein-Prat-work/
 בונים מחדש ודוחפים ל-Shabbat, ו-Pages מתעדכן לבד.
 """
 import argparse
+import hashlib
 import json
 import sys
 from datetime import date, timedelta
@@ -131,7 +132,11 @@ def demo_state(students, kind, shabbat):
 
 def build(out, demo=None):
     data = json.dumps(page_data(demo), ensure_ascii=False).replace("</", "<\\/")
-    html = TEMPLATE.read_text(encoding="utf-8").replace("/*DATA*/", data)
+    template = TEMPLATE.read_text(encoding="utf-8")
+    # חותמת הגרסה: מתוכן הדף בלבד — בנייה חוזרת בלי שינוי לא משנה אותה, ושינוי (רשימה, שבתות,
+    # טופס) כן. הדף בודק מדי פעם אם החותמת באתר השתנתה, ומציע לטעון מחדש (הטיוטה נשמרת).
+    stamp = hashlib.sha1((template + data).encode("utf-8")).hexdigest()[:10]
+    html = template.replace("/*DATA*/", data).replace("__BUILD__", stamp)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     return out

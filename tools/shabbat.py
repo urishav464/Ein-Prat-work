@@ -92,6 +92,15 @@ def checks(date, workbook, out_dir):
 
     plan = assign_groups.read_plan(date)
     needs = {g["name"] for g in plan if g["needs_staff"]}
+    for t in data["tasks"]:                              # משימה שלא התמלאה — הוקטנה (חסרים זמינים) או לא
+        if t["people"] and len(t["names"]) < int(t["people"]):
+            warnings.append("ב«{}» [{}] שובצו {} מתוך {}".format(t["task"][:30], t["group"], len(t["names"]),
+                                                              int(t["people"])))
+    staff = set(attendance.load_staff(date))             # קבוצת צוות שהאחראי/ת שלה נבחר/ה אוטומטית ולא מהצוות
+    explicit = dict(bw.week_leaders(date), **attendance.load_leaders(date))
+    for g in data["groups"]:
+        if g["name"] in needs and g["leader"] and g["leader"] not in staff and g["name"] not in explicit:
+            warnings.append("«{}» צריכה אחראי/ת מצוות השבת — לא היה פנוי, נבחר/ה {}".format(g["name"], g["leader"]))
     warnings += assign_groups.stale_groups(date, {g["name"] for g in plan})
     for g in data["groups"]:                             # לכל קבוצה שדורשת אחראי — יש
         if g["name"] in needs and not g["leader"]:

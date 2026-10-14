@@ -208,7 +208,8 @@ td.task .note{display:block;margin-top:1mm;font-size:9.5pt;color:#5A6572;white-s
 th.names,td.names{width:60mm;font-size:11pt}
 .empty{margin-top:8mm;text-align:center;color:#8A94A0;font-size:12pt}
 .recipe{margin-top:7mm;border:1px solid #1F2430;padding:4mm 5mm;page-break-inside:avoid}
-.recipe h2{font-family:'Rubik',sans-serif;font-size:15pt;display:flex;justify-content:space-between;align-items:baseline}
+.recipe h2{font-family:'Rubik',sans-serif;font-size:15pt;display:flex;flex-wrap:wrap;gap:1mm 4mm;justify-content:space-between;align-items:baseline}
+td.task .help{color:#5A6572}
 .recipe h2 span{font-size:10.5pt;font-weight:400;color:#5A6572;font-family:'Heebo',sans-serif}
 .recipe .cols{display:flex;gap:6mm;margin-top:2.5mm}
 .recipe .col{flex:1}
@@ -234,7 +235,8 @@ def ingredients_html(text):
     for line in (text or "").split("\n"):
         line = line.strip()
         out.append("<b>{}</b>".format(esc(line)) if line.endswith(":") else esc(line))
-    return "\n".join(out) or "—"
+    # <b> הוא בלוק בעצמו — ירידת השורה אחריו רק הייתה מוסיפה שורה ריקה (pre-line)
+    return "\n".join(out).replace("</b>\n", "</b>") or "—"
 
 
 def steps_html(text):
@@ -265,16 +267,30 @@ def flyer_html(group, tasks, data, with_recipes=False, fit=1.0, measure=False):
     rows, last_day = [], None
     ordered = sorted(tasks, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
                                            t["hour"] or datetime.min.time(), t["row"]))
-    multi_day = len({t["day"] for t in ordered}) > 1
-    for t in ordered:
+    # מי שמצטרף/ת להכנה הזו מקבוצה אחרת (העזרה מבית המדרש ב-8:45) — שורה בפלייר של ההכנה
+    helping = sorted((t for t in data["tasks"] if t["group"] != group["name"]
+                      and t["task"] == bw.HELP_TASK.format(group["name"])),
+                     key=lambda t: (t["hour"] is None, t["hour"] or datetime.min.time(), t["row"]))
+    shown = sorted(ordered + helping, key=lambda t: (DAY_ORDER.get(t["day"], 9), t["hour"] is None,
+                                                     t["hour"] or datetime.min.time(), t["row"]))
+    multi_day = len({t["day"] for t in shown}) > 1
+    timed = any(t["hour"] for t in ordered)
+    for t in shown:
         names = ", ".join(t["names"]) or ("כולם" if t["people"] is None else "")
         day = ""
         if multi_day and t["day"] != last_day:
             day, last_day = '<span class="day">{}</span>'.format(esc(t["day"])), t["day"]
+        hour = esc(hhmm(t["hour"]))
+        if not hour and not timed:          # בלי שעה בכלל (ניקיונות מוצ"ש) — השעה של האירוע שהיא מעוגנת אליו
+            ev = find_event(data["events"], t)
+            if ev and ev["hour"]:
+                day, hour = '<span class="day">{}</span>'.format(esc(ev["name"])), esc(hhmm(ev["hour"]))
+        task = esc(t["task"]) if t in ordered else \
+            '<span class="help">מצטרפים מ«{}» לעזרה</span>'.format(esc(t["group"]))
         rows.append('<tr><td class="hour">{day}{hour}</td><td class="task">{task}{note}</td>'
                     '<td class="names">{names}</td></tr>'.format(
-                        day=day, hour=esc(hhmm(t["hour"])) or "—", task=esc(t["task"]),
-                        note='<span class="note">{}</span>'.format(esc(t["note"])) if t["note"] else "",
+                        day=day, hour=hour or "—", task=task,
+                        note='<span class="note">{}</span>'.format(esc(t["note"])) if t["note"] and t in ordered else "",
                         names=esc(names)))
     table = ('<table><thead><tr><th class="hour">שעה</th><th>משימה</th><th class="names">מי</th></tr></thead>'
              '<tbody>{}</tbody></table>'.format("".join(rows))) if rows else \

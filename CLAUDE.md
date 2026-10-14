@@ -30,7 +30,11 @@ pipeline run and exits 1 on any problem; see also "Verifying changes".
 standalone document built by `tools/form_page.py` from `tools/form_page.html` (roster, the closed Shabbatot of
 `data/shabbatot.csv` with their staff, book and computed schedule, and recipe names embedded as JSON) and served
 by **GitHub Pages** from the `Shabbat` branch `/docs` folder: https://urishav464.github.io/Ein-Prat-work/ —
-rebuild and push to update it. `docs/404.html` (static, hand-written) catches any wrong path under the site —
+rebuild and push to update it. The page carries `<meta name="build">` — a hash of template + data, so an
+  unchanged rebuild keeps it — and polls its own URL (every 5 min and when the tab returns); a different stamp shows
+  «יש גרסה חדשה — טעינה מחדש». The draft lives in localStorage (`ein-prat-shabbat-form-v2`, saved on every change,
+  flushed on pagehide and before that reload), so reloading never loses what was filled; a restored draft is
+  announced at the top. `docs/404.html` (static, hand-written) catches any wrong path under the site —
 a link copied with `**`, a comma, a hidden RTL mark, `/docs/` or the old file name — and redirects to the form. (A claude.ai Artifact was tried first: it does not open for people without a
 Claude account; the old artifact now only points to the Pages URL.) The page composes one structured message
 (`📋 טופס שבת v2 · <date>`, header lines `שנה א'` / `תנורים` / `מילא/ה`, then `— section —` blocks whose lines
@@ -128,8 +132,16 @@ script writes, grey = computed.
   `task_library.csv` and `group_plan.csv` selects rows by tag — that is how the Friday בית מדרש / Friday
   dining-room group, the Motzash cleanings, the work start (08:00/11:00) and the קבלת שבת ישראלית place change
   per kind. `HELP_RULES` picks who joins the preps and when (בית מדרש 08:45; 10:00 only for a shared week with no
-  oven window, like 18.9; dining room +0). `bw.APART` keeps the Friday dining-room cleaners (14:00 in both
-  separate and ovens-from-11 weeks) out of every הכנות שישי group: `assign_all` adds it to `group_blocks`
+  oven window, like 18.9; dining room +0). The בית מדרש setup task's «אנשים» is `bw.HELP_TOTAL` (`עזרה`):
+  `task_rows` sets it to the week's total help for that group (the form's «עזרה» sum) and drops it when that is
+  0 — the setup crew *is* the helpers (בית מדרש points only). `bw.SHRINK_FIRST` makes `shrink_to_fit` shrink the
+  Friday dining room first, so preps and help stay full. The shrink budget is only the people who can be placed
+  in at least one group of the stage (not blocked from all of them by `group_blocks` / `bw.APART`), and `assign`
+  routes a person to a group that would otherwise be left short (`at_risk`: fewer eligible people left than open
+  slots) before plan order — without both, the dining room silently under-filled. A task with fewer names than
+  «אנשים» is a `shabbat.py` warning, and shrunk tasks get their reduced «אנשים» written back to the workbook. `bw.APART` keeps the Friday dining-room cleaners (14:00 in both
+  separate and ovens-from-11 weeks) and the בית מדרש crew (the 8:45 helpers — challot start at 7:00, so the
+  slot rule alone doesn't separate them) out of every הכנות שישי group: `assign_all` adds it to `group_blocks`
   from the groups already assigned, and `shabbat.py` fails on an overlap (pins excepted);
   `LUNCH_RULES` starts Friday-lunch cooking at 09:00 when our ovens are from 11:00. `import_form` must call
   `tags_for` with the message's values, because `weeks.csv` is written after `build()`.
@@ -145,7 +157,9 @@ script writes, grey = computed.
   `אחראי על` (pin + this group's אחראי/ת, student or staff — suppresses the automatic
   staff pick for that group), `צוות שבת` (extra staff for that week; standing staff is the
   `צוות שבת` column of `students.csv` — staff become a group's אחראי/ת, count inside the group
-  size and stay out of ordinary slots unless pinned), `לא בקבוצה` (groups the ranking never puts
+  size and stay out of ordinary slots unless pinned — except in `assign_groups.STAFF_HELP_STAGES`, the two Friday
+  stages, where they are assigned like everyone, but never to a Friday group whose slots collide with a staff-led
+  group's (`lead_slots`, e.g. the 14:00 dining room vs dinner prep), so they stay free to lead on Shabbat), `לא בקבוצה` (groups the ranking never puts
   this person in — the havurot presenters are kept out of both Shabbat-lunch groups (`import_form.HAVURA_BLOCK`); pins still win; automatic
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
@@ -160,6 +174,9 @@ script writes, grey = computed.
   never search-and-replace them. A pin, «אחראי על» or «לא בקבוצה» naming a group not in the week's plan is
   reported by `assign_groups.stale_groups` (printed by assign_groups, a warning in `shabbat.py`).
   `assign_groups.MAX_STAGES` is the `--max-stages` default (the points table quotes it).
+- **Automatic leaders:** after `assign_all`, `assign_groups.pick_leaders` gives every group with members and no
+  אחראי/ת one of its members — Shabbat staff first, then most past duties (duty_history rows before the date),
+  then name. Leaders from the form (`week_leaders`) or «אחראי על» are never replaced.
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after

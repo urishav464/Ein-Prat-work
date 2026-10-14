@@ -343,8 +343,8 @@ def build(msg, warn):
         if not d.get("אנשים", "").isdigit() or int(d["אנשים"]) < 1:
             warn("ל«{}» חסר כמה אנשים".format(name))
         note = "\n".join(x for x in (d.get("הערה", ""),
-                                      "המצרכים נמצאים ב: " + d["מצרכים נמצאים"] if d.get("מצרכים נמצאים") else "",
-                                      "בסיום מאחסנים ב: " + d["אחסון"] if d.get("אחסון") else "") if x)
+                                      "מקום המצרכים: " + d["מצרכים נמצאים"] if d.get("מצרכים נמצאים") else "",
+                                      "מקום אחסון בסיום: " + d["אחסון"] if d.get("אחסון") else "") if x)
         prep(הכנה=name, שעה="-60" if name.startswith("חלות") else "", כמות=d.get("כמות") or d.get("כמה", ""),
              אנשים=d.get("אנשים", ""), אחראי=lead(d.get("אחראי", ""), name), עזרה=d.get("עזרה", ""),
              מתכון=dish(name), הערה=note)
