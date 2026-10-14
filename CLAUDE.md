@@ -154,8 +154,8 @@ script writes, grey = computed.
   the ones who stayed are `מדרשה` now).
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
 - **Meal duties are split** (since 13.10): Friday dinner and Shabbat lunch are each `הכנת …` (staff-led, 4
-  including the staff lead) and `פינוי …` (4 students, no staff); Friday lunch and the Motzash dinner stay single.
-  Each פינוי group keeps an hourless whole-group washing task, so pins beyond 4 still get a task and lunch-clear
+  including the staff lead) and `פינוי …` (5 students, no staff); Friday lunch and the Motzash dinner stay single.
+  Each פינוי group keeps an hourless whole-group washing task, so pins beyond 5 still get a task and lunch-clear
   never empties when סעודה שלישית is off. «ארוחת ערב» / «ארוחת צהריים» are still *menu* keys and event names —
   never search-and-replace them. A pin, «אחראי על» or «לא בקבוצה» naming a group not in the week's plan is
   reported by `assign_groups.stale_groups` (printed by assign_groups, a warning in `shabbat.py`).
