@@ -211,7 +211,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
 
 <section class="step" id="s2">
   <h2><span class="n">2</span>מי בשבת</h2>
-  <p class="hint">לכל אחד בוחרים מצב. מי שלא בשישי בבוקר (שמירה בליל חמישי, מגיע מאוחר) לא ישובץ להכנות ולתורנות שישי, וגם לא להכנת ארוחת הערב (מתחילה ב-14:00). מי שעוזב לפני מוצ"ש לא ישובץ לניקיונות.</p>
+  <p class="hint">לכל אחד בוחרים מצב. מי שלא בשישי בבוקר (שמירה בליל חמישי, מגיע מאוחר) לא ישובץ להכנות ולתורנות שישי, וגם לא לגסטרונומים (מתחילים ב-14:00). מי שעוזב לפני מוצ"ש לא ישובץ לניקיונות.</p>
   <div class="tally" id="tally" aria-live="polite"></div>
   <div class="roster-tools">
     <input id="search" type="search" placeholder="חיפוש שם…" aria-label="חיפוש שם">
@@ -247,7 +247,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
 
 <section class="step" id="s4">
   <h2><span class="n">4</span>מה מוגש בשבת</h2>
-  <p class="hint">את הקייטרינג שואלים במטבח. כמה מנות בשורה, מופרדות בפסיק. ההכנות של שישי מתחלקות חצי לערב וחצי לצהריים.</p>
+  <p class="hint">את הקייטרינג שואלים במטבח. כמה מנות בשורה, מופרדות בפסיק.</p>
   <div class="panel">
     <h3 style="font-size:16px">מהקייטרינג</h3>
     <label class="f">ארוחת ערב<input id="m-dinner" placeholder="לדוגמה: פרגית בגריל, קוסקוס, מוקפץ טבעוני"></label>
@@ -263,6 +263,12 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
     <div class="q">לארוחת הצהריים</div>
     <div class="salads" id="salads-noon"></div>
     <button type="button" data-sadd="noon">+ עוד סלט לצהריים</button>
+  </div>
+  <div class="panel">
+    <h3 style="font-size:16px">מה מההכנות של שישי יוצא לארוחות</h3>
+    <p class="hint" style="margin:0">נכתב בעריכת השולחן של כל ארוחה. ריק — «חצי מהסלטים והחלות של שישי» בערב, והשאר בצהריים.</p>
+    <label class="f">לארוחת הערב<input id="frm-eve" placeholder="לדוגמה: חצי מהמטבוחה, חצי מסלט החצילים וחצי מהחלות"></label>
+    <label class="f">לארוחת הצהריים<input id="frm-noon" placeholder="לדוגמה: שאר המטבוחה, סלט החצילים והחלות"></label>
   </div>
   <div class="panel">
     <h3 style="font-size:16px">חלוקת העוגות</h3>
@@ -430,7 +436,7 @@ const OTHER = '__other', SHAKED = 'אצל שקד';
 // דבר התורה בערב שבת — רק תזכורת לסגור לפני השבת (לא נכנס ללו"ז או לפליירים)
 const DVAR = {separate: ['שקד'], shared: ['בנצי', 'שקד']};
 const STATES = [["", "— לבחור —"], ["in", "✓ בשבת"], ["nofri", "לא בשישי בבוקר"], ["leave", "עוזב/ת לפני מוצ״ש"], ["out", "✗ לא בשבת"]];
-const FIELDS = ["filler","dt-by","dt-other","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","lunch-what","lunch-ppl","lunch-lead",
+const FIELDS = ["filler","frm-eve","frm-noon","dt-by","dt-other","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","lunch-what","lunch-ppl","lunch-lead",
   "lunch-ing","lunch-steps","clean-fri","m-dinner","m-lunch","m-salads","m-tish","m-kiddush","m-seuda","tish-by","tish-other",
   "hav-1","hav-2","hav-3","shiur-time","shiur-by","shiur-other","shiur-place","seuda-what","seuda-time","seuda-by-1",
   "seuda-by-2","chevra-what","chevra-time","chevra-by-1","chevra-by-2","clean-bm","clean-ha","z-dinner","z-ing","z-steps",
@@ -439,13 +445,13 @@ const CHECKS = ["havurot-later"];
 // מה ששייך לשבת מסוימת — מתאפס כשמחליפים תאריך
 const WEEK = ["shared","dt-by","dt-other","dt-ok","ovens","pl-kabbalat","tm-kabbalat","pl-dinner","tm-dinner","tish-by","tish-other","tish-ok","hav-1","hav-2",
   "hav-3","havurot-later","shiur","shiur-time","shiur-by","shiur-other","shiur-place","shiur-ok","seuda","seuda-what","seuda-time",
-  "seuda-at","seuda-by-1","seuda-by-2","chevra","chevra-what","chevra-time","chevra-by-1","chevra-by-2","m-seuda"];
-const DEFAULTS = {"seuda-at":"בקמפוס","clean-fri":"12","clean-bm":"12","clean-ha":"12","pl-dinner":"חדר אוכל","shiur-place":"בית המדרש",
-  "chevra-what":"משחק, ולהביא משחקי קופסא לחדר האוכל"};
+  "seuda-at","seuda-by-1","seuda-by-2","chevra","chevra-what","chevra-time","chevra-by-1","chevra-by-2","m-seuda","frm-eve","frm-noon"];
+const DEFAULTS = Object.assign({"seuda-at":"בקמפוס","pl-dinner":"חדר אוכל","shiur-place":"בית המדרש",
+  "chevra-what":"משחק, ולהביא משחקי קופסא לחדר האוכל"}, D.cleaners);   // כמה מנקים — מספריית המשימות
 const DEFAULT_SALADS = ["סלט כרוב מרענן", "סלט טחינה ביתית"];
 const blankSalads = () => ({eve: DEFAULT_SALADS.map(name => ({name, ing:'', steps:''})),
                             noon: DEFAULT_SALADS.map(name => ({name, ing:'', steps:''}))});
-const fresh = () => Object.assign({att:{}, why:{}, preps:[], salads: blankSalads()}, DEFAULTS);
+const fresh = () => Object.assign({att:{}, why:{}, preps:[], salads: blankSalads(), cleanV2: 1}, DEFAULTS);
 let state = fresh();
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -589,7 +595,8 @@ function refresh(){
   $('separate-info').hidden = state.shared !== 'לא';
   $('prep-hint').textContent = 'אתם מחליטים מה מכינים. לכל הכנה: כמות, כמה אנשים צריך, מי אחראי/ת, איפה המצרכים ואיפה מאחסנים בסיום. ' +
     (late ? 'ההכנות מתחילות ב-11:00 (התנורים שלנו מ-11:00); החלות ב-10:00, ארוחת הצהריים מתבשלת מ-9:00.'
-          : 'ההכנות מתחילות ב-8:00, החלות ב-7:00.') + ' מתכון הוא בונוס.';
+          : 'ההכנות מתחילות ב-8:00, החלות ב-7:00.') + ' מתכון הוא בונוס. הכנה שכל מי שמכין אותה מצטרף לעזרה ' +
+    '(כמו בראוניז שמתחילים בבית המדרש): «כמה אנשים» 0, וב' + (late ? 'עזרה מצוות חדר האוכל' : 'עזרה') + ' — כמה.';
   document.querySelectorAll('.help-label').forEach(el => el.textContent = helpLabel(k));
   helpTotal();
   $('clean-fri-box').hidden = !(k === 'separate' || late);
@@ -631,7 +638,7 @@ function renderPreps(){
     </div>
     <div class="row3">
       <label class="f">אחראי/ת<select id="prep-${i}-lead" data-k="lead" class="lead">${options(fridayPeople(), p.lead)}</select></label>
-      <label class="f">כמה אנשים<input id="prep-${i}-ppl" data-k="ppl" type="number" min="1" inputmode="numeric" value="${esc(p.ppl)}"></label>
+      <label class="f">כמה אנשים<input id="prep-${i}-ppl" data-k="ppl" type="number" min="0" inputmode="numeric" value="${esc(p.ppl)}"></label>
       <label class="f"><span class="help-label">${helpLabel(kind())}</span><input id="prep-${i}-help" data-k="help" type="number" min="0" inputmode="numeric" value="${esc(p.help)}" placeholder="0"></label>
     </div>
     <label class="f"><span class="lab">הערה <small>לדוגמה: לעטוף בנייר אלומיניום ולרשום ״שנה ב׳״</small></span><input id="prep-${i}-note" data-k="note" value="${esc(p.note)}"></label>
@@ -708,7 +715,13 @@ function flushSave(){ clearTimeout(saveTimer); try { localStorage.setItem(KEY, J
 function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 300); }
 function load(){
   if (D.demo) return D.demo;
-  try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && s.att) return s; } catch (e) {}
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (s && s.att) {                            // טיוטה מלפני 15.10: 12 בבית המדרש היה ברירת המחדל, לא בחירה
+      if (!s.cleanV2) { if (s['clean-bm'] === '12') delete s['clean-bm']; s.cleanV2 = 1; }
+      return s;
+    }
+  } catch (e) {}
   try {                                          // טיוטה מהטופס הקודם — שומרים מה שעדיין רלוונטי
     const o = JSON.parse(localStorage.getItem(OLD_KEY) || 'null');
     if (o && o.att) {
@@ -776,13 +789,15 @@ function message(){
     ...(state['lunch-lead'] ? ['אחראי: ' + state['lunch-lead']] : [])].join(' · '));
   recipe(state['lunch-what'], state['lunch-ing'], state['lunch-steps']);
   L.push('— ניקיונות —');
-  if (k === 'separate' || k === 'late') L.push(`חדר האוכל בשישי: ${clean(state['clean-fri']) || '12'}`);
-  if (k === 'separate' || k === 'late') L.push(`בית המדרש במוצ"ש: ${clean(state['clean-bm']) || '12'}`);
-  if (k === 'separate' || k === 'early') L.push(`חדר האוכל במוצ"ש: ${clean(state['clean-ha']) || '12'}`);
+  if (k === 'separate' || k === 'late') L.push(`חדר האוכל בשישי: ${clean(state['clean-fri']) || DEFAULTS['clean-fri']}`);
+  if (k === 'separate' || k === 'late') L.push(`בית המדרש במוצ"ש: ${clean(state['clean-bm']) || DEFAULTS['clean-bm']}`);
+  if (k === 'separate' || k === 'early') L.push(`חדר האוכל במוצ"ש: ${clean(state['clean-ha']) || DEFAULTS['clean-ha']}`);
   L.push('— קייטרינג —', 'ארוחת ערב: ' + clean(state['m-dinner']), 'ארוחת צהריים: ' + clean(state['m-lunch']),
          'סלטי קייטרינג: ' + clean(state['m-salads']));
   const salads = m => state.salads[m].map(s => clean(s.name).replace(/,/g, ' ')).filter(Boolean);
   L.push('— סלטים לפני הארוחה —', 'לערב: ' + salads('eve').join(', '), 'לצהריים: ' + salads('noon').join(', '));
+  if (clean(state['frm-eve']) || clean(state['frm-noon']))
+    L.push('— מההכנות —', 'לערב: ' + clean(state['frm-eve']), 'לצהריים: ' + clean(state['frm-noon']));
   ['eve', 'noon'].forEach(m => state.salads[m].forEach(s => { if (!matchRecipe(s.name)) recipe(clean(s.name).replace(/,/g, ' '), s.ing, s.steps); }));
   L.push('— עוגות —', 'טיש: ' + clean(state['m-tish']), 'קידוש: ' + clean(state['m-kiddush']));
   if (state.seuda === 'כן') L.push('סעודה שלישית: ' + clean(state['m-seuda']));
@@ -804,7 +819,8 @@ function problems(){
   if (unset) out.push(['s2', `${unset} חניכים עוד לא סומנו (אפשר «כל מי שלא סומן — בשבת»)`]);
   const preps = state.preps.filter(p => clean(p.what));
   if (!preps.length) out.push(['s3', 'לפחות הכנה אחת']);
-  preps.forEach(p => { if (!(+p.ppl > 0)) out.push(['s3', `כמה אנשים צריך ל«${clean(p.what)}»`]); });
+  preps.forEach(p => { if (!(+p.ppl > 0) && !(clean(p.ppl) === '0' && +p.help > 0))
+    out.push(['s3', `כמה אנשים צריך ל«${clean(p.what)}» (0 — רק אם כל המכינים מצטרפים לעזרה)`]); });
   state.preps.forEach((p, i) => { if (!clean(p.what) && (clean(p.qty) || p.ppl || p.lead || +p.help > 0 || clean(p.note) || clean(p.where) || clean(p.store) ||
     block(p.ing).length || block(p.steps).length)) out.push(['s3', `להכנה ${i + 1} חסר «מה מכינים»`]); });
   if (!clean(state['lunch-what'])) out.push(['s3', 'מה מבשלים לארוחת צהריים שישי']);

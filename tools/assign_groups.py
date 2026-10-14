@@ -74,13 +74,13 @@ def stale_groups(date, known):
             for kind, n, g in refs if g.strip() and g.strip() not in known]
 
 
-def pick_leaders(plan, groups, staff, past_counts):
+def pick_leaders(plan, groups, staff, past_counts, helpers=None):
     """לקבוצה בלי אחראי/ת — מתוך חבריה: קודם מצוות השבת, אחר כך מי שעשה/תה הכי הרבה תורנויות עד היום
     (שורות ב-duty_history לפני השבת הזו), ובשוויון — לפי השם. אחראי/ת שנקבע/ה בטופס או בנוכחות לא משתנה.
-    מחזיר [(קבוצה, שם)] של מה שנבחר."""
+    הכנה של מצטרפים בלבד (`helpers` = {הכנה: המצטרפים}) — מתוך המצטרפים. מחזיר [(קבוצה, שם)] של מה שנבחר."""
     chosen = []
     for g in plan:
-        members = groups.get(g["name"]) or []
+        members = groups.get(g["name"]) or (helpers or {}).get(g["name"]) or []
         if g["leader"] or not members:
             continue
         g["leader"] = min(members, key=lambda n: (n not in staff, -past_counts.get(n, 0), n))
@@ -256,23 +256,40 @@ def assign(plan, available, programs, score, seed, pins=None, group_blocks=None,
     return groups
 
 
-def fill_tasks(members, tasks, group):
-    """מצמיד שמות לכל משימה של הקבוצה: סבב לפי סדר השעות, בלי כפילות באותה שעה."""
+def fill_tasks(members, tasks, group, prefer=None):
+    """מצמיד שמות לכל משימה של הקבוצה: סבב לפי סדר השעות, בלי כפילות באותה שעה.
+    `prefer` = {שורה: [שמות]} — קודם הם (האחראי/ת של הכנת מצטרפים — בשורת העזרה שלה)."""
     names = {}
     if not members:
         return names
+    prefer = {row: [n for n in ns if n in members] for row, ns in (prefer or {}).items()}
     pointer = 0
     for key, ts in slots_of(tasks, group):
+        used = {n for t in ts for n in prefer.get(t["row"], [])}
         for t in ts:
             if t["people"] is None:
                 names[t["row"]] = list(members)
                 continue
-            chosen = []
-            for _ in range(min(t["people"], len(members))):
-                chosen.append(members[pointer % len(members)])
+            want = min(t["people"], len(members))
+            chosen = prefer.get(t["row"], [])[:want]
+            while len(chosen) < want and not all(m in used or m in chosen for m in members):
+                n = members[pointer % len(members)]
                 pointer += 1
+                if n not in used and n not in chosen:
+                    chosen.append(n)
+            used.update(chosen)
             names[t["row"]] = chosen
     return names
+
+
+def help_only(plan, tasks):
+    """{הכנה: הקבוצה שעוזרת} — הכנות בלי אנשים משלהן (בראוניז 0+2): כל מי שמכין אותן מצטרף/ת לעזרה."""
+    out = {}
+    for g in plan:
+        helps = bw.help_tasks(tasks, g["name"])
+        if helps and peak(tasks, g["name"]) == 0:
+            out[g["name"]] = helps[0]["group"]
+    return out
 
 
 def pick_staff(slots, staff, used, score, busy, pool):
@@ -283,7 +300,7 @@ def pick_staff(slots, staff, used, score, busy, pool):
 
 
 def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
-               staff=(), blocked=None, leaders=None, group_blocks=None):
+               staff=(), blocked=None, leaders=None, group_blocks=None, prefer=None):
     """מריץ את השיבוץ שלב אחרי שלב ומחזיר (קבוצות, שמות למשימה, הקטנות)."""
     blocked = blocked or {}
     leaders = leaders or {}
@@ -390,7 +407,7 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
         groups.update(result)
         done.update(stage_names)
         for g in stage_plan:
-            task_names.update(fill_tasks(result[g["name"]], tasks, g["name"]))
+            task_names.update(fill_tasks(result[g["name"]], tasks, g["name"], prefer))
             occupied = timed_slots(tasks, g["name"])
             for n in result[g["name"]]:
                 stages_of[n] += 1
@@ -487,6 +504,22 @@ def main():
     # מאז 15.10 הם משובצים כמו כולם, ואחראי/ת נבחר/ה מתוך הקבוצה לפי ניסיון)
     staff = attendance_mod.load_staff(date) if any(g["needs_staff"] for g in plan) else []
     tasks = read_tasks(path)
+    # הכנת מצטרפים בלבד: מי שנקבע/ה לה (אחראי/ת או הצמדה) בא/ה עם המצטרפים — מוצמד/ת לקבוצה שעוזרת,
+    # ובמשימת העזרה של ההכנה הזו; להכנה עצמה אין חברים, ולכן גם לא שורות ב-duty_history
+    only_help, prep_lead, prefer, asked = help_only(plan, tasks), {}, {}, {}
+    for prep, helping in only_help.items():
+        row = bw.help_tasks(tasks, prep)[0]["row"]
+        who = [leaders.pop(prep)] if prep in leaders else []
+        if who:
+            asked[prep] = who[0]                       # אחראי/ת שנקבע/ה — אם לא נכנס/ה, מזהירים כמו בכל הכנה
+        who = list(dict.fromkeys(who + [n for n, gs in pins.items() if prep in gs]))
+        for n in who:
+            pins[n] = [helping if g == prep else g for g in pins.get(n, [])] or [helping]
+            if helping not in pins[n]:
+                pins[n].append(helping)
+            prefer.setdefault(row, []).append(n)
+        if who:
+            prep_lead[prep] = who[0]
     known = {g["name"] for g in plan}
     for t in tasks:
         if t["group"] and t["group"] not in known:
@@ -502,17 +535,25 @@ def main():
     groups, task_names, shrunk = assign_all(
         plan, tasks, available, programs, past, pins,
         args.seed if args.seed is not None else date.toordinal(), args.max_stages,
-        staff=staff, blocked=blocked, leaders=leaders, group_blocks=group_blocks)
+        staff=staff, blocked=blocked, leaders=leaders, group_blocks=group_blocks, prefer=prefer)
 
     past_counts = Counter(r["שם"] for r in bw.read_history() if r["תאריך"] < date.isoformat())
-    picked = pick_leaders(plan, groups, staff, past_counts)
+    helpers = {prep: [n for t in bw.help_tasks(tasks, prep) for n in task_names.get(t["row"], [])]
+               for prep in only_help}
+    for g in plan:
+        if g["name"] in prep_lead and prep_lead[g["name"]] in helpers.get(g["name"], []):
+            g["leader"] = prep_lead[g["name"]]
+    for prep, n in asked.items():
+        if n not in helpers.get(prep, []):
+            print("⚠ האחראי/ת «{}» ל«{}» לא זמין/ה בשלב".format(n, prep))
+    picked = pick_leaders(plan, groups, staff, past_counts, helpers)
 
     on_duty = {m for v in groups.values() for m in v}
     print("שבת {} · {} נוכחים · {} זמינים · {} תורנים · {} קבוצות".format(
         date.strftime("%d/%m/%Y"), len(present), len(available), len(on_duty), len(plan)))
     if shrunk:
         print("⚠ לא מספיק זמינים — הוקטנו: " + "; ".join(
-            "{} [{}] {}→{}".format(t["task"][:30], t["group"], t["orig"], t["people"]) for t in shrunk))
+            "{} [{}] {}→{}".format(t["task"].replace("\n", " / ")[:30], t["group"], t["orig"], t["people"]) for t in shrunk))
 
     for stage in OrderedDict.fromkeys(g["stage"] for g in plan):
         leaves = [g for g in plan if g["stage"] == stage]
@@ -523,7 +564,7 @@ def main():
             for _, ts in slots_of(tasks, g["name"]):
                 for t in ts:
                     hour = t["hour"].strftime("%H:%M") if t["hour"] else "  —  "
-                    print("      {} {} — {}".format(hour, t["task"][:44], ", ".join(task_names.get(t["row"], []))))
+                    print("      {} {} — {}".format(hour, t["task"].replace("\n", " / ")[:44], ", ".join(task_names.get(t["row"], []))))
 
     if picked:
         print("\nאחראים שנבחרו אוטומטית: " + " · ".join("{} — {}".format(g, n) for g, n in picked))

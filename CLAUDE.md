@@ -18,7 +18,7 @@ python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-0
 python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx   # carry last week's edits forward
 python3 tools/attendance.py 2026-09-18 < names.txt   # paste-in roster matching (--all, --show, --file)
 python3 tools/assign_groups.py 2026-09-18        # fills names (--dry-run, --seed, --max-stages, --file)
-python3 tools/export_pdf.py 2026-09-18           # PDFs+PNGs (--only flyers|shadow, --no-png, --with-recipes adds the method)
+python3 tools/export_pdf.py 2026-09-18           # PDFs+PNGs: schedule page, duties overview, a page per duty (--only flyers|schedule, --no-png)
 python3 tools/zmanim.py 2026-09-01 2027-09-01    # regenerate data/zmanim.csv
 python3 tools/fetch_fonts.py                     # refill assets/fonts/ (already committed)
 ```
@@ -48,7 +48,8 @@ names collide); the student Shabbat team is the `צוות שבת` column of `dat
 `data/students.csv` is the roster of record: `roster.py` keeps its rows and fields on a rerun and only drops
 names listed in `data/left.csv` (students who left — remove them from students.csv and add them there).
 The form has no free-text "not on the list" box any more; the importer still reads that section from old
-messages. Prep lines carry `כמות:` (old `כמה:` still read) plus optional `מצרכים נמצאים:` / `אחסון:`,
+messages. «מה מההכנות של שישי יוצא לארוחות» (`frm-eve` / `frm-noon`) sends `— מההכנות —` «לערב:» / «לצהריים:», which
+become the menu keys «מההכנות לערב/לצהריים» of the meal table-setting tasks (empty → the task's default text). Prep lines carry `כמות:` (old `כמה:` still read) plus optional `מצרכים נמצאים:` / `אחסון:`,
 folded into the prep's הערה as extra lines (`td.task .note` is `pre-line`). Seuda `מקום: אצל שקד` adds
 the event «יציאה לסעודה שלישית אצל שקד» (base סעודה שלישית, −15). The `— דבר תורה —` section (Friday-night
 dvar torah: separate week שקד or a staff member, shared week בנצי or שקד — `DVAR` in the page) is a reminder only:
@@ -134,7 +135,12 @@ script writes, grey = computed.
   per kind. `HELP_RULES` picks who joins the preps and when (בית מדרש 08:45; 10:00 only for a shared week with no
   oven window, like 18.9; dining room +0). The בית מדרש setup task's «אנשים» is `bw.HELP_TOTAL` (`עזרה`):
   `task_rows` sets it to the week's total help for that group (the form's «עזרה» sum) and drops it when that is
-  0 — the setup crew *is* the helpers (בית מדרש points only). `bw.SHRINK_FIRST` makes `shrink_to_fit` shrink the
+  0 — the setup crew *is* the helpers (בית מדרש points only). A **help-only prep** (form: אנשים 0 + עזרה N, e.g.
+  בראוניז 0+2) keeps its own people-0 task (text + recipe, at the help hour) and gets no members; its people are the
+  names on its `bw.HELP_TASK` row in the helping group (`bw.help_tasks`). `assign_groups.help_only` finds them: a
+  leader or pin given for such a prep is pinned to the helping group and preferred on that prep's help row
+  (`fill_tasks(prefer=…)`), `pick_leaders` picks among the helpers, `export_pdf.read_workbook` keeps the literal 0
+  (`people_cell`; empty = whole group), and `shabbat.py` skips «משימה בלי שמות» for it. `bw.SHRINK_FIRST` makes `shrink_to_fit` shrink the
   Friday dining room first, so preps and help stay full. The shrink budget is only the people who can be placed
   in at least one group of the stage (not blocked from all of them by `group_blocks` / `bw.APART`), and `assign`
   routes a person to a group that would otherwise be left short (`at_risk`: fewer eligible people left than open
@@ -160,19 +166,24 @@ script writes, grey = computed.
   size and stay out of ordinary slots unless pinned — except in `assign_groups.STAFF_HELP_STAGES`, the two Friday
   stages, where they are assigned like everyone, but never to a Friday group whose slots collide with a staff-led
   group's (`lead_slots`, e.g. the 14:00 dining room vs dinner prep), so they stay free to lead on Shabbat), `לא בקבוצה` (groups the ranking never puts
-  this person in — the havurot presenters are kept out of both Shabbat-lunch groups (`import_form.HAVURA_BLOCK`) and the «לא בשישי» students
-  out of «הכנת ארוחת ערב», which starts Friday 14:00 (`import_form.NOFRI_BLOCK`); pins still win; automatic
+  this person in — the havurot presenters are kept out of גסטרונומים (11:00 oven) and both Shabbat-lunch groups
+  (`import_form.HAVURA_BLOCK`) and the «לא בשישי» students out of «גסטרונומים», which starts Friday 14:00
+  (`import_form.NOFRI_BLOCK`); pins still win; automatic
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
   silently defeat a pin. Elul students are spread across groups by ratio (none left since 7.10 —
   the ones who stayed are `מדרשה` now).
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
-- **Meal duties are split** (since 13.10): Friday dinner and Shabbat lunch are each `הכנת …` (staff-led, 4
-  including the staff lead) and `פינוי …` (5 students, no staff); Friday lunch and the Motzash dinner stay single.
-  Each פינוי group keeps an hourless whole-group washing task, so pins beyond 5 still get a task and lunch-clear
-  never empties when סעודה שלישית is off. «ארוחת ערב» / «ארוחת צהריים» are still *menu* keys and event names —
-  never search-and-replace them. A pin, «אחראי על» or «לא בקבוצה» naming a group not in the week's plan is
+- **Meal duties** (since 15.10): «גסטרונומים» (2) does every food move — Friday 14:00 unloading, into the warming
+  oven before each meal (+ the urns), out at each meal; «ארוחת ערב» / «ארוחת צהריים שבת» (4) do the pre-meal salads
+  and table; «פינוי ארוחת ערב» / «פינוי ארוחת צהריים וסעודה שלישית» (5) clear, bins, sweep and wash; טיש and
+  קידוש are 3 with one combined task. Friday lunch and the Motzash dinner stay single. Each פינוי group keeps an
+  hourless whole-group washing task, so pins beyond 5 still get a task. Group names «ארוחת ערב» / «ארוחת צהריים
+  שבת» are *also* menu keys / event names («ארוחת ערב», «ארוחת צהריים») — harmless (different columns), but never
+  search-and-replace them. **Multi-line task text:** library tasks list one action per line (`\n` inside the CSV
+  cell); `task_rows` normalizes `\r\n`, the workbook row grows with the lines, flyers render a line per action
+  (a first line ending in «:» is a heading), and console/problem messages join the lines with « / ». A pin, «אחראי על» or «לא בקבוצה» naming a group not in the week's plan is
   reported by `assign_groups.stale_groups` (printed by assign_groups, a warning in `shabbat.py`).
   `assign_groups.MAX_STAGES` is the `--max-stages` default (the points table quotes it).
 - **Automatic leaders:** after `assign_all`, `assign_groups.pick_leaders` gives every group with members and no
@@ -184,9 +195,9 @@ script writes, grey = computed.
 - **Same day, other people first:** `assign` gets `days_of` (the days of each group's tasks) and `busy_days` (days the
   person already works this week). A group on a day the person already works is a candidate only when
   `same_day_needed` — fewer people left without a duty that day than open slots in that day's groups. So Friday-morning
-  workers go to the Saturday groups or Motzash, and Friday-night groups (dinner prep/clear, tish) are filled first by
+  workers go to the Saturday groups or Motzash, and Friday-night groups (dinner, clear, tish) are filled first by
   people who didn't work Friday morning (the «לא בשישי בבוקר» ones arrive before Shabbat — but maybe not by 14:00, so
-  they fill dinner clear and the tish, and dinner prep goes to Friday-morning workers).
+  they are kept out of גסטרונומים).
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after
@@ -210,7 +221,9 @@ script writes, grey = computed.
   new group (stage הכנות שישי, `PREP_POINTS`), listed before the standing groups; a row for a
   standing group *replaces* that group's standing task with the same `(group, day, raw hour, anchor)` and
   inherits its empty fields (that is how the Motzash dinner menu or cleaning sizes change — `import_form`
-  copies the library row's hour and anchor via `library_slot`). Defaults: day שישי, hour `+0` from
+  copies the library row's hour and anchor via `library_slot`, whose «אנשים» is also the cleaning default: בית המדרש
+  10, חדר האוכל 12; `form_page.py` passes the same defaults to the page as `D.cleaners`, and a stored draft from
+  before 15.10 drops its `clean-bm` '12' once, `cleanV2`). Defaults: day שישי, hour `+0` from
   «תחילת עבודה» (challot `-60`), anchor `bw.prep_anchor`, text «הכנה — כמות». `עזרה = N` (legacy column
   `עזרה מבית המדרש`) adds a join-the-prep task per `HELP_RULES`, placed right after that group's rows.
   `אחראי` becomes the group's leader (merged with attendance `אחראי על`).
@@ -232,22 +245,26 @@ base64 data URIs from `assets/fonts/` so rendering never touches the network.
 fitted by measuring first: `measure_page` is a `--dump-dom` pass where an inline script sets
 `document.title` to `FIT:<ratio>|AVAIL:<px>|CHROME:<px>|ROWS:<h,h,…>`; the ratio is then
 baked into a CSS `transform: scale()` on `.inner`. A flyer shrinks down to `FLYER_MIN_FIT`
-to stay on one page. **The shadow schedule** (since 15.10) has two coordinated parts, as its title says:
-`timeline_html` («לו"ז שבת» — per day the events and the times only duties work, each with numbered chips of the
-duties working then) and one uniform card per duty (`shadow_cards` / `card_html`: «n · name · K אנשים · אחראי/ת»,
-the names, then a pill per hour with a short label and *only the differences* — «בלי X», short names unique within
-the group, «כל השאר», «טרם שובצו»; prep cards also show helpers joining via `bw.HELP_TASK`). A duty spanning several
-events therefore appears once and whole, and the spine keeps the chronology. Cards are measured once
-(`measure_cards`) and packed per day into two-column blocks (`pack_day`); each block and the timeline are one `<tr>`
-for the pagination below. It goes on one page if the ratio is at least
+to stay on one page. **Three page types since 15.10**, one design language (a numbered badge in the stage colour —
+`duty_cards` numbers the duties by day → stage → start, and the same number is on the overview and the duty's page):
+`schedule_html` → `לו"ז שבת.png|pdf` (events only, Friday | Shabbat + מוצאי שבת after havdala, one page);
+`duties_rows`/`duties_html` → `תורנויות.png|pdf` (one card per duty: «n · name · K אנשים · אחראי/ת» + names, no
+hours or tasks — find your name, then your page); `flyer_sheet`/`render_flyer` → `<duty>.png|pdf` (hour pill → the
+task one action per line, names only where the group splits — `who_for_slot`: «בלי X», short names unique within
+the group, «כל השאר», red «חסרים N», «טרם שובצו»; then the full recipe, ingredients **and** method). A flyer that
+doesn't fit at `FLYER_MIN_FIT` moves its recipe to a second sheet (`<duty> — מתכון.png`, PDF of 2 pages). The
+helping group's page (בית מדרש) has two parts: what everyone does together, then «החלוקה להכנות» (each prep → its
+names); a help-only prep's page shows its helpers and the helping duty's own hours («מתחילים…» / «אחר כך…»).
+Overview cards are measured once (`measure_cards`) and packed per day into two-column blocks (`pack_day`); each
+block is one `<tr>` for the pagination below. The overview goes on one page if the ratio is at least
 `MIN_FIT`; otherwise `split_pages` chunks the rows by their measured heights into balanced
 `.page` divs — never cutting a row, shrinking as far as `PAGE_SAVE_FIT` when that saves a
 whole page — the PDF carries them all, and each page is re-rendered on its own into
-`לוז צל <n>.png` so a single page can be sent as an image. Continuation pages repeat the
+`תורנויות <n>.png` so a single page can be sent as an image. Continuation pages repeat the
 day heading and are labelled «עמוד n מתוך m». PNGs are shot with `ep.shot_binary()` (the
 `headless_shell` build): the full `chrome` binary paints only ~1036 of a 1123px window, which silently
 cut the bottom ~23mm (last rows, footer) off every image. The shabbat title («שבת סטודנטים», cell
-`bw.SCHED_TITLE`) is prefixed to `when_line` on flyers and the shadow schedule.
+`bw.SCHED_TITLE`) is prefixed to `when_line` on every page.
 
 ### Hebrew data conventions
 
@@ -268,10 +285,12 @@ read and written as `utf-8-sig`. Name matching for pasted lists goes through
   one `(day, hour)`, blocked people absent from their stages and blocked groups, every member has a
   task and every group has tasks, tasks only in planned groups, every staff-led group has a leader,
   every task anchored, no leftover `{…}` (task or recipe), every recipe dish in «מתכונים», one-page
-  flyers; plus warnings (events without an hour / out of order, a closed Shabbat without tish leader or
+  flyers (two with a recipe page), a help-only prep with helpers and its leader among them; plus warnings (events without an hour / out of order, a closed Shabbat without tish leader or
   havurot presenters, groups named by a pin / «אחראי על» / «לא בקבוצה» that aren't in the plan).
-  **2026-09-18 no longer reproduces:** since the meal split its pins and «אחראי על» name groups that no longer
-  exist (they are reported and ignored), and those pins were commitments that shaped every stage — the committed
+  **2026-09-18 no longer reproduces:** its pins / «אחראי על» name groups from before the meal split (13.10) — some
+  now match a 15.10-renamed group by accident («ארוחת ערב», «ארוחת צהריים שבת»), others are reported and ignored —
+  and pins are commitments that shape every stage. (2026-10-16 was re-imported on 15.10 with the new names, so it
+  reproduces.) The committed
   `shabbatot/2026-09-18*` and its duty_history rows are the record; never re-run it in place, and don't use
   `new_shabbat --from` with a file from before the split. To show a refactor changes nothing, run a demo week
   (form_page `--demo` → import_form → shabbat.py 2026-10-16) before and after, and diff
@@ -284,10 +303,11 @@ read and written as `utf-8-sig`. Name matching for pasted lists goes through
   `git checkout -- data/weeks.csv data/recipes.csv data/duty_history.csv shabbat-planner.xlsx`
   (the import edits weeks.csv and recipes.csv in place — demo dishes would leak into the form's datalist).
 - **`export_pdf` deletes every PDF/PNG in the output folder first**, so `--only flyers` also
-  removes the shadow schedule — finish with a full export before committing.
+  removes the schedule and overview pages — finish with a full export before committing.
 - **Phone-width screenshots:** headless Chromium will not lay out narrower than ~485px whatever
   `--window-size` says; frame the page in a 390px `<iframe>` inside a wider window instead.
 - **The form page** (`docs/index.html`) is checked end to end per week kind: `form_page.py --demo
   separate|early|late --out X`, `--dump-dom` (the demo writes `problems()` into `<pre id="check">`, which
   must be empty, and the message into `<textarea id="out">`), then `import_form.py` and `shabbat.py` on the
-  demo date (2026-10-16 — it must still be a future closed Shabbat, or change `demo_state`).
+  demo date — **in a throw-away copy of the repo** (`tar --exclude=.git` into the scratchpad): the demo date is the
+  first upcoming closed Shabbat, which is usually a real week (2026-10-16 is).

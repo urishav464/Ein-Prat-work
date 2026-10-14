@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_workbook as bw
+import import_form
 import roster
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,16 +71,20 @@ def page_data(demo=None):
                       "start": {"normal": times.get("שישי|תחילת עבודה", ""),
                                 "late": late.get("שישי|תחילת עבודה", "")}})
     dishes = [r["מנה"].strip() for r in bw.recipe_rows() if (r.get("מנה") or "").strip()]
-    data = {"students": students, "dates": dates, "dishes": dishes, "demo": None}
+    # ברירת המחדל של כמה מנקים — «אנשים» של המשימה בספריית המשימות (כמו ב-import_form)
+    fields = {"חדר האוכל בשישי": "clean-fri", 'בית המדרש במוצ"ש': "clean-bm", 'חדר האוכל במוצ"ש': "clean-ha"}
+    library = {r["קבוצה"]: r["אנשים"] for r in bw.read_csv("task_library.csv")}
+    cleaners = {field: library.get(import_form.CLEANING[key][0], "12") for key, field in fields.items()}
+    data = {"students": students, "dates": dates, "dishes": dishes, "cleaners": cleaners, "demo": None}
     if demo:
         upcoming = [d for d in dates if d["iso"] >= date.today().isoformat()]
         if not upcoming:
             raise SystemExit("אין שבת סגורה עתידית ב-shabbatot.csv — אין על מה להריץ דמו")
-        data["demo"] = demo_state(students, demo, upcoming[0])
+        data["demo"] = demo_state(students, demo, upcoming[0], cleaners)
     return data
 
 
-def demo_state(students, kind, shabbat):
+def demo_state(students, kind, shabbat, cleaners):
     """מילוי לדוגמה לכל סוג שבת, על השבת הסגורה הקרובה — רק לבדיקה מקצה לקצה, לא בדף שמתפרסם."""
     names = [s["name"] for s in students]
     staff = shabbat["staff"]
@@ -96,10 +101,12 @@ def demo_state(students, kind, shabbat):
                  {"what": "עוגת גזר", "qty": "6 תבניות", "ppl": "3", "lead": names[32], "help": "",
                   "note": "לסמן 2 תבניות לסעודה שלישית",
                   "where": "", "store": "המקרר הגדול בחדר האוכל", "ing": "1 ק\"ג גזר\n6 ביצים\n2 כוסות קמח",
-                  "steps": "מגררים את הגזר\nמערבבים הכול\nאופים 40 דקות ב-180"}],
+                  "steps": "מגררים את הגזר\nמערבבים הכול\nאופים 40 דקות ב-180"},
+                 {"what": "בראוניז", "qty": "2 תבניות", "ppl": "0", "lead": "", "help": "2", "note": "",
+                  "where": "", "store": "", "ing": "", "steps": ""}],
              "lunch-what": "שקשוקה ולחם", "lunch-ppl": "3", "lunch-lead": names[33],
              "lunch-ing": "30 ביצים\n2 ק\"ג עגבניות", "lunch-steps": "מטגנים בצל\nמוסיפים עגבניות וביצים",
-             "clean-fri": "12", "clean-bm": "12", "clean-ha": "12",
+             **cleaners,
              "m-dinner": "שניצל, אורז, שעועית ירוקה", "m-lunch": "חמין, קוגל", "m-salads": "טחינה, חומוס, מטבוחה",
              "salads": {"eve": [{"name": "סלט כרוב מרענן", "ing": "", "steps": ""},
                                 {"name": "סלט ירקות", "ing": "5 מלפפונים\n5 עגבניות", "steps": "חותכים דק"}],
@@ -109,6 +116,7 @@ def demo_state(students, kind, shabbat):
              "shiur": "לא", "seuda": "לא", "chevra": "לא",
              "pl-dinner": "חדר אוכל", "shiur-place": "בית המדרש", "chevra-what": "משחק, ולהביא משחקי קופסא לחדר האוכל",
              "z-dinner": "פסטה ברוטב עגבניות", "z-ing": "4 ק\"ג פסטה\n3 צנצנות רוטב", "z-steps": "מבשלים ומערבבים",
+             "frm-eve": "חצי מהחלות", "frm-noon": "שאר החלות",
              "sched": "", "notes": ""}
     if kind == "separate":
         seuda = shabbat["times"].get("שבת|סעודה שלישית", "16:00")

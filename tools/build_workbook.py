@@ -85,7 +85,16 @@ HELP_RULES = [("תנורים " + OVENS_LATE, FRIDAY_DINING, "+0"),
 # «אנשים = עזרה» בספריית המשימות: כמה שמצטרפים השבוע להכנות מהקבוצה הזו (סך «עזרה» בטופס).
 # כך בית המדרש = מי שעוזר בהכנות — מסדרים ב-8:00 ומצטרפים ב-8:45. בלי עזרה — המשימה נופלת.
 HELP_TOTAL = "עזרה"
-HELP_TASK = "עזרה בהכנת {}"            # משימת ההצטרפות; הפלייר של ההכנה מציג אותה כ«מצטרפים»
+HELP_TASK = "עזרה בהכנת {}"            # משימת ההצטרפות (בקבוצה שעוזרת)
+# הכנה עם «אנשים = 0» ועזרה (בראוניז 0+2): כל מי שמכין אותה בא מהקבוצה שעוזרת — רשום/ה שם ומקבל/ת את
+# הניקוד שלה; להכנה עצמה נשארת משימה (עם המתכון) בלי אנשים משלה, והפלייר שלה מציג את המצטרפים.
+
+
+def help_tasks(tasks, group):
+    """משימות ההצטרפות של קבוצות אחרות להכנה `group` (רשומות עם "task"/"group", כמו ב-export_pdf)."""
+    return [t for t in tasks if t["group"] != group and t["task"] == HELP_TASK.format(group)]
+
+
 # כשחסרים זמינים, shrink_to_fit מקטין קודם את הקבוצות האלה (ההכנות והעזרה נשארות מלאות)
 SHRINK_FIRST = (FRIDAY_DINING,)
 # מי שבקבוצה בשלב הזה לא משובץ/ת גם לקבוצה הזו: מנקי חדר האוכל בשישי הם לא מההכנות
@@ -454,6 +463,9 @@ def task_rows(date=None, times=None, warn=True):
         day = prep_day(p)
         anchor = prep_anchor(p, tags)
         hour = _hour(p.get("שעה"))
+        helpers_n = (p.get("עזרה") or p.get("עזרה מבית המדרש") or "").strip()
+        if not hour and day == "שישי" and (p.get("אנשים") or "").strip() == "0" and helpers_n not in ("", "0"):
+            hour = help_hour                             # הכנה של מצטרפים בלבד — מתחילה כשהם מגיעים
         if not hour and name == FRIDAY_LUNCH and day == "שישי":
             hour = next((h for tag, (h, _) in LUNCH_RULES.items() if tag in tags), "")
         if not hour and day == "שישי":
@@ -475,7 +487,6 @@ def task_rows(date=None, times=None, warn=True):
                       "מתכון": (p.get("מתכון") or "").strip() or base.get("מתכון", ""),
                       "עוגן": anchor, "הערה": note})
         taken.add(_task_key(name, day, hour, anchor))
-        helpers_n = (p.get("עזרה") or p.get("עזרה מבית המדרש") or "").strip()
         if helpers_n and helpers_n != "0":
             if help_group in off:
                 print("⚠ «{}» לא פעילה השבוע — אין מי שיצטרף ל«{}»".format(help_group, name))
@@ -514,7 +525,7 @@ def task_rows(date=None, times=None, warn=True):
         key = (SCHED_DAY.get(r["יום"], r["יום"]), r["עוגן"])
         if active is not None and r["עוגן"] and key in known and key not in active:
             continue                                     # אירוע שלא מתקיים השבוע
-        r["משימה"] = expand_catering(r["משימה"], week["menu"], warn=say)
+        r["משימה"] = expand_catering(r["משימה"].replace("\r\n", "\n").strip(), week["menu"], warn=say)
         r["מתכון"] = _recipe_list(expand_catering(r.get("מתכון") or "", week["menu"], warn=say, sep=";"),
                                   names, say)
         r["שעה"] = resolve_hour(r["שעה"], (times or {}).get(key))
@@ -539,7 +550,8 @@ def write_task_row(ws, r, row):
     data_cell(ws, r, T_NOTE, get("הערה"), wrap=True)
     if row and row.get("יום"):
         ws.cell(row=r, column=T_DAY).fill = fill(DAY_FILLS.get(row["יום"], BAND))
-    ws.row_dimensions[r].height = 30 if row else 18
+    lines = (row.get("משימה") or "").count("\n") + 1 if row else 1     # משימה של כמה שורות — שורה גבוהה יותר
+    ws.row_dimensions[r].height = max(30, 15 * lines) if row else 18
 
 
 def write_group_row(ws, r, row):
@@ -806,7 +818,7 @@ STEPS = [
     ("1", "«לוז» — בוחרים תאריך, מתקנים שעות ומקומות. «הצעה» מתעדכנת לבד; «שעה» היא מה שנשלח."),
     ("2", "«משימות» — לכל משימה: שלב, יום, שעה, קבוצה, כמה אנשים, מתכון (לצוות הכנה) ועוגן בלו\"ז."),
     ("3", "python3 tools/assign_groups.py <תאריך> — ממלא «שמות», «קבוצות», «חניכים» ו«היסטוריה»."),
-    ("4", "python3 tools/export_pdf.py <תאריך> — לו\"ז צל + פלייר לכל קבוצת עבודה. ערכת בשיטס? הורד כ-xlsx והרץ שוב."),
+    ("4", "python3 tools/export_pdf.py <תאריך> — לו\"ז שבת, מי בכל תורנות, ודף לכל תורנות. ערכת בשיטס? הורד כ-xlsx והרץ שוב."),
 ]
 
 STATUS = [
@@ -816,7 +828,7 @@ STATUS = [
     ("זמינים בלי תורנות", '=COUNTIFS({c},"כן",{g},"")', ""),
     ("משימות", '=COUNTA({t})', ""),
     ("משימות בלי שמות", '=COUNTA({t})-COUNTA({n})', "להריץ שיבוץ, או להשלים ידנית"),
-    ("משימות בלי עוגן", '=COUNTA({t})-COUNTA({a})', "לא יופיעו ליד אירוע בלו\"ז הצל"),
+    ("משימות בלי עוגן", '=COUNTA({t})-COUNTA({a})', "בלי שעה ובלי עוגן — בדף התורנות כתוב «ללא שעה»"),
     ("קבוצות עבודה", '=COUNTA({gr})', "פלייר לכל אחת"),
 ]
 
@@ -877,8 +889,8 @@ def build_dashboard(wb):
 
     tips = [
         "שלבים: הכנות שישי (בוקר) · תורנות שישי (צהריים–אחה\"צ) · תורנות שבת (ערב ושבת). חניך יכול להיות בקבוצה אחת בכל שלב.",
-        "גודל קבוצה = שיא האנשים שנדרשים בו-זמנית במשימות שלה. משימה בלי שעה = כל הקבוצה. משימה בלי קבוצה = בלו\"ז הצל בלי שמות.",
-        "עוגן = האירוע בלו\"ז שלידו המשימה מופיעה בלו\"ז הצל. הרשימה הנגללת נלקחת מעמודת «אירוע» ב«לוז».",
+        "גודל קבוצה = שיא האנשים שנדרשים בו-זמנית במשימות שלה. משימה בלי שעה = כל הקבוצה. משימה בלי קבוצה = הודעה לכולם בלו\"ז שבת, ליד האירוע שלה.",
+        "עוגן = האירוע בלו\"ז שהמשימה קשורה אליו — ממנו השעה היחסית, ומשימה בלי שעה מוצגת בשעת האירוע. הרשימה הנגללת נלקחת מעמודת «אירוע» ב«לוז».",
         "«ניקוד» יושב ב«קבוצות» (1 טיש וקידוש, 2 ארוחות שבת, 3 הכנות שישי) ונצבר ל«חניכים» ול«היסטוריה» — מי שצבר פחות משובץ קודם.",
         "מצרכים על הפלייר: ב«משימות» בוחרים מנה בעמודת «מתכון» (כמה מנות — מופרדות ב-;), ורשימת המצרכים מ«מתכונים» מודפסת בפלייר של הקבוצה.",
     ]
@@ -937,7 +949,7 @@ def build_schedule(wb):
     ws.freeze_panes = "A{}".format(SCHED_FIRST_ROW)
     note_row(ws, SCHED_FIRST_ROW + SCHED_ROWS + 1,
              "«שעה» היא הלו\"ז שנשלח בפועל — עורכים בה חופשי. «הצעה» מחושבת מכניסת/צאת השבת "
-             "(הכללים ב-data/schedule_template.csv). «משימות» = כמה משימות מעוגנות לאירוע בלו\"ז הצל.", last_col=7)
+             "(הכללים ב-data/schedule_template.csv). «משימות» = כמה משימות מעוגנות לאירוע.", last_col=7)
     return ws
 
 
@@ -966,7 +978,7 @@ def build_tasks(wb):
     note_row(ws, last + 2,
              "«אנשים» = כמה צריך למשימה; ריק = כל הקבוצה. «שמות» מתמלא ע\"י השיבוץ ואפשר לתקן ידנית. "
              "«מתכון» = מנה מ«מתכונים»; כמה מנות מופרדות ב-; (משימה שמכינה שני סלטים). "
-             "«עוגן» = האירוע בלו\"ז שלידו המשימה תופיע בלו\"ז הצל. הניקוד יושב ב«קבוצות».", last_col=10)
+             "«עוגן» = האירוע בלו\"ז שהמשימה קשורה אליו (ממנו השעה היחסית). הניקוד יושב ב«קבוצות».", last_col=10)
     return ws
 
 
@@ -1089,7 +1101,7 @@ def build_recipes(wb):
     ws.freeze_panes = "A3"
     note_row(ws, RECIPE_ROWS + 4,
              "שם המנה (עמודה B) הוא מה שבוחרים בעמודת «מתכון» ב«משימות» — והמצרכים מודפסים על הפלייר של הקבוצה "
-             "(ההוראות רק עם --with-recipes). "
+             "(גם המצרכים וגם אופן ההכנה, בדף של התורנות). "
              "מרכיבים והוראות: שורה לכל פריט (Alt+Enter לשורה חדשה בתא).", last_col=6)
     return ws
 

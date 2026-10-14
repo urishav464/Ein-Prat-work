@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""שבת שלמה בפקודה אחת: תבנית ← קובץ השבת ← שיבוץ ← פליירים ולו"ז צל ← zip ← בדיקות.
+"""שבת שלמה בפקודה אחת: תבנית ← קובץ השבת ← שיבוץ ← הדפים (לו"ז שבת, מי בכל תורנות, דף לכל תורנות) ← zip ← בדיקות.
 
     python3 tools/shabbat.py 2026-09-25
     python3 tools/shabbat.py 2026-09-25 --check      # רק בדיקות ו-zip, על מה שכבר קיים
@@ -25,6 +25,11 @@ import assign_groups
 import attendance
 import build_workbook as bw
 import export_pdf as ep
+
+
+def brief(text, n):
+    """טקסט משימה להודעה בשורה אחת — משימה של כמה שורות מתחברת ב-« / »."""
+    return (text or "").replace("\n", " / ")[:n]
 
 
 def run(script, *args):
@@ -83,18 +88,24 @@ def checks(date, workbook, out_dir):
         if not mine:
             problems.append("לקבוצה «{}» אין משימות".format(g["name"]))
         for t in mine:
-            if not t["names"]:
-                problems.append("משימה בלי שמות: «{}» [{}]".format(t["task"][:40], g["name"]))
+            if not t["names"] and t["people"] != 0:     # 0 = הכנת מצטרפים בלבד — השמות במשימת העזרה
+                problems.append("משימה בלי שמות: «{}» [{}]".format(brief(t["task"], 40), g["name"]))
+        helping = [n for h in bw.help_tasks(data["tasks"], g["name"]) for n in h["names"]]
+        if mine and all(t["people"] == 0 for t in mine):   # הכנת מצטרפים בלבד (בראוניז 0+2)
+            if not helping:
+                problems.append("ל«{}» אין אף אחד — אין אנשים משלה ואף אחד לא מצטרף".format(g["name"]))
+            elif g["leader"] and g["leader"] not in helping:
+                problems.append("האחראי/ת של «{}» ({}) לא מבין המצטרפים".format(g["name"], g["leader"]))
     names = {g["name"] for g in data["groups"]}
     for t in data["tasks"]:                              # משימה בלי קבוצה מותרת (הוספה ידנית)
         if t["group"] and t["group"] not in names:
-            problems.append("משימה «{}» בקבוצה שלא בתכנית: {}".format(t["task"][:40], t["group"]))
+            problems.append("משימה «{}» בקבוצה שלא בתכנית: {}".format(brief(t["task"], 40), t["group"]))
 
     plan = assign_groups.read_plan(date)
     needs = {g["name"] for g in plan if g["needs_staff"]}
     for t in data["tasks"]:                              # משימה שלא התמלאה — הוקטנה (חסרים זמינים) או לא
         if t["people"] and len(t["names"]) < int(t["people"]):
-            warnings.append("ב«{}» [{}] שובצו {} מתוך {}".format(t["task"][:30], t["group"], len(t["names"]),
+            warnings.append("ב«{}» [{}] שובצו {} מתוך {}".format(brief(t["task"], 30), t["group"], len(t["names"]),
                                                               int(t["people"])))
     staff = set(attendance.load_staff(date))             # קבוצת צוות שהאחראי/ת שלה נבחר/ה אוטומטית ולא מהצוות
     explicit = dict(bw.week_leaders(date), **attendance.load_leaders(date))
@@ -108,12 +119,12 @@ def checks(date, workbook, out_dir):
 
     for t in data["tasks"]:                              # כל משימה מעוגנת, אין {…} שנשאר
         if not ep.find_event(data["events"], t):
-            problems.append("משימה לא מעוגנת ללו\"ז: «{}» (עוגן: {})".format(t["task"][:40], t["anchor"] or "—"))
+            problems.append("משימה לא מעוגנת ללו\"ז: «{}» (עוגן: {})".format(brief(t["task"], 40), t["anchor"] or "—"))
         if "{" in t["task"] or "{" in (t["recipe"] or ""):
-            problems.append("מציין מקום שלא הוחלף: «{}»".format(t["task"][:50]))
+            problems.append("מציין מקום שלא הוחלף: «{}»".format(brief(t["task"], 50)))
         for dish in ep.split_dishes(t["recipe"]):
             if dish not in data["recipes"]:
-                problems.append("אין בגיליון «מתכונים» את «{}» (משימה: {})".format(dish, t["task"][:30]))
+                problems.append("אין בגיליון «מתכונים» את «{}» (משימה: {})".format(dish, brief(t["task"], 30)))
 
     last = None                                          # הלו"ז: לכל אירוע שעה, ולפי הסדר
     for e in data["events"]:
@@ -131,9 +142,10 @@ def checks(date, workbook, out_dir):
         if "מעבירים" not in notes.get("חבורות", "") or "טרם" in notes.get("חבורות", ""):
             warnings.append("לא רשומים מעבירי החבורות")
 
-    for g in data["groups"]:                             # כל פלייר בעמוד אחד
+    for g in data["groups"]:                             # כל פלייר בעמוד אחד (ועם מתכון ארוך — ועוד עמוד מתכון)
         pdf = out_dir / "{}.pdf".format(g["name"])
-        if pdf.exists() and ep.pdf_pages(pdf) != 1:
+        recipe = any(ep.split_dishes(t["recipe"]) for t in data["tasks"] if t["group"] == g["name"])
+        if pdf.exists() and ep.pdf_pages(pdf) > (2 if recipe else 1):
             problems.append("הפלייר «{}» יצא ב-{} עמודים".format(g["name"], ep.pdf_pages(pdf)))
     return data, problems, warnings
 

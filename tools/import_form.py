@@ -7,8 +7,8 @@
 ההודעה נפתחת ב«📋 טופס שבת v2 · <תאריך>», ובנויה מקטעים «— שם —» של שורות «מפתח: ערך»
 מחוברות ב-« · ». הכלי כותב:
   data/attendance/<תאריך>.csv — כל החניכים פחות «לא בשבת»; «לא בשישי» / «עוזבים» הופכים
-                                 ל«לא זמין בשלב» (ו«לא בשישי» גם «לא בקבוצה» להכנת ארוחת הערב),
-                                 ומעבירי החבורות — «לא בקבוצה» להכנת ולפינוי ארוחת הצהריים בשבת
+                                 ל«לא זמין בשלב» (ו«לא בשישי» גם «לא בקבוצה» לגסטרונומים),
+                                 ומעבירי החבורות — «לא בקבוצה» לגסטרונומים ולארוחת הצהריים בשבת
   data/preps/<תאריך>.csv      — ההכנות, ארוחת צהריים שישי, מספרי המנקים וארוחת מוצ"ש
   data/menu/<תאריך>.csv       — קייטרינג, סלטי קייטרינג, הסלטים שלפני הארוחה וחלוקת העוגות
   data/schedule/<תאריך>.csv   — מי מעביר טיש/חבורות/שיעור, סעודה שלישית (ואצל שקד — גם היציאה
@@ -43,18 +43,19 @@ WEEK_FIELDS = ["תאריך", "שבת משותפת", "תנורים", "הערה"]
 FORM = "טופס"                                    # «מקור» של שורות לו"ז שהייבוא כותב
 FRIDAY = "הכנות שישי;תורנות שישי"
 MOTZASH = bw.STAGES[-1]
-# מעבירי החבורות לא בתורנות ארוחת הצהריים בשבת — לא בהכנה (11:45, עריכת השולחן) וגם לא בפינוי
-HAVURA_BLOCK = ("הכנת ארוחת צהריים שבת", "פינוי ארוחת צהריים שבת")
-# מי שלא בשישי בבוקר אולי לא מגיע/ה עד 14:00 — ההכנה לארוחת הערב מתחילה אז (פריקת האוכל);
-# פינוי ארוחת הערב והטיש — כן
-NOFRI_BLOCK = ("הכנת ארוחת ערב",)
+# מעבירי החבורות (11:45) לא בתורנויות של ארוחת הצהריים בשבת — לא בעריכה, לא בפינוי, וגם לא בגסטרונומים
+# (מכניסים את האוכל לתנור ב-11:00)
+HAVURA_BLOCK = ("גסטרונומים", "ארוחת צהריים שבת", "פינוי ארוחת צהריים וסעודה שלישית")
+# מי שלא בשישי בבוקר אולי לא מגיע/ה עד 14:00 — הגסטרונומים מתחילים אז (פריקת האוכל);
+# ארוחת הערב (סלטים ועריכה לפני הסעודה), הפינוי והטיש — כן
+NOFRI_BLOCK = ("גסטרונומים",)
 MOTZASH_DINNER = 'ארוחת ערב מוצ"ש'
-DEFAULT_CLEANERS = "12"
+# כמה מנקים — ברירת המחדל היא «אנשים» של המשימה בספריית המשימות (בית המדרש 10, חדר האוכל 12)
 CLEANING = {"חדר האוכל בשישי": (bw.FRIDAY_DINING, "שישי"),
-            'בית המדרש במוצ"ש': ("ניקיון בית המדרש", "מוצאי שבת"),
-            'חדר האוכל במוצ"ש': ("ניקיון חדר האוכל", "מוצאי שבת"),
-            "ניקיון בית המדרש": ("ניקיון בית המדרש", "מוצאי שבת"),          # הודעה בגרסה הקודמת
-            "ניקיון חדר האוכל": ("ניקיון חדר האוכל", "מוצאי שבת")}
+            'בית המדרש במוצ"ש': ('ניקיון בית המדרש במוצ"ש', "מוצאי שבת"),
+            'חדר האוכל במוצ"ש': ('ניקיון חדר האוכל במוצ"ש', "מוצאי שבת"),
+            "ניקיון בית המדרש": ('ניקיון בית המדרש במוצ"ש', "מוצאי שבת"),          # הודעה בגרסה הקודמת
+            "ניקיון חדר האוכל": ('ניקיון חדר האוכל במוצ"ש', "מוצאי שבת")}
 
 
 def parse(text):
@@ -164,11 +165,12 @@ def last_havurot():
 
 
 def library_slot(group, day, tags):
-    """(שעה, עוגן) של המשימה הקבועה של הקבוצה בסוג השבת הזה — כדי ששורת ה-override תחליף אותה."""
+    """(שעה, עוגן, אנשים) של המשימה הקבועה של הקבוצה בסוג השבת הזה — כדי ששורת ה-override תחליף
+    אותה; «אנשים» הוא גם ברירת המחדל של מספר המנקים."""
     for r in bw.read_csv("task_library.csv"):
         if r["קבוצה"] == group and r["יום"] == day and bw.applies(r.get("תנאי"), tags):
-            return r["שעה"], r["עוגן"]
-    return "", ""
+            return r["שעה"], r["עוגן"], r["אנשים"]
+    return "", "", ""
 
 
 def build(msg, warn):
@@ -315,9 +317,10 @@ def build(msg, warn):
     friday_ok = set(present) - set(nofri)
     tags = bw.tags_for(msg["shared"], msg["ovens"])
     groups = {r["קבוצה"]: r for r in bw.read_csv("group_plan.csv")}
-    for g, why in [(g, "מעבירי החבורות") for g in HAVURA_BLOCK] + [(g, "לא בשישי") for g in NOFRI_BLOCK]:
+    for g, why in [(g, "חסימת מעבירי החבורות") for g in HAVURA_BLOCK] + [(g, "חסימת לא בשישי") for g in NOFRI_BLOCK] + \
+            [(g, "ניקיון בטופס") for g, _ in CLEANING.values()]:
         if g not in groups:
-            warn("«{}» (חסימת {}) אינה קבוצה ב-data/group_plan.csv".format(g, why))
+            warn("«{}» ({}) אינה קבוצה ב-data/group_plan.csv".format(g, why))
 
     def lead(name, group):
         if not name:
@@ -345,12 +348,14 @@ def build(msg, warn):
 
     for line in sec.get("הכנות", []):
         name, d = fields(line)
-        if not d.get("אנשים", "").isdigit() or int(d["אנשים"]) < 1:
-            warn("ל«{}» חסר כמה אנשים".format(name))
+        people, helping = d.get("אנשים", ""), d.get("עזרה", "")
+        if not people.isdigit() or (int(people) < 1 and not (helping.isdigit() and int(helping) > 0)):
+            warn("ל«{}» חסר כמה אנשים".format(name))     # 0 אנשים מותר רק עם עזרה (בראוניז 0+2)
         note = "\n".join(x for x in (d.get("הערה", ""),
                                       "מקום המצרכים: " + d["מצרכים נמצאים"] if d.get("מצרכים נמצאים") else "",
                                       "מקום אחסון בסיום: " + d["אחסון"] if d.get("אחסון") else "") if x)
-        prep(הכנה=name, שעה="-60" if name.startswith("חלות") else "", כמות=d.get("כמות") or d.get("כמה", ""),
+        early = name.startswith("חלות") and people != "0"          # חלות — שעה לפני כולם (לא של מצטרפים בלבד)
+        prep(הכנה=name, שעה="-60" if early else "", כמות=d.get("כמות") or d.get("כמה", ""),
              אנשים=d.get("אנשים", ""), אחראי=lead(d.get("אחראי", ""), name), עזרה=d.get("עזרה", ""),
              מתכון=dish(name), הערה=note)
     for line in sec.get("ארוחת צהריים שישי", []):
@@ -362,15 +367,15 @@ def build(msg, warn):
     cleaning = keyed(sec.get("ניקיונות", [])) if msg["v2"] else keyed(sec.get('מוצ"ש', []))
     for key, (group, day) in CLEANING.items():
         n = cleaning.get(key, "")
-        if not n or n == DEFAULT_CLEANERS:
+        hour, anchor, default = library_slot(group, day, tags)
+        if not n or n == default:
             continue
         if not bw.applies(groups.get(group, {}).get("תנאי"), tags):
             warn("«{}: {}» — אין את הניקיון הזה בסוג השבת הזו; לא נכנס".format(key, n))
             continue
         if not n.isdigit() or int(n) < 1:
-            warn("«{}: {}» — צריך מספר גדול מ-0; נשאר {}".format(key, n, DEFAULT_CLEANERS))
+            warn("«{}: {}» — צריך מספר גדול מ-0; נשאר {}".format(key, n, default))
             continue
-        hour, anchor = library_slot(group, day, tags)
         prep(הכנה=group, יום=day, שעה=hour, עוגן=anchor, אנשים=n)
     motz = keyed(sec.get('מוצ"ש', []))
     if motz.get("ארוחת ערב"):
@@ -400,7 +405,7 @@ def build(msg, warn):
             kinds.setdefault(x, "סלטים")
             if not dish(x):
                 warn("אין מתכון ל«{}» — הפלייר של הכנת הארוחה יוצג בלי המצרכים שלו".format(x))
-    frm = keyed(sec.get("מההכנות", []))                 # רק בהודעה בגרסה הקודמת
+    frm = keyed(sec.get("מההכנות", []))                 # מה מההכנות של שישי יוצא לכל ארוחה (ריק — ברירת המחדל)
     add("מההכנות לערב", frm.get("לערב", ""), split=False)
     add("מההכנות לצהריים", frm.get("לצהריים", ""), split=False)
     cakes = keyed(sec.get("עוגות", []))
