@@ -232,7 +232,14 @@ base64 data URIs from `assets/fonts/` so rendering never touches the network.
 fitted by measuring first: `measure_page` is a `--dump-dom` pass where an inline script sets
 `document.title` to `FIT:<ratio>|AVAIL:<px>|CHROME:<px>|ROWS:<h,h,…>`; the ratio is then
 baked into a CSS `transform: scale()` on `.inner`. A flyer shrinks down to `FLYER_MIN_FIT`
-to stay on one page. The shadow schedule goes on one page if the ratio is at least
+to stay on one page. **The shadow schedule** (since 15.10) has two coordinated parts, as its title says:
+`timeline_html` («לו"ז שבת» — per day the events and the times only duties work, each with numbered chips of the
+duties working then) and one uniform card per duty (`shadow_cards` / `card_html`: «n · name · K אנשים · אחראי/ת»,
+the names, then a pill per hour with a short label and *only the differences* — «בלי X», short names unique within
+the group, «כל השאר», «טרם שובצו»; prep cards also show helpers joining via `bw.HELP_TASK`). A duty spanning several
+events therefore appears once and whole, and the spine keeps the chronology. Cards are measured once
+(`measure_cards`) and packed per day into two-column blocks (`pack_day`); each block and the timeline are one `<tr>`
+for the pagination below. It goes on one page if the ratio is at least
 `MIN_FIT`; otherwise `split_pages` chunks the rows by their measured heights into balanced
 `.page` divs — never cutting a row, shrinking as far as `PAGE_SAVE_FIT` when that saves a
 whole page — the PDF carries them all, and each page is re-rendered on its own into
