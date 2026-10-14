@@ -160,7 +160,8 @@ script writes, grey = computed.
   size and stay out of ordinary slots unless pinned — except in `assign_groups.STAFF_HELP_STAGES`, the two Friday
   stages, where they are assigned like everyone, but never to a Friday group whose slots collide with a staff-led
   group's (`lead_slots`, e.g. the 14:00 dining room vs dinner prep), so they stay free to lead on Shabbat), `לא בקבוצה` (groups the ranking never puts
-  this person in — the havurot presenters are kept out of both Shabbat-lunch groups (`import_form.HAVURA_BLOCK`); pins still win; automatic
+  this person in — the havurot presenters are kept out of both Shabbat-lunch groups (`import_form.HAVURA_BLOCK`) and the «לא בשישי» students
+  out of «הכנת ארוחת ערב», which starts Friday 14:00 (`import_form.NOFRI_BLOCK`); pins still win; automatic
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
@@ -184,7 +185,8 @@ script writes, grey = computed.
   person already works this week). A group on a day the person already works is a candidate only when
   `same_day_needed` — fewer people left without a duty that day than open slots in that day's groups. So Friday-morning
   workers go to the Saturday groups or Motzash, and Friday-night groups (dinner prep/clear, tish) are filled first by
-  people who didn't work Friday morning (the «לא בשישי בבוקר» ones arrive before Shabbat).
+  people who didn't work Friday morning (the «לא בשישי בבוקר» ones arrive before Shabbat — but maybe not by 14:00, so
+  they fill dinner clear and the tish, and dinner prep goes to Friday-morning workers).
 - **Time rules chain.** A schedule row's `בסיס` may be another event's name *on the same day*
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after

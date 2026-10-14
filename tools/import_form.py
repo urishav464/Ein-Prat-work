@@ -7,7 +7,8 @@
 ההודעה נפתחת ב«📋 טופס שבת v2 · <תאריך>», ובנויה מקטעים «— שם —» של שורות «מפתח: ערך»
 מחוברות ב-« · ». הכלי כותב:
   data/attendance/<תאריך>.csv — כל החניכים פחות «לא בשבת»; «לא בשישי» / «עוזבים» הופכים
-                                 ל«לא זמין בשלב», ומעבירי החבורות — «לא בקבוצה» להכנת ולפינוי ארוחת הצהריים בשבת
+                                 ל«לא זמין בשלב» (ו«לא בשישי» גם «לא בקבוצה» להכנת ארוחת הערב),
+                                 ומעבירי החבורות — «לא בקבוצה» להכנת ולפינוי ארוחת הצהריים בשבת
   data/preps/<תאריך>.csv      — ההכנות, ארוחת צהריים שישי, מספרי המנקים וארוחת מוצ"ש
   data/menu/<תאריך>.csv       — קייטרינג, סלטי קייטרינג, הסלטים שלפני הארוחה וחלוקת העוגות
   data/schedule/<תאריך>.csv   — מי מעביר טיש/חבורות/שיעור, סעודה שלישית (ואצל שקד — גם היציאה
@@ -44,6 +45,9 @@ FRIDAY = "הכנות שישי;תורנות שישי"
 MOTZASH = bw.STAGES[-1]
 # מעבירי החבורות לא בתורנות ארוחת הצהריים בשבת — לא בהכנה (11:45, עריכת השולחן) וגם לא בפינוי
 HAVURA_BLOCK = ("הכנת ארוחת צהריים שבת", "פינוי ארוחת צהריים שבת")
+# מי שלא בשישי בבוקר אולי לא מגיע/ה עד 14:00 — ההכנה לארוחת הערב מתחילה אז (פריקת האוכל);
+# פינוי ארוחת הערב והטיש — כן
+NOFRI_BLOCK = ("הכנת ארוחת ערב",)
 MOTZASH_DINNER = 'ארוחת ערב מוצ"ש'
 DEFAULT_CLEANERS = "12"
 CLEANING = {"חדר האוכל בשישי": (bw.FRIDAY_DINING, "שישי"),
@@ -299,8 +303,9 @@ def build(msg, warn):
                ("עוזב/ת לפני מוצ\"ש" if n in leave else "")
         if n in havurot:
             note = " · ".join(x for x in (note, "מעביר/ה חבורה") if x)
+        groups_out = (NOFRI_BLOCK if n in nofri else ()) + (HAVURA_BLOCK if n in havurot else ())
         att.append({"שם": n, "תוכנית": program.get(n, ""), "חבורה": havurot_all.get(n, ""), "זמין לתורנות": "כן",
-                    "לא זמין בשלב": blocked, "לא בקבוצה": ";".join(HAVURA_BLOCK) if n in havurot else "",
+                    "לא זמין בשלב": blocked, "לא בקבוצה": ";".join(dict.fromkeys(groups_out)),
                     "צוות שבת": "", "שיבוץ ידני": "", "אחראי על": "", "הערה": note})
 
     # --- הכנות ----------------------------------------------------------------
@@ -310,9 +315,9 @@ def build(msg, warn):
     friday_ok = set(present) - set(nofri)
     tags = bw.tags_for(msg["shared"], msg["ovens"])
     groups = {r["קבוצה"]: r for r in bw.read_csv("group_plan.csv")}
-    for g in HAVURA_BLOCK:
+    for g, why in [(g, "מעבירי החבורות") for g in HAVURA_BLOCK] + [(g, "לא בשישי") for g in NOFRI_BLOCK]:
         if g not in groups:
-            warn("«{}» (חסימת מעבירי החבורות) אינה קבוצה ב-data/group_plan.csv".format(g))
+            warn("«{}» (חסימת {}) אינה קבוצה ב-data/group_plan.csv".format(g, why))
 
     def lead(name, group):
         if not name:
