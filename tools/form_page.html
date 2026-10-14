@@ -279,7 +279,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:14px}
     <h3 style="font-size:16px">דבר תורה בערב שבת</h3>
     <p class="hint" style="margin:0" id="dt-hint"></p>
     <div class="row2">
-      <label class="f">מי נותן/ת<select id="dt-by" class="dvar"></select></label>
+      <label class="f">מי מעביר/ה<select id="dt-by" class="dvar"></select></label>
       <label class="f" id="dt-other-box" hidden>שם<input id="dt-other"></label>
     </div>
     <div class="seg">
@@ -744,7 +744,7 @@ function message(){
   L.push('— עוזבים לפני מוצ"ש —', ...by('leave'));
   if (shared) L.push('— מקומות —', `קבלת שבת ישראלית: ${clean(state['pl-kabbalat'])} · שעה: ${clean(state['tm-kabbalat'])}`,
                      `סעודת שבת: ${clean(state['pl-dinner'])} · שעה: ${clean(state['tm-dinner'])}`);
-  L.push('— דבר תורה —', `נותן/ת: ${who('dt-by', 'dt-other') || 'טרם'} · סגרנו: ${state['dt-ok'] === 'כן' ? 'כן' : 'לא'}`);
+  L.push('— דבר תורה —', `מעביר/ה: ${who('dt-by', 'dt-other') || 'טרם'} · סגרנו: ${state['dt-ok'] === 'כן' ? 'כן' : 'לא'}`);
   L.push('— טיש —', `מעביר/ה: ${who('tish-by', 'tish-other') || 'טרם'} · סגרנו: ${state['tish-ok'] === 'כן' ? 'כן' : 'לא'}`);
   const hav = list(['hav-1', 'hav-2', 'hav-3']);
   L.push('— חבורות —', `מעבירים: ${hav.length && !state['havurot-later'] ? hav.join(', ') : 'טרם'}`);
@@ -810,7 +810,7 @@ function problems(){
   if (!clean(state['lunch-what'])) out.push(['s3', 'מה מבשלים לארוחת צהריים שישי']);
   [['eve', 'לארוחת הערב'], ['noon', 'לארוחת הצהריים']].forEach(([m, t]) => {
     if (!state.salads[m].some(s => clean(s.name))) out.push(['s4', `לפחות סלט אחד שמכינים ${t}`]); });
-  if (state['dt-by'] === OTHER && !clean(state['dt-other'])) out.push(['s5', 'מי נותן את דבר התורה — לכתוב שם']);
+  if (state['dt-by'] === OTHER && !clean(state['dt-other'])) out.push(['s5', 'מי מעביר את דבר התורה — לכתוב שם']);
   if (state['tish-by'] === OTHER && !clean(state['tish-other'])) out.push(['s5', 'מי מעביר את הטיש — לכתוב שם']);
   const hav = list(['hav-1', 'hav-2', 'hav-3']), here = shabbatPeople();
   if (new Set(hav).size !== hav.length) out.push(['s5', 'אותו חניך נבחר פעמיים לחבורות']);
@@ -847,7 +847,7 @@ function tishAt(){                              // הטיש זז עם שעת א�
 const hhmm = m => m === null ? '' : String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
 function soft(){
   const out = [];
-  if (!who('dt-by', 'dt-other')) out.push('עוד לא נקבע מי נותן את דבר התורה בערב שבת');
+  if (!who('dt-by', 'dt-other')) out.push('עוד לא נקבע מי מעביר את דבר התורה בערב שבת');
   else if (state['dt-ok'] !== 'כן') out.push('דבר התורה בערב שבת עוד לא נסגר עם ' + who('dt-by', 'dt-other'));
   if (!who('tish-by', 'tish-other')) out.push('עוד לא נקבע מי מעביר את הטיש');
   else if (state['tish-ok'] !== 'כן') out.push('הטיש עוד לא נסגר עם ' + who('tish-by', 'tish-other'));
