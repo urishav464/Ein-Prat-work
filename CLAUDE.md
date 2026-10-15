@@ -255,7 +255,8 @@ the group, «כל השאר», red «חסרים N», «טרם שובצו»; then 
 doesn't fit at `FLYER_MIN_FIT` moves its recipe to a second sheet (`<duty> — מתכון` image, PDF of 2 pages).
 **Output files:** PDFs at the top of `shabbatot/<date>/`; PNGs in its `תמונות/` folder (`ep.IMAGES`, no zip any
 more), named by `ep.image_name(num, name)` — the duty's overview number, two digits, so the folder reads in
-overview order (`00 לו״ז שבת.png`, `00 תורנויות.png`, `01 …`, `NN <duty> — מתכון.png`). Every name goes through
+overview order (`00 לו״ז שבת.png`, `00 תורנויות.png`, `01 …`; a recipe sheet is `NNב <duty> — מתכון.png` — the ב
+keeps it right after its duty page, which a bare « — מתכון» suffix would sort before, space < «.»). Every name goes through
 `ep.safe_name`: ASCII `"` → Hebrew gershayim `״`, other Windows-invalid characters → `-`. Windows silently
 skips a file whose name has `"` (the 16.10 zip lost `לו"ז שבת` and the three מוצ"ש pages: 18 of 22 reached
 WhatsApp); `shabbat.py` fails on any output name that isn't safe, and on a duty without its image. The weeks

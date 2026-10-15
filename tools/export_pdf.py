@@ -48,8 +48,9 @@ def safe_name(text):
 
 def image_name(num, name, recipe=False):
     """«03 חלות.png»: המספר של התורנות בדף התורנויות, כך שהתיקייה מסודרת כמו הדף (00 = לו"ז ודף התורנויות).
-    עמוד המתכון — «03 חלות — מתכון.png», ליד הדף של התורנות."""
-    return "{:02d} {}{}.png".format(num, safe_name(name), " — מתכון" if recipe else "")
+    עמוד המתכון — «03ב חלות — מתכון.png»: ה-ב שם אותו מיד אחרי הדף של התורנות (בלעדיו הרווח ב«— מתכון»
+    קודם לנקודה של «.png», והמתכון היה ממוין לפני הדף)."""
+    return "{:02d}{} {}{}.png".format(num, "ב" if recipe else "", safe_name(name), " — מתכון" if recipe else "")
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +943,7 @@ RECIPE_MIN_FIT = 0.65   # עמוד מתכון מתכווץ עד כאן; מעבר
 
 def render_flyer(card, num, data, out_dir, png=True):
     """הדף של תורנות: עמוד אחד (מתכווץ עד FLYER_MIN_FIT). לא נכנס ויש מתכון — המתכון עובר לעמוד משלו:
-    ה-PDF בשני עמודים, ושתי תמונות: «NN <שם>.png» ו«NN <שם> — מתכון.png». מחזיר את הקבצים שנוצרו."""
+    ה-PDF בשני עמודים, ושתי תמונות: «NN <שם>.png» ו«NNב <שם> — מתכון.png». מחזיר את הקבצים שנוצרו."""
     pdf = out_dir / "{}.pdf".format(safe_name(card["name"]))
     image = out_dir / IMAGES / image_name(num, card["name"]) if png else None
     fit = measure_page(flyer_html([flyer_sheet(card, num, data, fixed=True)], measure=True))[0]
