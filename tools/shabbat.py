@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""שבת שלמה בפקודה אחת: תבנית ← קובץ השבת ← שיבוץ ← הדפים (לו"ז שבת, מי בכל תורנות, דף לכל תורנות) ← zip ← בדיקות.
+"""שבת שלמה בפקודה אחת: תבנית ← קובץ השבת ← שיבוץ ← הדפים (לו"ז שבת, מי בכל תורנות, דף לכל תורנות) ← בדיקות.
+ה-PDF בתיקיית השבת, והתמונות לשליחה — בתיקייה «תמונות» שבתוכה, ממוספרות כמו דף התורנויות.
 
     python3 tools/shabbat.py 2026-09-25
-    python3 tools/shabbat.py 2026-09-25 --check      # רק בדיקות ו-zip, על מה שכבר קיים
+    python3 tools/shabbat.py 2026-09-25 --check      # רק בדיקות, על מה שכבר קיים
 
 לפני ההרצה צריך שלושה קבצים לשבת הזו — tools/import_form.py כותב אותם מההודעה שהטופס הרכיב:
   data/attendance/<תאריך>.csv — נוכחים, מי לא בשישי / במוצ"ש, הצמדות
@@ -14,7 +15,6 @@
 import argparse
 import subprocess
 import sys
-import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -38,14 +38,10 @@ def run(script, *args):
         raise SystemExit("✗ {} נכשל — עוצרים כאן".format(script))
 
 
-def pack(out_dir, date):
-    """כל ה-PNG בקובץ zip אחד — לשליחה לחניכים."""
-    path = out_dir / "פליירים {}.zip".format(date.strftime("%d.%m"))
-    pngs = sorted(out_dir.glob("*.png"))
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for png in pngs:
-            zf.write(png, png.name)
-    return path, len(pngs)
+def images(out_dir):
+    """תיקיית התמונות לשליחה ומספר התמונות בה."""
+    folder = out_dir / ep.IMAGES
+    return folder, len(list(folder.glob("*.png")))
 
 
 def checks(date, workbook, out_dir):
@@ -143,17 +139,30 @@ def checks(date, workbook, out_dir):
             warnings.append("לא רשומים מעבירי החבורות")
 
     for g in data["groups"]:                             # כל פלייר בעמוד אחד (ועם מתכון ארוך — ועוד עמוד מתכון)
-        pdf = out_dir / "{}.pdf".format(g["name"])
+        pdf = out_dir / "{}.pdf".format(ep.safe_name(g["name"]))
         recipe = any(ep.split_dishes(t["recipe"]) for t in data["tasks"] if t["group"] == g["name"])
         if pdf.exists() and ep.pdf_pages(pdf) > (2 if recipe else 1):
             problems.append("הפלייר «{}» יצא ב-{} עמודים".format(g["name"], ep.pdf_pages(pdf)))
+
+    for f in out_dir.rglob("*"):                         # שמות שעוברים בווינדוס (" בשם — הקובץ נעלם בחילוץ)
+        if f.name != ep.safe_name(f.name):
+            problems.append("שם קובץ שלא יעבור בווינדוס: {}".format(f.relative_to(out_dir)))
+    folder = out_dir / ep.IMAGES                         # תמונה לכל תורנות, ללו"ז ולדף התורנויות
+    if folder.is_dir():
+        cards, _ = ep.duty_cards(data)
+        need = [ep.image_name(0, ep.SCHEDULE_NAME)] + [ep.image_name(n, c["name"]) for n, c in enumerate(cards, 1)]
+        need = [n for n in need if not (folder / n).exists()]
+        if not list(folder.glob(ep.image_name(0, ep.DUTIES_NAME).replace(".png", "*.png"))):
+            need.append(ep.image_name(0, ep.DUTIES_NAME))
+        if need:
+            problems.append("חסרות תמונות ב-{}/: {}".format(ep.IMAGES, ", ".join(need)))
     return data, problems, warnings
 
 
 def main():
     ap = argparse.ArgumentParser(description="שבת שלמה בפקודה אחת")
     ap.add_argument("date", help="תאריך יום שישי, למשל 2026-09-25")
-    ap.add_argument("--check", action="store_true", help="בלי להריץ מחדש — רק בדיקות ו-zip")
+    ap.add_argument("--check", action="store_true", help="בלי להריץ מחדש — רק בדיקות")
     args = ap.parse_args()
     date = datetime.strptime(args.date, "%Y-%m-%d").date()
     workbook = ROOT / "shabbatot" / "{}.xlsx".format(date.isoformat())
@@ -175,13 +184,13 @@ def main():
         run("export_pdf.py", date.isoformat())
 
     data, problems, warnings = checks(date, workbook, out_dir)
-    zip_path, count = pack(out_dir, date)
+    folder, count = images(out_dir)
     on_duty = {n for g in data["groups"] for n in g["members"]}
 
     print("\n" + "═" * 60)
     print("שבת {} · {} · {} תורנים ב-{} קבוצות".format(
         ep.hebrew_date_range(date), data["parasha"] or "", len(on_duty), len(data["groups"])))
-    print("zip: {} ({} תמונות)".format(zip_path.relative_to(ROOT), count))
+    print("תמונות: {}/ ({})".format(folder.relative_to(ROOT), count))
     for w in warnings:
         print("  ⚠ " + w)
     if problems:

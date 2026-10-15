@@ -12,7 +12,7 @@ python3 tools/guide.py                           # docs/מדריך לאחראי 
 python3 tools/points.py                          # docs/ניקוד תורנויות.pdf|png (points per duty, from group_plan.csv)
 python3 tools/form_page.py                       # docs/index.html (the leaders' form; --demo separate|early|late --out X for a filled test page)
 python3 tools/import_form.py < message.txt       # the form's message → attendance/preps/menu/weeks (--dry-run)
-python3 tools/shabbat.py 2026-10-16              # the whole week: build → new_shabbat → assign → export → zip → checks (--check: checks only)
+python3 tools/shabbat.py 2026-10-16              # the whole week: build → new_shabbat → assign → export → checks (--check: checks only)
 python3 tools/build_workbook.py                  # data/*.csv → shabbat-planner.xlsx (only when the schema changes)
 python3 tools/new_shabbat.py 2026-09-18          # template → shabbatot/2026-09-18.xlsx
 python3 tools/new_shabbat.py 2026-09-18 --from shabbatot/2026-09-04.xlsx   # carry last week's edits forward
@@ -79,7 +79,7 @@ data/*.csv (standing) ──build_workbook──▶ shabbat-planner.xlsx (date-f
                                                         │
                     assign_groups <date> ──▶ names + data/duty_history.csv rows for <date>
                                                         │
-                    export_pdf <date> ──▶ shabbatot/<date>/*.pdf|png  ──shabbat.py──▶ zip + checks
+                    export_pdf <date> ──▶ shabbatot/<date>/*.pdf + תמונות/*.png  ──shabbat.py──▶ checks
 ```
 
 **`tools/build_workbook.py` is the schema module.** Every other script does
@@ -247,12 +247,20 @@ fitted by measuring first: `measure_page` is a `--dump-dom` pass where an inline
 baked into a CSS `transform: scale()` on `.inner`. A flyer shrinks down to `FLYER_MIN_FIT`
 to stay on one page. **Three page types since 15.10**, one design language (a numbered badge in the stage colour —
 `duty_cards` numbers the duties by day → stage → start, and the same number is on the overview and the duty's page):
-`schedule_html` → `לו"ז שבת.png|pdf` (events only, Friday | Shabbat + מוצאי שבת after havdala, one page);
-`duties_rows`/`duties_html` → `תורנויות.png|pdf` (one card per duty: «n · name · K אנשים · אחראי/ת» + names, no
-hours or tasks — find your name, then your page); `flyer_sheet`/`render_flyer` → `<duty>.png|pdf` (hour pill → the
+`schedule_html` → `לו״ז שבת` (events only, Friday | Shabbat + מוצאי שבת after havdala, one page);
+`duties_rows`/`duties_html` → `תורנויות` (one card per duty: «n · name · K אנשים · אחראי/ת» + names, no
+hours or tasks — find your name, then your page); `flyer_sheet`/`render_flyer` → `<duty>` (hour pill → the
 task one action per line, names only where the group splits — `who_for_slot`: «בלי X», short names unique within
 the group, «כל השאר», red «חסרים N», «טרם שובצו»; then the full recipe, ingredients **and** method). A flyer that
-doesn't fit at `FLYER_MIN_FIT` moves its recipe to a second sheet (`<duty> — מתכון.png`, PDF of 2 pages). The
+doesn't fit at `FLYER_MIN_FIT` moves its recipe to a second sheet (`<duty> — מתכון` image, PDF of 2 pages).
+**Output files:** PDFs at the top of `shabbatot/<date>/`; PNGs in its `תמונות/` folder (`ep.IMAGES`, no zip any
+more), named by `ep.image_name(num, name)` — the duty's overview number, two digits, so the folder reads in
+overview order (`00 לו״ז שבת.png`, `00 תורנויות.png`, `01 …`, `NN <duty> — מתכון.png`). Every name goes through
+`ep.safe_name`: ASCII `"` → Hebrew gershayim `״`, other Windows-invalid characters → `-`. Windows silently
+skips a file whose name has `"` (the 16.10 zip lost `לו"ז שבת` and the three מוצ"ש pages: 18 of 22 reached
+WhatsApp); `shabbat.py` fails on any output name that isn't safe, and on a duty without its image. The weeks
+exported before 15.10 (09-04, 09-18) keep their PNGs next to the PDFs, with no `תמונות/` — they are the record
+(`--check` skips the image checks when there is no `תמונות/`). The
 helping group's page (בית מדרש) has two parts: what everyone does together, then «החלוקה להכנות» (each prep → its
 names); a help-only prep's page shows its helpers and the helping duty's own hours («מתחילים…» / «אחר כך…»).
 Overview cards are measured once (`measure_cards`) and packed per day into two-column blocks (`pack_day`); each
@@ -260,7 +268,7 @@ block is one `<tr>` for the pagination below. The overview goes on one page if t
 `MIN_FIT`; otherwise `split_pages` chunks the rows by their measured heights into balanced
 `.page` divs — never cutting a row, shrinking as far as `PAGE_SAVE_FIT` when that saves a
 whole page — the PDF carries them all, and each page is re-rendered on its own into
-`תורנויות <n>.png` so a single page can be sent as an image. Continuation pages repeat the
+`00 תורנויות <n>.png` so a single page can be sent as an image. Continuation pages repeat the
 day heading and are labelled «עמוד n מתוך m». PNGs are shot with `ep.shot_binary()` (the
 `headless_shell` build): the full `chrome` binary paints only ~1036 of a 1123px window, which silently
 cut the bottom ~23mm (last rows, footer) off every image. The shabbat title («שבת סטודנטים», cell

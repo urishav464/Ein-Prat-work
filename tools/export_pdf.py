@@ -35,6 +35,21 @@ CHROME_CANDIDATES = [
 ]
 DAY_ORDER = bw.DAY_ORDER
 SCHEDULE_DAY = {"חמישי": "חמישי", "שישי": "שישי", "שבת": "שבת", "מוצאי שבת": "שבת"}   # מוצ"ש יושב בלו"ז תחת שבת
+IMAGES = "תמונות"       # התמונות לשליחה — תיקייה בתוך shabbatot/<תאריך>/
+SCHEDULE_NAME, DUTIES_NAME = 'לו"ז שבת', "תורנויות"   # שמות הקבצים (דרך safe_name: לו״ז שבת)
+WINDOWS_BAD = str.maketrans({'"': "״", **{c: "-" for c in '<>:/\\|?*'}})
+
+
+def safe_name(text):
+    """שם קובץ שעובר גם בווינדוס: " (מוצ"ש, לו"ז) הופך לגרשיים ״ ושאר התווים האסורים למקף.
+    ווינדוס מדלג בשקט על קובץ ששמו לא חוקי — כך נעלמו 4 מ-22 התמונות של 16.10 בחילוץ ה-zip."""
+    return re.sub(r"[\x00-\x1f]", "", text.translate(WINDOWS_BAD)).rstrip(". ")
+
+
+def image_name(num, name, recipe=False):
+    """«03 חלות.png»: המספר של התורנות בדף התורנויות, כך שהתיקייה מסודרת כמו הדף (00 = לו"ז ודף התורנויות).
+    עמוד המתכון — «03 חלות — מתכון.png», ליד הדף של התורנות."""
+    return "{:02d} {}{}.png".format(num, safe_name(name), " — מתכון" if recipe else "")
 
 
 # ---------------------------------------------------------------------------
@@ -927,9 +942,9 @@ RECIPE_MIN_FIT = 0.65   # עמוד מתכון מתכווץ עד כאן; מעבר
 
 def render_flyer(card, num, data, out_dir, png=True):
     """הדף של תורנות: עמוד אחד (מתכווץ עד FLYER_MIN_FIT). לא נכנס ויש מתכון — המתכון עובר לעמוד משלו:
-    ה-PDF בשני עמודים, ושתי תמונות: «<שם>.png» ו«<שם> — מתכון.png». מחזיר את הקבצים שנוצרו."""
-    pdf = out_dir / "{}.pdf".format(card["name"])
-    image = out_dir / "{}.png".format(card["name"]) if png else None
+    ה-PDF בשני עמודים, ושתי תמונות: «NN <שם>.png» ו«NN <שם> — מתכון.png». מחזיר את הקבצים שנוצרו."""
+    pdf = out_dir / "{}.pdf".format(safe_name(card["name"]))
+    image = out_dir / IMAGES / image_name(num, card["name"]) if png else None
     fit = measure_page(flyer_html([flyer_sheet(card, num, data, fixed=True)], measure=True))[0]
     if fit >= FLYER_MIN_FIT or not card["recipes"]:
         fit = fit if fit >= FLYER_MIN_FIT else 1.0          # ארוך מדי לכיווץ סביר ואין מתכון — שני עמודים
@@ -943,8 +958,8 @@ def render_flyer(card, num, data, out_dir, png=True):
     render(flyer_html(sheets), pdf)
     made = [pdf]
     if png:
-        for (part, f, ok), sheet, name in zip(fits, sheets, ("{}.png", "{} — מתכון.png")):
-            out = out_dir / name.format(card["name"])
+        for (part, f, ok), sheet in zip(fits, sheets):
+            out = out_dir / IMAGES / image_name(num, card["name"], recipe=part == "recipe")
             pages = 1 if ok else max(1, render(flyer_html([sheet]), out_dir / ".probe.pdf"))
             render(flyer_html([sheet]), out_png=out, png_pages=pages)
             made.append(out)
@@ -1099,9 +1114,15 @@ def main():
     data = read_workbook(source)
     cards, _ = duty_cards(data)
     out_dir = ROOT / "shabbatot" / d.isoformat()
+    images = out_dir / IMAGES
     out_dir.mkdir(parents=True, exist_ok=True)
-    for old in list(out_dir.glob("*.pdf")) + list(out_dir.glob("*.png")):
-        old.unlink()                      # בלי פלטים ישנים מהרצה קודמת
+    for old in [*out_dir.glob("*.pdf"), *out_dir.glob("*.png"), *out_dir.glob("*.zip"), *images.glob("*.png")]:
+        old.unlink()                      # בלי פלטים ישנים מהרצה קודמת (ובלי ה-zip שהיה פעם)
+    if args.no_png:
+        if images.is_dir() and not any(images.iterdir()):
+            images.rmdir()
+    else:
+        images.mkdir(exist_ok=True)
 
     made = []
     if args.only != "schedule":
@@ -1109,7 +1130,8 @@ def main():
             made += render_flyer(card, num, data, out_dir, png=not args.no_png)
     if args.only != "flyers":
         fit = measure_page(schedule_html(data, measure=True))[0]
-        pdf, png = out_dir / 'לו"ז שבת.pdf', None if args.no_png else out_dir / 'לו"ז שבת.png'
+        pdf = out_dir / "{}.pdf".format(safe_name(SCHEDULE_NAME))
+        png = None if args.no_png else images / image_name(0, SCHEDULE_NAME)
         render(schedule_html(data, fit=fit), pdf, png, png_pages=1)
         made += [x for x in (pdf, png) if x]
 
@@ -1119,19 +1141,20 @@ def main():
             pages = [rows]                # נכנס לעמוד אחד, אולי בכיווץ קל
         else:
             pages, fit = split_pages(rows, heights, avail, chrome_h)
-        pdf = out_dir / "תורנויות.pdf"
+        pdf = out_dir / "{}.pdf".format(DUTIES_NAME)
         render(duties_html(data, pages, fit=fit), pdf)
         made.append(pdf)
         if not args.no_png:               # תמונה לכל עמוד — נוח לשלוח בנפרד
             for i, page_rows in enumerate(pages):
-                png = out_dir / ("תורנויות.png" if len(pages) == 1 else "תורנויות {}.png".format(i + 1))
+                png = images / image_name(0, DUTIES_NAME if len(pages) == 1 else "{} {}".format(DUTIES_NAME, i + 1))
                 render(duties_html(data, [page_rows], fit=fit, of=len(pages), first=i + 1), out_png=png, png_pages=1)
                 made.append(png)
         print("  תורנויות: {} עמוד/ים".format(len(pages)))
 
     for path in made:
-        print("  {:<40} {:>8,} bytes".format(path.name, path.stat().st_size))
-    print("{} קבצים ← {}/".format(len(made), out_dir.relative_to(ROOT)))
+        print("  {:<40} {:>8,} bytes".format(str(path.relative_to(out_dir)), path.stat().st_size))
+    print("{} קבצים ← {}/{}".format(len(made), out_dir.relative_to(ROOT),
+                                   "" if args.no_png else " (התמונות לשליחה ב-{}/)".format(IMAGES)))
 
 
 if __name__ == "__main__":
