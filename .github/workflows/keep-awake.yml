@@ -1,0 +1,48 @@
+# Keep the Streamlit Community Cloud app awake.
+#
+# Community Cloud puts an app to sleep after 12 hours without traffic, and the
+# first trainee of the day then had to press «Yes, get this app back up!» and
+# wait for a cold boot. A visit keeps it awake (Streamlit's own docs), so this
+# visits every 6 hours with a headless browser and presses the button if the
+# app did fall asleep. A workaround, not a Streamlit feature.
+#
+# Setup, once: GitHub → the repository → Settings → Secrets and variables →
+# Actions → Variables → New repository variable:
+#     STREAMLIT_APP_URL = https://<your-app>.streamlit.app
+# Until it is set, every run is skipped. «Run workflow» on the Actions tab
+# tries it at once.
+name: Keep the app awake
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"    # every 6 hours (UTC); runs can start late, never near 12h
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  visit:
+    if: ${{ vars.STREAMLIT_APP_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/keep_awake.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install a headless browser
+        run: |
+          pip install "playwright==1.63.0"
+          python -m playwright install --with-deps chromium
+      - name: Visit the app (and wake it if it slept)
+        env:
+          APP_URL: ${{ vars.STREAMLIT_APP_URL }}
+        run: python scripts/keep_awake.py "$APP_URL"
