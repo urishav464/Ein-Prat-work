@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim built by pairs of trainees. Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout — two model calls per search: `chat_agent.scout_map` reads the topic as fields, then `scout_speakers` searches the web itself with Anthropic's server web-search tool ($10 per 1,000 searches, capped at 8 per run).
 
+**`web/` is the v2 prototype**: a read-only trainee home rebuilt as a static React app (Vite · TypeScript · Tailwind, installable PWA). It is meant for Cloudflare Pages with Supabase Auth (Google) and reads the same Supabase. It is a **decision gate** — nothing past it is built until the instructor has tried it on a phone (`web/README.md`). The Streamlit app is untouched by it.
+
 **Stack:** Python · Streamlit · Supabase (PostgreSQL over PostgREST) · Anthropic API (Sonnet 5).
 
 ## Commands
@@ -27,6 +29,9 @@ python3 scripts/assign_trainees.py                    # regenerate migrations/20
 python3 scripts/harness/db.py up && python3 scripts/harness/harness.py serve   # local PG16 fixture + the app, traced
 python3 scripts/harness/harness.py sweep              # every screen + one click per kind vs the click contract
 python3 scripts/harness/harness.py stop && python3 scripts/harness/db.py down
+cd web && npm install && npm run build                # v2: tsc --noEmit + vite build (no env vars → demo mode)
+python3 web/supabase/test_my_home.py                  # v2's one database door vs Supabase's default grants (after db.py up)
+python3 web/check_ui.py                               # v2 in Chromium: a demo build + a mocked-auth build, 390/1500px
 ```
 
 **Run the harness on the Streamlit that `requirements.txt` pins** (`streamlit>=1.63,<1.65`): Cloud installs the newest allowed version on every push, and 1.64 moved the radio DOM under a sidebar the 1.63 harness had just measured. Upgrading = `pip install`, `scripts/streamlit_dom_context.py`, re-measure, then widen the pin.
@@ -38,6 +43,11 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
 - **Storage is Supabase only — never SQLite, never local files as a database.** `data_manager.py` is the ONLY module that talks to storage. The REST API cannot CREATE TABLE, so structure lives in `supabase_schema.sql`, run manually in the Supabase SQL Editor; a schema change means editing that file, **bumping `REQUIRED_SCHEMA_VERSION` in `data_manager.py` in the same commit** (the app compares it to `app_meta.schema_version`; a stale DB otherwise throws a redacted `APIError` inside a screen), AND telling the user to re-run it (idempotent). Joins/aggregates are views in that file — PostgREST cannot express them.
 - **Secrets come from `st.secrets` (Streamlit Secrets): `SUPABASE_URL`, `SUPABASE_KEY` (service_role), `ANTHROPIC_API_KEY`. Never generate or read `.env` files** — the user has no local dev environment. Full setup: `DEPLOY.md`.
 - **No agent or skill writes to Supabase.** Every `.claude/agents/*.md` is read-only (`disallowedTools: Write, Edit, NotebookEdit`; no `dm.add_*` / `update_*` / `record_outreach`). Writes happen in the app, or under a human's confirmation.
+- **v2 (`web/`) reads through one door.** Its browser holds the public anon key, so no table or view is ever granted to `anon` / `authenticated`.
+  - A Google-signed-in user may EXECUTE only the `SECURITY DEFINER` functions in `web/supabase/*.sql`, which never return phone / e-mail / contact / `details`.
+  - `test_my_home.py` fails if the catalog shows any other privilege for the public roles. A new function means updating that check on purpose.
+  - Those SQL files are v2-only and run by hand; they do not touch `REQUIRED_SCHEMA_VERSION`.
+  - The only build variables are `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`, set in Cloudflare's dashboard — never a `.env`, never the service_role key.
 - **Never invent content**: topics, speakers, texts, dates, contact details, budget figures. Unknown stays `TBD`. Never propose a speaker who is not alive and active.
 - **Git:** all development on `claude/mishmer-generator-setup-h5gxqx`. **`main` is empty** — Streamlit Cloud deploys from the working branch. Commit and push when a piece of work completes. Enforced, not advisory: `.claude/hooks/guard-bash.sh` (PreToolUse on Bash) blocks `git push` to `main` or with `--force`, and any Bash access to the Streamlit secrets file.
 
@@ -113,7 +123,9 @@ DEPLOY.md              # Supabase + Streamlit Secrets setup, RLS rationale, firs
 system_rules.md        # operating layer: roles, pedagogy, speaker mandate, budget
 students_tasks.md      # seed data read on first run
 migrations/            # one-off SQL run by a human in the SQL Editor (trainee names + pairs)
-scripts/               # rerun_audit · streamlit_dom_context · assign_trainees · harness/ (local PG16 + shim + rerun tracer, test-only)
+scripts/               # rerun_audit · streamlit_dom_context · assign_trainees · keep_awake · harness/ (local PG16 + shim + rerun tracer, test-only)
+.github/workflows/     # keep-awake.yml — visits the Cloud app every 6 h (needs the STREAMLIT_APP_URL repo variable)
+web/                   # v2 prototype — React PWA (read-only trainee home) · supabase/ its one SQL function + test · check_ui.py
 Mishmer-section/       # generator prompt · templates · speakers · 2025-26 archive · 2026-27 season
 Invitations/           # house style, watercolor prompts, past posters
 ```

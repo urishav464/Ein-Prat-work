@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* The Ein-Prat brand — the same tokens as .streamlit/config.toml and RTL_CSS:
+   navy on desert parchment, Assistant for text, Rubik for headings. */
+@theme {
+  --color-navy: #1d3e7d;
+  --color-navy-soft: #e7edf9;
+  --color-parchment: #f2eee3;
+  --color-sand: #ebe4d3;
+  --color-ink: #243146;
+  --color-muted: #5c6577;
+  --color-line: #e8e2d4;
+  --color-late: #b42318;
+  --color-late-bg: #fdecea;
+  --font-sans: "Assistant", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Rubik", "Assistant", sans-serif;
+}
+
+html {
+  background: var(--color-parchment);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* <details> as a folding row: the native marker replaced by our own chevron,
+   which turns with the row — and under RTL it points the right way */
+details > summary { list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary .chev { transition: transform .15s ease; }
+details[open] > summary .chev { transform: rotate(-90deg); }
+
+:focus-visible { outline: 2px solid var(--color-navy); outline-offset: 2px; }
