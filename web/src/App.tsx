@@ -431,6 +431,14 @@ export default function App() {
         <Centered>
           <p>התחברת בתור <span dir="ltr" className="font-bold">{load.email}</span>, אבל הכתובת הזו עדיין לא משויכת לאף חניך.</p>
           <p className="mt-2 text-sm text-muted">בקשו מהמדריך לשייך אותה בלוח הבקרה, תחת «שיוך חשבונות».</p>
+          {/* the instructor is a students row with role 'instructor', so this
+              screen is exactly what they get — and it must not read as a fault */}
+          <div className="mt-5 rounded-xl bg-navy-soft px-4 py-3 text-sm">
+            <p><span className="font-bold">חשבון של המדריך?</span> אב־הטיפוס הזה הוא המסך של החניכים, ולכן הכתובת לא מופיעה כאן.</p>
+            <a href="/?demo" className="mt-2 inline-block font-bold text-navy underline underline-offset-2">
+              למסך החניך במצב הדגמה ←
+            </a>
+          </div>
           <button type="button" onClick={signOut} className="mt-4 text-sm underline">התנתקות</button>
         </Centered>
       );

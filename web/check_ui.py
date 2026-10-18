@@ -19,7 +19,8 @@ and checks, at 390px and 1500px:
         token; every ✓ disabled (read-only); late tasks (made late against
         today) folded one <details> per Mishmar in date order, phases inside,
         the hero's own late task kept out; not_linked / wrong_provider / error
-        screens; «התנתקות» → back to the sign-in screen
+        screens, not_linked with a working link to the demo (where the
+        instructor lands); «התנתקות» → back to the sign-in screen
 
 Exit 1 on any failed check. Screenshots land in --shots (default: a temp dir)."""
 import base64
@@ -334,9 +335,21 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
             shown = True
         except Exception:
             shown = False
-        if name == "not_linked":
-            page.screenshot(path=str(shots / "v2-not-linked-390.png"), full_page=True)
         checks[f"auth: {name} screen"] = shown and not errors
+        if name == "not_linked":
+            # the instructor signs in first and lands here (their row is not a
+            # 'student'): the screen must hand them the demo, not read as a fault
+            page.screenshot(path=str(shots / "v2-not-linked-390.png"), full_page=True)
+            link = page.get_by_role("link", name="למסך החניך במצב הדגמה")
+            try:
+                href = link.get_attribute("href", timeout=3000)
+                link.click()
+                page.get_by_text("מצב הדגמה").first.wait_for(timeout=5000)
+                landed = page.evaluate("new URLSearchParams(location.search).has('demo')") \
+                    and page.locator("h1").count() == 1
+            except Exception:
+                href, landed = None, False
+            checks["auth: not_linked → the instructor's way to the demo"] = href == "/?demo" and landed
         ctx.close()
 
 

@@ -5,77 +5,147 @@
 > למסך הבית כמו אפליקציה. **קריאה בלבד** בשלב הזה, על **אותו Supabase** — בלי
 > העברת נתונים. האפליקציה ב-Streamlit ממשיכה לעבוד כרגיל; שום דבר כאן לא נוגע בה.
 >
-> **זה שער החלטה, לא מעבר.** מנסים בטלפון — אתה וחניך או שניים. רק אם זה ברור
+> **זה שער החלטה, לא מעבר.** המדריך וחניך או שניים מנסים בטלפון. רק אם זה ברור
 > יותר טוב, ממשיכים לבנות את השאר (לוח הבקרה, תיק המשמר, חיפוש מרצים, כתיבה).
 
-## לראות עכשיו, בלי שום הקמה
+## הקמה — צעד אחר צעד (פעם אחת, כ-25 דקות)
 
-אחרי שלב 3 למטה, הכתובת עם `?demo` בסוף (למשל `https://mishmar.pages.dev/?demo`)
-מציגה את המסך על נתוני בדיקה מהמערכת, **השמות הוחלפו** («חניך/ה לדוגמה»,
-«שותף/ה 1»…). שם ✓ מסמן ומבטל מיד — ולא נשמר בשום מקום.
+**לפני שמתחילים:**
+- **הכל חינם** — Cloudflare, Supabase ו-Google; אין כרטיס אשראי באף שלב.
+- **כמעט כל ערך להעתקה כבר נמצא במקום אחד:** Streamlit Cloud → האפליקציה → ⋮ →
+  **Settings** → **Secrets**. כדאי לפתוח אותו בלשונית נפרדת.
+- **המסכים של השירותים באנגלית**, ולכן שמות הכפתורים כתובים כאן באנגלית —
+  בדיוק כמו שהם מופיעים.
 
-## הקמה — פעם אחת, כרבע שעה
+| שירות | מה הוא עושה |
+|---|---|
+| **Supabase** | המסד הקיים. פותחים בו «דלת» אחת קטנה ומדליקים כניסה עם Google. |
+| **Cloudflare** | שירות חינמי שמארח את האתר עצמו. כל push לברנץ׳ בונה אותו מחדש לבד, כמו Streamlit היום. |
+| **Google** | הכניסה. אותו OAuth client שכבר משמש את Streamlit — מוסיפים לו כתובת אחת. |
 
-### 1. Supabase — הדלת היחידה למסד
+בסוף שלב ב מצב ההדגמה כבר עובד; אחרי שלב ג עובדת גם הכניסה האמיתית.
 
-SQL Editor → New query → מדביקים את כל `web/supabase/001_v2_my_home.sql` → Run.
-בטוח להריץ שוב. זה יוצר פונקציה אחת, `v2_my_home()`, ולא משנה אף טבלה.
+### שלב א — Supabase: לפתוח את הדלת (3 דקות)
 
-### 2. Supabase — כניסה עם Google
+1. לפתוח את
+   [`web/supabase/001_v2_my_home.sql`](https://github.com/urishav464/Ein-Prat-work/blob/claude/mishmer-generator-setup-h5gxqx/web/supabase/001_v2_my_home.sql)
+   ב-GitHub ולהעתיק את כולו בכפתור **Copy raw file** (שני ריבועים, מעל הקובץ).
+2. https://supabase.com/dashboard → הפרויקט של המשמרים.
+3. בתפריט הצד: **SQL Editor** → **New query** (או ה-**+**).
+4. להדביק וללחוץ **Run** (או Ctrl+Enter).
+5. אמור להופיע **Success. No rows returned**. זהו.
 
-1. **Google Cloud Console** → APIs & Services → Credentials → פותחים את **אותו
-   OAuth client** שמשמש את Streamlit היום. תחת *Authorized redirect URIs*
-   **מוסיפים** (לא מחליפים — הכתובת של Streamlit נשארת):
-   ```
-   https://<project-ref>.supabase.co/auth/v1/callback
-   ```
-   (`<project-ref>` = החלק הראשון בכתובת הפרויקט ב-Supabase.)
-2. **Supabase** → Authentication → Sign In / Providers → **Google** → Enable,
-   ומדביקים את ה-Client ID וה-Client Secret של אותו client (מ-Google Cloud Console).
-3. באותו מסך → **Email** → מכבים. הכניסה היא עם Google בלבד; גם אם יישאר
-   דלוק, הפונקציה מסרבת לכל מי שלא נכנס דרך Google.
-4. Authentication → **URL Configuration**:
-   - *Site URL* = הכתובת שתקבלו מ-Cloudflare בשלב 3 (למשל `https://mishmar.pages.dev`).
-   - *Redirect URLs* → מוסיפים את אותה כתובת עם `/**` בסוף.
+בטוח להריץ שוב. זה יוצר פונקציה אחת, `v2_my_home()`, ולא משנה אף טבלה ולא נוגע
+באפליקציה הנוכחית.
 
-### 3. Cloudflare Pages — האתר עצמו (חינם)
+### שלב ב — Cloudflare: האתר עצמו (10 דקות)
 
-1. פותחים חשבון ב-cloudflare.com → Workers & Pages → Create → **Pages** →
-   מחברים את GitHub ובוחרים את הריפו `Ein-Prat-work`.
-2. הגדרות הבנייה:
+**קודם מכינים שני ערכים:**
+- **כתובת הפרויקט** — ב-Streamlit Secrets, השורה `SUPABASE_URL = "https://….supabase.co"`:
+  מה שבתוך המירכאות.
+- **המפתח הציבורי** — ב-Supabase: ⚙️ **Project Settings** (בתחתית תפריט הצד) →
+  **API Keys** → ה-**Publishable key** (מתחיל ב-`sb_publishable_`). אם אין כזה:
+  הלשונית **Legacy API Keys** → המפתח שכתוב לידו `anon` `public`.
 
-   | שדה | ערך |
+> ⚠️ **לא** את `SUPABASE_KEY` שב-Streamlit Secrets, ולא אף מפתח שכתוב לידו `secret`
+> או `service_role` — הם פותחים הכל, והאתר שולח את הערכים האלה לכל דפדפן. המפתח
+> הציבורי בנוי להיות גלוי: המסד לא נותן לו כלום (ראו «מה גלוי ומה לא»). ולא בקובץ
+> `.env` בריפו — רק בהגדרות של Cloudflare.
+
+**ואז:**
+
+1. להירשם בחינם: https://dash.cloudflare.com/sign-up (מייל + סיסמה, ולאשר את המייל).
+2. בתפריט הצד: **Workers & Pages** → **Create application** → הלשונית **Pages** →
+   **Import an existing Git repository**.
+3. **Connect GitHub** → כש-GitHub שואל: **Only select repositories** → `Ein-Prat-work`
+   → **Install & Authorize**.
+4. בחזרה ב-Cloudflare: לבחור `Ein-Prat-work` → **Begin setup**.
+5. למלא:
+
+   | שדה | מה לכתוב |
    |---|---|
-   | Production branch | `claude/mishmer-generator-setup-h5gxqx` |
-   | Root directory | `web` |
+   | Project name | למשל `mishmar-ein-prat` — וזה שם האתר: `mishmar-ein-prat.pages.dev` |
+   | Production branch | `claude/mishmer-generator-setup-h5gxqx` (מהרשימה) |
+   | Framework preset | `None` |
    | Build command | `npm run build` |
    | Build output directory | `dist` |
+   | Root directory (advanced) — לפתוח | `web` |
 
-3. Environment variables (Production):
+6. **Environment variables (advanced)** — לפתוח, ולהוסיף שניים (**+ Add variable**):
 
-   | משתנה | מאיפה |
+   | Variable name | Value |
    |---|---|
-   | `VITE_SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
-   | `VITE_SUPABASE_ANON_KEY` | אותו מסך → המפתח **הציבורי**: `anon public` (או *Publishable key*) |
+   | `VITE_SUPABASE_URL` | כתובת הפרויקט |
+   | `VITE_SUPABASE_ANON_KEY` | המפתח הציבורי |
 
-> ⚠️ **רק המפתח הציבורי.** לעולם לא `service_role` / *Secret key* — הוא פותח
-> הכל, והאתר שולח את המשתנים האלה לכל דפדפן. המפתח הציבורי בנוי להיות גלוי:
-> המסד לא נותן לו כלום (ראו למטה). ולא בקובץ `.env` בריפו — רק בהגדרות של Cloudflare.
+7. **Save and Deploy**, ולחכות 1–3 דקות ל-**Success**. כתובת האתר מופיעה שם; אם השם
+   היה תפוס, Cloudflare מוסיף לו תוספת — **הכתובת שמופיעה היא הקובעת**, ובה
+   משתמשים בשלב ג.
+8. **בדיקה ראשונה:** בטלפון, הכתובת עם `/?demo` בסוף (למשל
+   `https://mishmar-ein-prat.pages.dev/?demo`) → מסך הבית עם פס צהוב «מצב הדגמה»:
+   נתוני בדיקה מהמערכת, **השמות הוחלפו** («חניך/ה לדוגמה», «שותף/ה 1»…), ו-✓ מסמן
+   ומבטל מיד בלי לשמור בשום מקום. בלי `?demo` מופיע הכפתור «כניסה עם Google» —
+   הוא יעבוד אחרי שלב ג.
 
-מכאן כל push לברנץ׳ בונה את האתר מחדש, כמו Streamlit Cloud היום.
+### שלב ג — כניסה עם Google (10 דקות)
 
-### 4. שיוך חניכים — כמו היום
+1. **Supabase** → בתפריט הצד **Authentication** → **Sign In / Providers** → **Google**
+   → להדליק **Enable Sign in with Google**.
+2. באותו חלון, מתוך Streamlit Secrets (החלק `[auth]`):
+   - **Client IDs** ← הערך של `client_id` (נגמר ב-`.apps.googleusercontent.com`)
+   - **Client Secret** ← הערך של `client_secret` (מתחיל ב-`GOCSPX-`)
 
-אין שום דבר חדש לעשות: v2 קורא את אותה כתובת גוגל ששייכתם בלוח הבקרה של
-Streamlit, תחת «שיוך חשבונות». חניך שנכנס בלי שיוך רואה הודעה שמבקשת ממנו
-לפנות אליך — ולא שום נתון.
+   מעתיקים מ-Streamlit, כי Google כבר לא מציג סוד קיים במסך שלו — רק ברגע שנוצר.
+3. באותו חלון: להעתיק את **Callback URL (for OAuth)** (נראה כמו
+   `https://xxxx.supabase.co/auth/v1/callback`), ואז **Save**.
+4. **Google Cloud:** https://console.cloud.google.com/auth/clients (במסכים ישנים:
+   **APIs & Services** → **Credentials**) → למעלה לוודא שנבחר הפרויקט של כניסת
+   המשמרים → ללחוץ על ה-client הקיים (ה-ID שלו זהה ל-`client_id`) → תחת
+   **Authorized redirect URIs** → **+ Add URI** → להדביק את הכתובת מצעד 3 → **Save**.
+
+   > ⚠️ **להוסיף, לא להחליף.** הכתובת של Streamlit שכבר רשומה שם חייבת להישאר,
+   > אחרת הכניסה לאפליקציה הנוכחית תישבר.
+5. **Supabase** → **Authentication** → **URL Configuration**:
+   - **Site URL** ← כתובת האתר (למשל `https://mishmar-ein-prat.pages.dev`) → **Save**
+   - **Redirect URLs** → **Add URL** ← אותה כתובת עם `/**` בסוף → **Save**
+6. (רשות) **Sign In / Providers** → **Email** → לכבות. לא משפיע על האפליקציה
+   הנוכחית — היא לא משתמשת בכניסה של Supabase — והפונקציה ממילא מסרבת לכל מי
+   שלא נכנס דרך Google.
+
+### שלב ד — לנסות, ולהחליט
+
+1. בטלפון, כתובת האתר בלי `?demo` → **כניסה עם Google** → לבחור חשבון. Google עשוי
+   לכתוב «להמשיך אל xxxx.supabase.co» — זה תקין.
+2. **כשנכנסים עם חשבון המדריך, מופיעה ההודעה «לא משויכת לאף חניך» — וזה צפוי.**
+   אב־הטיפוס הוא המסך של החניך, והמדריך רשום במסד עם `role = 'instructor'`
+   (Streamlit מזהה אותו לפי `admin_emails`). ההודעה אומרת את זה בעצמה ונותנת
+   קישור למצב ההדגמה.
+3. **הבדיקה האמיתית:** חניך או שניים פותחים את הכתובת בטלפון שלהם ונכנסים עם אותו
+   חשבון Google שהם נכנסים איתו היום. הם רואים את המשמרים והמשימות האמיתיים שלהם.
+   **שיוך — כמו היום:** האתר קורא את אותה כתובת ששויכה בלוח הבקרה של Streamlit,
+   תחת «שיוך חשבונות»; אין מה לשייך מחדש. ✓ לא לחיץ בשלב הזה (לצפייה בלבד), והמסך
+   אומר את זה.
+4. **על מה להסתכל:** כמה מהר זה נפתח, איך זה מרגיש בטלפון, האם זה ברור יותר
+   מהאפליקציה הנוכחית, והוספה למסך הבית (באייפון: שיתוף → «הוסף למסך הבית»;
+   באנדרואיד: ⋮ → «הוסף למסך הבית»).
+5. ההחלטה: ממשיכים לבנייה המלאה, או נשארים עם Streamlit.
+
+### אם משהו נתקע
+
+| מה רואים | מה עושים |
+|---|---|
+| גם בלי `?demo` מופיע הפס הצהוב | שם של אחד המשתנים ב-Cloudflare לא נכתב נכון. מתקנים ב-**Settings → Variables and Secrets** (או **Environment variables**), ואז **Deployments** → ⋯ → **Retry deployment** — משתנה נכנס לתוקף רק בבנייה חדשה |
+| Google כותב `redirect_uri_mismatch` | הכתובת מצעד ג-3 לא נוספה בדיוק — לבדוק שאין רווח או `/` מיותר. לפעמים לוקח ל-Google כמה דקות להתעדכן |
+| Google מסרב לשמור את הכתובת ומבקש *authorized domain* | **Google Auth Platform → Branding → Authorized domains → Add domain** → `supabase.co` → **Save**, ואז שוב צעד ג-4 |
+| חניך רואה «לא משויך» | הכתובת שלו לא משויכת — התיקון כמו היום: «שיוך חשבונות» בלוח הבקרה |
+| «משהו השתבש» | שלב א לא רץ, או רץ על פרויקט אחר — להריץ אותו שוב |
 
 ## מה גלוי ומה לא
 
 | מי | מה הוא מקבל |
 |---|---|
 | כל אחד, עם המפתח הציבורי | **כלום.** אף טבלה, אף תצוגה, אף פונקציה |
-| נכנס עם Google, לא משויך | הודעת «לא משויך» — בלי שום נתון |
+| נכנס עם Google, לא משויך (כולל המדריך) | הודעת «לא משויך» וקישור למצב ההדגמה — בלי שום נתון |
 | נכנס עם Google, משויך | פונקציה אחת: המשמרים **שלו**, שמות הזוג, המשימות של המשמרים האלה. **אף פעם** לא טלפון, מייל, פרטי קשר או ההערות החופשיות של משימה |
 | מי שפותח `?demo` | נתוני בדיקה, השמות הוחלפו |
 
@@ -88,7 +158,7 @@ Streamlit, תחת «שיוך חשבונות». חניך שנכנס בלי שיו
 ```bash
 python3 scripts/harness/db.py up
 python3 web/supabase/test_my_home.py    # 15 בדיקות מול PostgreSQL 16 מקומי
-python3 web/check_ui.py                  # 42 בדיקות בכרום, בטלפון (390) ובמחשב (1500)
+python3 web/check_ui.py                  # 43 בדיקות בכרום, בטלפון (390) ובמחשב (1500)
 ```
 
 (אותה סביבת Python של ה-harness — `psycopg2` ו-Playwright — ו-`npm install` שבוצע ב-`web/`.)
@@ -105,7 +175,7 @@ python3 web/check_ui.py                  # 42 בדיקות בכרום, בטלפ�
   עונה לבקשות שלו — כך שמסלול ההתחברות רץ באמת בלי חשבון: הכפתור מבקש
   `provider=google` עם PKCE, סשן שמור שולח **קריאה אחת** עם הטוקן של המשתמש, ✓
   חסום (קריאה בלבד), משימות באיחור מקופלות שורה לכל משמר לפי תאריך, והמסכים
-  «לא משויך» / «רק Google» / «שגיאה» / «התנתקות». ✓ בהדגמה מצויר מחדש תוך ~9ms
+  «לא משויך» (עם הקישור להדגמה, שנבדק שהוא עובד) / «רק Google» / «שגיאה» / «התנתקות». ✓ בהדגמה מצויר מחדש תוך ~9ms
   (ב-Streamlit: 400–650ms).
 
 ## מה עוד לא כאן — בכוונה

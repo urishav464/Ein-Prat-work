@@ -95,17 +95,24 @@ https://<שם-האפליקציה>.streamlit.app/oauth2callback
 כתובת גוגל לכל חניך. **חניך בלי שיוך יתחבר בהצלחה ולא יראה שום משמר** — זו
 ההתנהגות הנכונה, אבל היא מבלבלת אם לא יודעים.
 
-**6. שלא יירדם** — Community Cloud מרדים אפליקציה אחרי 12 שעות בלי ביקור, והחניך
-הראשון של היום נתקע מול «Yes, get this app back up!». ב-GitHub → הריפו → Settings →
-Secrets and variables → Actions → **Variables** → New repository variable:
+**6. שלא יירדם (5 דקות)** — Community Cloud מרדים אפליקציה אחרי 12 שעות בלי ביקור,
+והחניך הראשון של היום נתקע מול «Yes, get this app back up!». משימה ב-GitHub
+(`.github/workflows/keep-awake.yml`) מבקרת באפליקציה כל 6 שעות עם דפדפן ולוחצת על
+הכפתור אם היא נרדמה. היא רק צריכה לדעת את הכתובת:
 
-```
-STREAMLIT_APP_URL = https://<שם-האפליקציה>.streamlit.app
-```
+1. להעתיק את כתובת האפליקציה מהדפדפן — רק עד `.app`, למשל
+   `https://something.streamlit.app`. (היא גם ב-Secrets, בשורה `redirect_uri`, בלי
+   ה-`/oauth2callback` שבסוף.)
+2. לפתוח https://github.com/urishav464/Ein-Prat-work/settings/variables/actions
+   (או: הריפו → **Settings** → **Secrets and variables** → **Actions** → הלשונית
+   **Variables**) → הכפתור הירוק **New repository variable**.
+3. **Name:** `STREAMLIT_APP_URL` (בדיוק כך) · **Value:** הכתובת מצעד 1 → **Add variable**.
+4. לבדוק מיד: https://github.com/urishav464/Ein-Prat-work/actions/workflows/keep-awake.yml
+   → **Run workflow** → שוב **Run workflow** הירוק. אחרי כ-2 דקות מופיעה שורה עם ✓
+   ירוק.
 
-מאותו רגע `.github/workflows/keep-awake.yml` מבקר באפליקציה כל 6 שעות עם דפדפן
-ולוחץ על הכפתור אם היא נרדמה. לנסות מיד: Actions → *Keep the app awake* → Run
-workflow. זה מעקף, לא יכולת של Streamlit; עד שהמשתנה מוגדר, כל ריצה מדלגת בשקט.
+מכאן זה רץ לבד. זה מעקף, לא יכולת של Streamlit; עד שהמשתנה מוגדר, כל ריצה מדלגת
+בשקט.
 
 ## עדכון סכימה — גרסאות 7, 8 ו-9
 
