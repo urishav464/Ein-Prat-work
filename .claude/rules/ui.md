@@ -44,9 +44,11 @@ paths:
   version plus `div:has(> div:only-child:empty)`. Never `div[role="radiogroup"] > label` again — a
   role selector is invisible to a testid-only audit.
 - **Material icons are `<span translate="no">` with the icon NAME as text.** The status widget's tick
-  is `stExpanderIconCheck`, not `stIconMaterial`; the Hebrew font override reached it and painted
-  «chec». The carve-out is `[data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"],
-  span[translate="no"]`.
+  is `stExpanderIconCheck`, not `stIconMaterial`; the old `@import` + `!important` Hebrew font
+  override reached it and painted «chec», and needed a carve-out that broke whenever the bundle
+  renamed an icon. **The fonts are now `theme.font` / `theme.headingFont` in `config.toml`** and
+  Streamlit keeps them off its icons itself — never put a `font-family … !important` on
+  `[class^="st-"]` again.
 
 ## What Streamlit portals to `<body>` never inherits the app's RTL
 
@@ -63,8 +65,7 @@ never by eye.
 
 ## The design system (config.toml theme + one injected CSS layer)
 
-- **Base colors live in `.streamlit/config.toml`** (Ein-Prat brand: navy `#1d3e7d` primary on parchment `#f2eee3`) so Streamlit's own primitives — primary buttons, progress bars, focus rings — follow without CSS fights. The CSS layer adds Rubik headings / Assistant body, a 4/8px spacing scale (`--sp-1..6`), hairline card borders instead of shadows, and ghost secondary buttons.
-- Fonts load with `!important` — **but Streamlit's icons are Material ligature text**: without re-exempting `[data-testid="stIconMaterial"]` back to `Material Symbols Rounded`, every expander arrow renders as the literal word `keyboard_arrow_down`.
+- **Base colors AND the type live in `.streamlit/config.toml`** (Ein-Prat brand: navy `#1d3e7d` primary on parchment `#f2eee3`) so Streamlit's own primitives — primary buttons, progress bars, focus rings — follow without CSS fights. Type: `font = "Assistant:<Google Fonts css url>"`, `headingFont = "Rubik:<url>"`, `headingFontWeights = [800, 800, 800, 800]`; the sidebar's warm ground is `[theme.sidebar] backgroundColor`. Streamlit loads the fonts itself (measured: Assistant 400/600/700 and Rubik 800 `loaded`, Material Symbols untouched — an expander arrow is a 16px glyph, not a word) and replaces any fallback list with its own «Source Sans»; every computed size, weight and colour stayed identical when the CSS moved here. The CSS layer adds the heading colour and tracking (no theme option), a 4/8px spacing scale (`--sp-1..6`), hairline card borders instead of shadows, and ghost secondary buttons.
 - **Headings carry a navy accent bar instead of emojis — as a physical `border-right`, never a `::before`**: Streamlit headings are flex containers, and an inline pseudo-box drifts to the line's END under RTL (three attempts to learn this). Emojis live only in nav labels, chips, stepper dots, and true icon buttons.
 - **The sidebar collapse fix must stay, and it is a `transform: none`, not a `display: none`.** Streamlit 1.62 styles the panel `transform: isCollapsed ? translateX(-<width>px) : none` (bundle `index.*.js`, emotion target `eelgd2m0`) — correct for its native LEFT sidebar, wrong for ours on the RIGHT: it slid ACROSS the content. The CSS kills the transform and lets Streamlit's own 300ms width transition do the collapse (measured: right edge pinned at the viewport, left edge 1200→1500, transform `none` throughout); the content keeps `min-width: 244px` + `overflow: hidden` on the section so it is clipped, not reflowed into stacked letters. The old `[aria-expanded=false] * { display: none }` sledgehammer is gone — reopening via `stExpandSidebarButton` restores 300px.
 - **Sidebar drag-resize exists but is unreachable**: the `re-resizable` handle IS in the DOM (`cursor: col-resize`, 8px wide) but Streamlit places it at `right: -6px` — the panel's physical right edge, which under RTL is the viewport edge (measured at x=1498 of 1500). Don't promise it; don't claim it isn't there.

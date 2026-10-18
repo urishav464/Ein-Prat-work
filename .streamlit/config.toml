@@ -6,3 +6,15 @@ primaryColor = "#1d3e7d"
 backgroundColor = "#f2eee3"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#243146"
+# The fonts are Streamlit's own setting, not an injected @import + `!important`
+# overrides: those reached Streamlit's Material-icon spans too (ligature text —
+# an expander arrow read «keyboard_arrow_down», a status tick «chec») and needed
+# a carve-out that broke whenever the bundle renamed an icon. Streamlit loads a
+# "Name:<css url>" font itself and keeps it off its icons.
+font = "Assistant:https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&display=swap, Segoe UI, system-ui, sans-serif"
+headingFont = "Rubik:https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;800&display=swap, Assistant, sans-serif"
+headingFontWeights = [800, 800, 800, 800]
+
+# The sidebar's warm ground (was a CSS background on stSidebar).
+[theme.sidebar]
+backgroundColor = "#ebe4d3"

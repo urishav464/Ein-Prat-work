@@ -4,6 +4,8 @@
   {"nav": "חיפוש מרצים", "measure": false},
   {"fill": {"label": "נושא המשמר", "text": "האם אדם יכול לשכתב את העבר?"}, "measure": false},
   {"fill": {"label": "נושא השיעור", "text": "זיכרון והיסטוריה"}, "measure": false},
+  {"_why": "the screen defaults to the trainee's NEXT evening, which moves with the calendar; #05 is the fixture evening with a timeline (and exempt from the auto-close), so the slot picker and «➕ הוסף כמועמד» exist whatever the date",
+   "select": {"label": "לאיזה משמר משבצים", "option": "#05"}, "measure": false},
   {"name": "build the map", "click": {"text": "בנה מפה"}},
   {"name": "scan", "click": {"text": "סרוק את הרשת"}},
   {"name": "➕ add as candidate", "click": {"key": "cand-"}}

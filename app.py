@@ -100,27 +100,12 @@ def _close_past() -> None:
 
 RTL_CSS = """
 <style>
-  /* ---- Typography: Heebo is the app's voice. Loaded from Google Fonts on
-     the deployed app; sandboxes without network fall back silently. ---- */
-  @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;800&family=Assistant:wght@400;600;700&display=swap');
-  html, body, .stApp, [class^="st-"], button, input, textarea, select {
-      font-family: 'Assistant', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
-  }
-  /* The override above must NOT reach Streamlit's icon glyphs — they are
-     ligature text ("keyboard_arrow_down") that renders literally without
-     the Material font. */
-  /* Every Material icon is a <span translate="no"> with the icon NAME as its
-     text — the bundle sets translate:`no` in exactly two places, both icon
-     components — and only some of them carry stIconMaterial: the status
-     widget's tick is stExpanderIconCheck, and under the Assistant override it
-     painted the literal word "check", clipped to "chec" beside «הסריקה הסתיימה». */
-  [data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"], span[translate="no"] {
-      font-family: 'Material Symbols Rounded' !important;
-      line-height: 1; overflow: visible;
-  }
+  /* ---- Typography lives in .streamlit/config.toml (theme.font = Assistant,
+     theme.headingFont = Rubik, headingFontWeights = 800): Streamlit loads the
+     fonts itself and keeps them off its Material-icon spans, which the old
+     @import + `!important` override reached («chec»). Only the heading colour
+     and tracking have no theme option. ---- */
   h1, h2, h3, h4 {
-      font-family: 'Rubik', 'Assistant', sans-serif !important;
-      font-weight: 800 !important;
       letter-spacing: -0.01em;
       color: #1d3e7d !important;
   }
@@ -190,8 +175,9 @@ RTL_CSS = """
 
   /* ---- Sidebar: warm ground, and the nav radio restyled as cards.
      The radio circle is hidden; the label IS the card. ---- */
+  /* the warm ground is theme.sidebar.backgroundColor; the hairline faces the
+     content — inline-end, which the native (physical) border would not */
   [data-testid="stSidebar"] {
-      background: #ebe4d3;
       border-inline-end: 1px solid #d9cfb8;
   }
   /* Collapse under RTL. Streamlit 1.62 styles the panel with
