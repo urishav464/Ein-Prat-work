@@ -30,6 +30,7 @@ paths:
 - The sidebar lands on the RIGHT under the RTL CSS — desired for Hebrew.
 - Anything inside a raw-HTML block needs `html.escape` plus markdown stripping (`_clean()`), or backticks and `**` render literally.
 - Never start a Hebrew title with a leading digit (bidi misplaces it — "כל 21 המשמרים", not "21 המשמרים").
+- A count before a Hebrew noun goes through `_he_count(n, one, many)` — days through `dm._he_days` — because «1 משימות» and «בעוד 1 ימים» read as broken Hebrew. `one` is the whole phrase, so a word that must agree rides inside it («משימה אחת מחכה» / «משימות מחכות»); a verb BEFORE the count agrees by its own conditional («נמחקה» / «נמחקו»). Fractions («3/7 משימות הושלמו») stay as they are.
 
 ## The deployed bundle is pinned, because the CSS is measured against one
 
