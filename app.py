@@ -109,6 +109,13 @@ RTL_CSS = """
       letter-spacing: -0.01em;
       color: #1d3e7d !important;
   }
+  /* theme.headingFont stops at the app root: a dialog is portaled to <body>,
+     so its title computed Assistant 600 (design-review, measured) — name the
+     heading only, never the icon spans */
+  [data-testid="stDialog"] h1, [data-testid="stDialog"] h2 {
+      font-family: "Rubik", "Assistant", sans-serif;
+      font-weight: 800;
+  }
 
   /* ---- RTL: the whole UI is Hebrew; Streamlit has no native mode. ---- */
   .stApp,
