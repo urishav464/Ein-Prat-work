@@ -761,6 +761,13 @@ def _fmt_nis(x: float) -> str:
     return f"{x:,.0f} ₪"
 
 
+def _he_count(n: int, one: str, many: str) -> str:
+    """«1 משימות» reads as broken Hebrew, like «1 ימים» (`dm._he_days`):
+    `one` is the whole phrase for one — «משימה אחת», «משמר אחד» — and
+    `many` follows the digit."""
+    return one if n == 1 else f"{n} {many}"
+
+
 def _clean(text: str) -> str:
     """Kanban cards are raw HTML, so markdown from the task text would show
     literally (backticks, **bold**). Strip it and escape anything HTML-ish."""
@@ -810,7 +817,7 @@ def _mishmar_card(m: dict, progress: dict, overdue_count: int, owners: list[str]
         elif topic:
             bits.append("🎤 אין עדיין מבנה ערב")
         if waiting:
-            bits.append(f"📩 {waiting} ממתין לתשובה")
+            bits.append(f"📩 {waiting} {'ממתין' if waiting == 1 else 'ממתינים'} לתשובה")
         if spent:
             bits.append(f"💰 {_fmt_nis(spent)} עד כה")
         if bits:
@@ -884,11 +891,12 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
     with st.container(border=True, key="card-attention"):
         for m in no_topic:
             st.markdown(
-                f"🎯 **#{m['id']:02d}** בעוד {soon[m['id']]} ימים ועדיין ללא נושא — "
+                f"🎯 **#{m['id']:02d}** בעוד {dm._he_days(soon[m['id']])} ועדיין ללא נושא — "
                 f"{' · '.join(owners.get(m['id'], [])) or 'צוות'}")
         for m, n in open_slots:
             st.markdown(
-                f"🎤 **#{m['id']:02d}** בעוד {soon[m['id']]} ימים · {n} מקטעים בלי מרצה — "
+                f"🎤 **#{m['id']:02d}** בעוד {dm._he_days(soon[m['id']])} · "
+                f"{_he_count(n, 'מקטע אחד', 'מקטעים')} בלי מרצה — "
                 f"{' · '.join(owners.get(m['id'], [])) or 'צוות'}")
         for name, ids in list(collisions.items())[:6]:
             st.markdown(
@@ -897,7 +905,7 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
                 + " — ודאו שזה מכוון, ושלא שני זוגות פונים לאותו אדם.")
         for o, days in waiting[:6]:
             st.markdown(
-                f"📩 **{_clean(o.get('name') or '')}** — נשלחה פנייה לפני {days} ימים "
+                f"📩 **{_clean(o.get('name') or '')}** — נשלחה פנייה לפני {dm._he_days(days)} "
                 f"ואין תשובה.")
 
 
@@ -952,7 +960,8 @@ def _dashboard_body() -> None:
                       delta=_fmt_nis(avg - budget["nominal_per_mishmar"]),
                       delta_color="off", width=190)
     st.caption("עוד לא התקיים משמר" if avg is None else
-               f"הממוצע הוא על פני {budget['past_count']} משמרים שהתקיימו · "
+               "הממוצע הוא על פני "
+               f"{_he_count(budget['past_count'], 'משמר אחד שהתקיים', 'משמרים שהתקיימו')} · "
                f"מול אינדיקציה של {_fmt_nis(budget['nominal_per_mishmar'])} למשמר")
     if total_all:
         st.progress(done_all / total_all,
@@ -971,8 +980,11 @@ def _dashboard_body() -> None:
     if not overdue:
         st.success("שום משימה לא עברה את התאריך המומלץ שלה.")
     else:
+        where = ("במשמר אחד" if len(over_by_mid) == 1
+                 else f"ב-{len(over_by_mid)} משמרים")
         st.caption(
-            f"{len(overdue)} משימות פתוחות ב-{len(over_by_mid)} משמרים עברו את התאריך "
+            f"{_he_count(len(overdue), 'משימה אחת פתוחה', 'משימות פתוחות')} {where} "
+            f"{'עברה' if len(overdue) == 1 else 'עברו'} את התאריך "
             "המומלץ. לחניכים זה מוצג כתזכורת רכה — כאן זה מוצג כדי שתדע איפה להתערב."
         )
         # one folding row per Mishmar, the phases under it — a door to the
@@ -1055,7 +1067,7 @@ def _dashboard_body() -> None:
             st.dataframe(spent_rows, width="stretch", hide_index=True)
             st.caption(
                 f"סה״כ {_fmt_nis(budget['past_spent'])} על פני "
-                f"{budget['past_count']} משמרים · ממוצע "
+                f"{_he_count(budget['past_count'], 'משמר אחד', 'משמרים')} · ממוצע "
                 f"{_fmt_nis(budget['avg_per_past'] or 0)} מול אינדיקציה של "
                 f"{_fmt_nis(budget['nominal_per_mishmar'])}."
             )
@@ -1076,7 +1088,7 @@ def _dashboard_body() -> None:
             for row in searches[:40]:
                 r = row.get("results_json") or {}
                 n = len(r.get("candidates") or [])
-                outcome = (f"{n} מועמדים" if not r.get("fallback") else
+                outcome = (_he_count(n, "מועמד אחד", "מועמדים") if not r.get("fallback") else
                            "בלי תוצאות — " + SCOUT_FALLBACK_TEXT.get(r.get("reason") or "error", "")[:50])
                 fields = " · ".join(a.get("field") or a.get("label") or ""
                                     for a in (r.get("map") or {}).get("angles") or [] if a.get("on", True))
@@ -1362,7 +1374,8 @@ def _save_feedback_clicked(mid: int, entries: list[tuple], my_titles: set,
     # feedback submitted => the trainee's feedback task closes
     for tid in feedback_task_ids:
         dm.update_task_status(tid, "DONE")
-    st.toast(f"נשמרו {n} משובים · משימת המשוב נסגרה")
+    st.toast(f"{'נשמר' if n == 1 else 'נשמרו'} {_he_count(n, 'משוב אחד', 'משובים')}"
+             " · משימת המשוב נסגרה")
 
 
 def _save_budget_clicked(mid: int, speakers: list[str]) -> None:
@@ -1380,7 +1393,7 @@ def _save_budget_clicked(mid: int, speakers: list[str]) -> None:
     other = st.session_state.get(f"bud-other-{mid}", 0.0)
     if other:
         dm.add_budget_entry(mid, "אחר", actual_cost=other, description="אחר"); n += 1
-    st.toast(f"נשמרו {n} שורות תקציב")
+    st.toast(f"{'נשמרה' if n == 1 else 'נשמרו'} {_he_count(n, 'שורת תקציב אחת', 'שורות תקציב')}")
 
 
 def _set_state(key: str, value) -> None:
@@ -1675,7 +1688,7 @@ def _countdown_chip(m: dict) -> str:
     if days == 0:
         return _chip("הערב!", "red")
     kind = "red" if days <= 7 else ("yellow" if days <= 14 else "green")
-    return _chip(f"בעוד {days} ימים", kind)
+    return _chip(f"בעוד {dm._he_days(days)}", kind)
 
 
 def _partner_chip(owners: list[str], me: str) -> str:
@@ -1744,7 +1757,8 @@ def _next_mishmar_hero(m: dict, progress: dict,
                 if np["total"]:
                     st.caption(
                         f"🔒 אחרי שלב «{cur['label']}» ייפתח שלב "
-                        f"«{np['label']}» — {np['total']} משימות מחכות שם בשקט."
+                        f"«{np['label']}» — "
+                        f"{_he_count(np['total'], 'משימה אחת מחכה', 'משימות מחכות')} שם בשקט."
                     )
         elif progress["total"]:
             st.success("כל המשימות של השלב הנוכחי סגורות. 🎉")
@@ -2079,7 +2093,7 @@ def _search_history(mine: list[dict]) -> None:
         r = row.get("results_json") or {}
         mid = row.get("mishmar_id")
         n = len(r.get("candidates") or [])
-        outcome = (f"{n} מועמדים" if not r.get("fallback") else
+        outcome = (_he_count(n, "מועמד אחד", "מועמדים") if not r.get("fallback") else
                    "בלי תוצאות — " + SCOUT_FALLBACK_TEXT.get(r.get("reason") or "error", "")[:60])
         added = r.get("added") or []
         fields = " · ".join(a.get("field") or a.get("label") or ""
@@ -2098,7 +2112,7 @@ def _search_history(mine: list[dict]) -> None:
     for row in head:
         _line(row)
     if rest:
-        with st.expander(f"עוד {len(rest)} חיפושים"):
+        with st.expander("עוד " + _he_count(len(rest), "חיפוש אחד", "חיפושים")):
             for row in rest:
                 _line(row)
 
@@ -2226,9 +2240,11 @@ def _map_step(held: dict) -> None:
     if prior:
         # don't pay twice for what the pair (or the partner) already has
         r = prior.get("results_json") or {}
+        n_names = len(r.get("candidates") or [])
         pc1, pc2 = st.columns([5, 1])
         pc1.info(f"הנושא הזה כבר נסרק ב-{str(prior.get('created_at') or '')[:10]} — "
-                 f"{len(r.get('candidates') or [])} שמות. אפשר לפתוח אותם בלי לשלם שוב, "
+                 f"{_he_count(n_names, 'שם אחד', 'שמות')}. "
+                 f"אפשר לפתוח {'אותו' if n_names == 1 else 'אותם'} בלי לשלם שוב, "
                  "או לסרוק מחדש.")
         pc2.button("פתח", key=f"prior-{prior['id']}", on_click=_set_state,
                    args=("scout_result", _reopened(prior)))
@@ -2288,8 +2304,9 @@ def _run_scan(held: dict) -> None:
         n_found = len(res.get("candidates") or [])
         u = res.get("usage") or {}
         box.update(
-            label=(f"הסריקה הסתיימה · {n_found} מועמדים · {res.get('strong', 0)} בוודאות גבוהה"
-                   f" · {u.get('searches') or 0} חיפושים"
+            label=(f"הסריקה הסתיימה · {_he_count(n_found, 'מועמד אחד', 'מועמדים')}"
+                   f" · {res.get('strong', 0)} בוודאות גבוהה"
+                   f" · {_he_count(u.get('searches') or 0, 'חיפוש אחד', 'חיפושים')}"
                    if not res.get("fallback") else "הסריקה הסתיימה — בלי מועמדים"),
             state="complete", expanded=False)
     slim = ca.slim_for_storage(res)
@@ -2331,8 +2348,9 @@ def _scout_results(result: dict) -> None:
     u = result.get("usage") or {}
     if u.get("input") is not None or u.get("searches") is not None:
         st.caption(
-            f"עלות הסריקה: {_money(u)} · {u.get('searches') or 0} חיפושים · "
-            f"{u.get('fetches') or 0} דפים נפתחו"
+            f"עלות הסריקה: {_money(u)} · "
+            f"{_he_count(u.get('searches') or 0, 'חיפוש אחד', 'חיפושים')} · "
+            f"{_he_count(u.get('fetches') or 0, 'דף אחד נפתח', 'דפים נפתחו')}"
             + (" · פתיחת דפים חסומה בחשבון — השמות מבוססים על תוצאות החיפוש בלבד"
                if u.get("fetch_disabled") else ""),
             help=(f"טוקנים: {u.get('input') or 0:,} נכנסים · {u.get('output') or 0:,} יוצאים · "
@@ -2551,7 +2569,8 @@ def show_speaker_index() -> None:
                     r, outreach_by_speaker.get(r["speaker_id"], []), seen[r["name"]],
                     teaching.get(r["name"]))
     if len(rows) > shown:
-        st.button(f"הצג עוד ({len(rows) - shown} נוספים)", width="stretch",
+        st.button(f"הצג עוד ({_he_count(len(rows) - shown, 'אחד נוסף', 'נוספים')})",
+                  width="stretch",
                   on_click=_set_state, args=("speaker_page_size", shown + 24))
 
 
@@ -2661,7 +2680,8 @@ def _add_slot_clicked(mid: int, role: Optional[str] = None) -> None:
 
 def _sync_tasks_clicked(mid: int) -> None:
     res = dm.sync_lesson_tasks(mid)
-    st.toast(f"נוספו {res['created']} משימות · נוקו {res['removed']}"
+    st.toast(f"{'נוספה' if res['created'] == 1 else 'נוספו'} "
+             f"{_he_count(res['created'], 'משימה אחת', 'משימות')} · נוקו {res['removed']}"
              + (f" · שויכו {res['adopted']}" if res.get("adopted") else "")
              + (f" · עודכן ניסוח ב-{res['renamed']}" if res.get("renamed") else ""))
 
@@ -2829,7 +2849,8 @@ def _lesson_edit_dialog(mid: int, l: dict) -> None:
 
     if delete:
         res = dm.delete_lesson_with_tasks(mid, l["id"])
-        st.toast(f"המקטע נמחק · נמחקו איתו {res['tasks']} משימות פתוחות שלו")
+        st.toast(f"המקטע נמחק · {'נמחקה' if res['tasks'] == 1 else 'נמחקו'} איתו "
+                 f"{_he_count(res['tasks'], 'משימה אחת פתוחה', 'משימות פתוחות')} שלו")
         st.rerun()
     if cancel:
         st.rerun()
@@ -2962,13 +2983,13 @@ def _topic_and_structure(mid: int, tasks: list[dict],
             if l.get("format"):
                 chips.append(_chip(l["format"], "gray"))
             if is_chavurot and cands:
-                chips.append(_chip(f"{len(cands)} מעבירים", "blue"))
+                chips.append(_chip(_he_count(len(cands), "מעביר אחד", "מעבירים"), "blue"))
             elif not l.get("speaker_name") and cands:
-                chips.append(_chip(f"{len(cands)} מועמדים", "blue"))
+                chips.append(_chip(_he_count(len(cands), "מועמד אחד", "מועמדים"), "blue"))
             open_here = [t for t in my_tasks if t["status"] != "DONE"]
             if open_here:
                 kind = "red" if any(t.get("overdue") for t in open_here) else "gray"
-                chips.append(_chip(f"{len(open_here)} משימות", kind))
+                chips.append(_chip(_he_count(len(open_here), "משימה אחת", "משימות"), kind))
             st.markdown(
                 f"<div class='task-desc'>"
                 f"<span class='chip chip-blue' dir='ltr'>{_slot_times(l)}</span> {head}</div>"
@@ -3250,13 +3271,15 @@ def _roster_drift_line(placeholders: list[dict], unowned: bool, drift: dict) -> 
         return drift["error"]
     bits = []
     if placeholders:
-        bits.append(f"{len(placeholders)} שורות עדיין נקראות «חניך N»")
+        bits.append(_he_count(len(placeholders), "שורה אחת עדיין נקראת", "שורות עדיין נקראות")
+                    + " «חניך N»")
     if unowned:
         bits.append("אף משמר אינו משובץ לחניכים")
     if drift["mishmarim"]:
         shown = " · ".join(f"#{m:02d}" for m in drift["mishmarim"][:8])
         more = f" ועוד {len(drift['mishmarim']) - 8}" if len(drift["mishmarim"]) > 8 else ""
-        bits.append(f"{len(drift['mishmarim'])} משמרים עם זוג אחר ({shown}{more})")
+        bits.append(_he_count(len(drift["mishmarim"]), "משמר אחד", "משמרים")
+                    + f" עם זוג אחר ({shown}{more})")
     if drift["added"]:
         bits.append("חניכים חדשים בקובץ: " + " · ".join(drift["added"]))
     if drift["removed"]:
@@ -3321,8 +3344,10 @@ def _reset_dialog(mid: int) -> None:
     if st.button("🗑 אפס את המשמר", key=f"rst-{mid}", type="primary", disabled=not ok):
         res = dm.reset_mishmar(mid)
         st.toast(
-            f"המשמר אופס · נמחקו {res['lessons']} מקטעים, {res['tasks']} משימות · "
-            f"הוחזרו {res['tasks_restored']} משימות מקוריות")
+            f"המשמר אופס · נמחקו {_he_count(res['lessons'], 'מקטע אחד', 'מקטעים')}, "
+            f"{_he_count(res['tasks'], 'משימה אחת', 'משימות')} · "
+            f"{'הוחזרה' if res['tasks_restored'] == 1 else 'הוחזרו'} "
+            f"{_he_count(res['tasks_restored'], 'משימה אחת מקורית', 'משימות מקוריות')}")
         st.rerun()   # closes the dialog and restarts the page on the empty Mishmar
 
 
@@ -3376,7 +3401,8 @@ def _workfile_columns(mid: int, tasks: list[dict], progress: dict) -> None:
     # stack (evening first) instead of squeezing every button into a sliver.
     right, left = st.container(key="wf-cols").columns([1.15, 1], gap="medium")
     with right:
-        with _wf_panel(WF_STRUCTURE, f"{len([l for l in lessons if not l.get('is_break')])} מקטעים"):
+        n_slots = len([l for l in lessons if not l.get("is_break")])
+        with _wf_panel(WF_STRUCTURE, _he_count(n_slots, "מקטע אחד", "מקטעים")):
             _safe(_topic_and_structure, mid, tasks, lessons=lessons,
                   candidates=candidates)
         with _wf_panel(WF_LOGISTICS):
@@ -3854,7 +3880,8 @@ def main() -> None:
 
     if info.get("seeded"):
         st.toast(
-            f"הועברו למסד: {info['tasks']} משימות · {info['mishmarim']} משמרים. "
+            f"הועברו למסד: {_he_count(info['tasks'], 'משימה אחת', 'משימות')} · "
+            f"{_he_count(info['mishmarim'], 'משמר אחד', 'משמרים')}. "
             f"הקובץ נגנז."
         )
 
