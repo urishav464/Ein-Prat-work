@@ -58,7 +58,11 @@ function useHome(): [Load, (fn: (h: Home) => Home) => void] {
 }
 
 const signIn = () =>
-  supabase?.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } });
+  // back to this very page — the site may live under a path, not at the root
+  supabase?.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.origin + window.location.pathname },
+  });
 const signOut = () => supabase?.auth.signOut();
 
 // ---------------------------------------------------------------- primitives
@@ -435,7 +439,7 @@ export default function App() {
               screen is exactly what they get — and it must not read as a fault */}
           <div className="mt-5 rounded-xl bg-navy-soft px-4 py-3 text-sm">
             <p><span className="font-bold">חשבון של המדריך?</span> אב־הטיפוס הזה הוא המסך של החניכים, ולכן הכתובת לא מופיעה כאן.</p>
-            <a href="/?demo" className="mt-2 inline-block font-bold text-navy underline underline-offset-2">
+            <a href="?demo" className="mt-2 inline-block font-bold text-navy underline underline-offset-2">
               למסך החניך במצב הדגמה ←
             </a>
           </div>

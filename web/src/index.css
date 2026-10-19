@@ -23,6 +23,16 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* and again on body: a host page (the claude.ai demo frame) resets body to a
+   14px system font, which would otherwise win over what html passes down */
+body {
+  background: var(--color-parchment);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
 /* <details> as a folding row: the native marker replaced by our own chevron,
    which turns with the row — and under RTL it points the right way */
 details > summary { list-style: none; cursor: pointer; }

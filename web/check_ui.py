@@ -53,13 +53,18 @@ def build(out: Path, url: str, key: str) -> None:
         raise SystemExit(json.dumps({"ok": False, "build": r.stderr[-800:]}))
 
 
-def serve(root: Path) -> str:
+def serve(root: Path, under: str = "v2") -> str:
+    """Serve the build under a sub-path (http://…/v2), the harder case: every
+    link, asset and icon must be relative for it to work, and then the site's
+    root works too."""
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
             pass
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(root)))
+    www = Path(tempfile.mkdtemp(prefix="v2www-"))
+    (www / under).symlink_to(root, target_is_directory=True)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(www)))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return f"http://127.0.0.1:{srv.server_address[1]}"
+    return f"http://127.0.0.1:{srv.server_address[1]}/{under}"
 
 
 def b64(obj) -> str:
@@ -147,8 +152,23 @@ def check_demo(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
           d.querySelector('summary').click();
           return d.open;
         }""")
-        f.update(tick=tick, lateToggle=toggled, errors=errors)
+        # the install pieces, fetched the way the browser resolves them: the
+        # manifest relative to the page, its icons relative to the manifest
+        pwa = page.evaluate("""async () => {
+          const href = document.querySelector('link[rel=manifest]').href;
+          const r = await fetch(href);
+          if (!r.ok) return {manifest: r.status};
+          const m = await r.json();
+          const icons = await Promise.all(m.icons.map(async i =>
+            (await fetch(new URL(i.src, href))).status));
+          const start = (await fetch(new URL(m.start_url, href))).status;
+          return {manifest: r.status, icons, start};
+        }""")
+        f.update(tick=tick, lateToggle=toggled, errors=errors, pwa=pwa)
         facts[f"demo@{w}"] = f
+        checks[f"demo@{w}: manifest, icons and start page load under a sub-path"] = \
+            pwa.get("manifest") == 200 and pwa.get("start") == 200 \
+            and bool(pwa.get("icons")) and all(s == 200 for s in pwa["icons"])
         k = f"demo@{w}: "
         checks[k + "Hebrew, RTL"] = f["dir"] == "rtl" and f["lang"] == "he" and f["bodyDirection"] == "rtl"
         checks[k + "no sideways scroll"] = f["overflowX"] <= 0
@@ -253,7 +273,7 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
     q = parse_qs(next(c["query"] for c in mock.calls if c["path"] == "/auth/v1/authorize"))
     facts["signin.authorize"] = {k: v[0] for k, v in q.items() if k != "code_challenge"}
     checks["auth: the Google button asks for provider=google with PKCE, back to this site"] = (
-        q.get("provider") == ["google"] and q.get("redirect_to") == [base]
+        q.get("provider") == ["google"] and q.get("redirect_to") == [base + "/"]
         and bool(q.get("code_challenge")) and q.get("code_challenge_method", [""])[0].lower() == "s256")
     checks["auth: the sign-in screen raised no page error"] = not errors
     ctx.close()
@@ -349,7 +369,7 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
                     and page.locator("h1").count() == 1
             except Exception:
                 href, landed = None, False
-            checks["auth: not_linked → the instructor's way to the demo"] = href == "/?demo" and landed
+            checks["auth: not_linked → the instructor's way to the demo"] = href == "?demo" and landed
         ctx.close()
 
 
