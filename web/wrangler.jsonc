@@ -1,0 +1,12 @@
+// Cloudflare (Workers Builds) serves the site from here: `npm run build`
+// writes dist/, then `npx wrangler deploy` publishes it as static files — no
+// Worker code at all. The name must match the project's name in Cloudflare.
+{
+  "name": "mishmar-ein-prat",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist",
+    // one page: any path the browser asks for gets index.html
+    "not_found_handling": "single-page-application"
+  }
+}
