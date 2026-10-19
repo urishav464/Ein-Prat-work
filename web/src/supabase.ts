@@ -1,13 +1,13 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cleanUrl, cleanValue, keyKind } from "./env";
 
-// Both values come from the host's build settings (Cloudflare → the project →
-// Settings → Build → Variables): the project URL and its PUBLIC key. That key
-// is meant to be public — what it can do is decided in the database, and there
-// it can do nothing at all; a browser signed in with Google can call only the
-// doors in web/supabase/v2.sql (read the home, ✓ a task of its own evenings)
-// and still read no table. A secret key never gets this far: the build refuses
-// it (vite.config.ts).
+// Both values come from the build's settings (the deploy repo urishav464/mishmar
+// → Settings → Secrets and variables → Actions → Variables): the project URL
+// and its PUBLIC key. That key is meant to be public — what it can do is
+// decided in the database, and there it can do nothing at all; a browser signed
+// in with Google can call only the doors in web/supabase/v2.sql (read the home,
+// ✓ a task of its own evenings) and still read no table. A secret key never
+// gets this far: the build refuses it (vite.config.ts).
 const url = cleanUrl(import.meta.env.VITE_SUPABASE_URL as string | undefined);
 const anonKey = cleanValue(import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined);
 

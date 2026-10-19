@@ -1,6 +1,6 @@
 """The v2 prototype in a real browser — two builds, every screen, one JSON line.
 
-    python3 web/check_ui.py [--shots DIR]
+    python3 web/check_ui.py [--shots DIR] [--under PATH]
 
 Needs `npm install` done in web/ and the harness's Python Playwright (the same
 pre-installed Chromium as scripts/harness/). Builds the app twice:
@@ -24,8 +24,8 @@ and checks, at 390px and 1500px:
         with a working link to the demo (where the instructor lands);
         «התנתקות» → back to the sign-in screen
 
-Both builds are served under a sub-path (/v2/), so every link, icon and the
-manifest must be relative to pass. Three more builds check the settings as a
+Every build is served under a sub-path — /mishmar/, as GitHub Pages serves it
+(--under to change) — so every link, icon and the manifest must be relative to pass. Three more builds check the settings as a
 person pastes them: with quotes, a space and «/rest/v1/» they still sign in;
 a URL that is not one gets a screen naming the setting (never a blank page)
 with the demo one tap away; and a secret key — a service_role JWT or
@@ -66,7 +66,7 @@ def build(out: Path, url: str, key: str, must_fail: bool = False) -> str:
     return r.stdout + r.stderr if must_fail else ""
 
 
-def serve(root: Path, under: str = "v2") -> str:
+def serve(root: Path, under: str = "mishmar") -> str:
     """Serve the build under a sub-path (http://…/v2), the harder case: every
     link, asset and icon must be relative for it to work, and then the site's
     root works too."""
@@ -370,9 +370,12 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
         "(label) => [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === label)",
         tick["label"])
     page.screenshot(path=str(shots / "v2-save-failed-390.png"))
-    facts["save-failed"] = {"alert": alert, "back": back, "errors": errors}
+    saves = [c for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_set_task_status"]
+    facts["save-failed"] = {"alert": alert, "back": back, "saves": len(saves), "errors": errors}
+    # not tick["gone"]: the mock fails at once, so the task may already be back
+    # by the next frame — what matters is one save tried, the task back, the alert
     checks["auth: a failed save puts the task back and says so"] = \
-        bool(tick) and tick["gone"] and back and "לא נשמר" in alert and not errors
+        bool(tick) and len(saves) == 1 and back and "לא נשמר" in alert and not errors
     ctx.close()
 
     # late tasks: one folding row per Mishmar, in date order, phases inside
@@ -478,6 +481,8 @@ def main(argv: list[str]) -> int:
     from playwright.sync_api import sync_playwright
     shots = Path(argv[argv.index("--shots") + 1]) if "--shots" in argv else Path(tempfile.mkdtemp(prefix="v2shots-"))
     shots.mkdir(parents=True, exist_ok=True)
+    # the path the site lives under — GitHub Pages serves it at /mishmar/
+    under = argv[argv.index("--under") + 1] if "--under" in argv else "mishmar"
     r = subprocess.run(["npx", "tsc", "--noEmit"], cwd=WEB, capture_output=True, text=True)
     if r.returncode:
         print(json.dumps({"ok": False, "tsc": (r.stdout + r.stderr)[-800:]}))
@@ -498,9 +503,10 @@ def main(argv: list[str]) -> int:
         all("SECRET Supabase key" in out for out in refused)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
-        check_demo(browser, serve(tmp / "demo"), shots, checks, facts)
-        check_auth(browser, serve(tmp / "auth"), shots, checks, facts)
-        check_settings(browser, serve(tmp / "messy"), serve(tmp / "badurl"), shots, checks, facts)
+        check_demo(browser, serve(tmp / "demo", under), shots, checks, facts)
+        check_auth(browser, serve(tmp / "auth", under), shots, checks, facts)
+        check_settings(browser, serve(tmp / "messy", under), serve(tmp / "badurl", under),
+                       shots, checks, facts)
         browser.close()
     ok = all(checks.values())
     print(json.dumps({"ok": ok, "checks": checks, "facts": facts, "shots": str(shots)}, ensure_ascii=False))
