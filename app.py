@@ -2591,7 +2591,7 @@ def show_speaker_index() -> None:
 
 
 LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"]
-LESSON_FORMATS = ["הרצאה", "חבורות", "דיבייט", "כתיבה", "טד", "ניגון", "טקס", "אחר"]
+LESSON_FORMATS = ["הרצאה", "חבורות", "פאנל", "דיבייט", "כתיבה", "טד", "ניגון", "טקס", "אחר"]
 
 
 def _mishmar_picker(key: str) -> Optional[int]:
@@ -2823,6 +2823,97 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
                               on_click=_add_candidate_clicked, args=(l["id"], mid, True))
 
 
+# A panel's callbacks: every change re-derives the slot's speaker line
+# (dm.refresh_panel_speakers) and lets the sync close «סגירת מרצה» once the
+# whole panel is closed — never on the first «yes».
+def _close_panelist_clicked(cid: int, mid: int) -> None:
+    res = dm.close_panelist(cid, mishmar_id=mid, student_id=st.session_state.student_id)
+    sync = dm.sync_lesson_tasks(mid)
+    st.toast(f"«{res['closed']}» נסגר לפאנל"
+             + (" · משימת סגירת המרצים סומנה כבוצעה" if sync.get("completed") else ""))
+    if not res.get("logged", True):
+        st.toast(_AMBIGUOUS_WARNING.format(name=res["closed"]), icon="⚠️")
+
+
+def _add_panelist_clicked(lesson_id: int, mid: int, close: bool = False) -> None:
+    nk, pk = f"pn-{lesson_id}", f"pp-{lesson_id}"
+    name = (st.session_state.get(nk) or "").strip()
+    phone = (st.session_state.get(pk) or "").strip()
+    if not name:
+        return
+    cid = dm.add_lesson_speaker(lesson_id, name, phone=phone,
+                                student_id=st.session_state.student_id)
+    st.session_state[nk] = ""
+    st.session_state[pk] = ""
+    if close and cid:
+        _close_panelist_clicked(cid, mid)
+    else:
+        dm.sync_lesson_tasks(mid)       # one more speaker to close: the task stays open
+        st.toast(f"«{name}» נוסף לפאנל — וגם למאגר המשותף")
+
+
+def _panelist_status_changed(cid: int, key: str, lesson_id: int, mid: int, name: str) -> None:
+    _candidate_status_changed(cid, key, mid, name)
+    dm.refresh_panel_speakers(lesson_id)
+    dm.sync_lesson_tasks(mid)
+
+
+def _remove_panelist(cid: int, lesson_id: int, mid: int) -> None:
+    dm.delete_lesson_candidate(cid)
+    dm.refresh_panel_speakers(lesson_id)
+    dm.sync_lesson_tasks(mid)
+
+
+def _panel_rows(mid: int, l: dict, cands: list[dict]) -> None:
+    """A panel is several speakers at once, ALL of them closed — not a
+    competition. Each row closes on its own and nobody is removed when another
+    closes; the slot's speaker line lists every closed one."""
+    if cands:
+        st.markdown("**מרצי הפאנל:**")
+        st.caption("כל מרצה נסגר בנפרד, ואף אחד לא מוסר כשאחר נסגר. "
+                   "משימת סגירת המרצה נסגרת כשכל מי שברשימה סגור.")
+    for cand in cands:
+        cr = st.container(horizontal=True, wrap=True, gap="small",
+                          vertical_alignment="center")
+        done = cand.get("status") == "✅ סגור"
+        cr.markdown(f"🎤 **{_clean(cand['name'])}**"
+                    + (f" {_chip('✅ סגור', 'green')}" if done else ""),
+                    unsafe_allow_html=True, width="stretch")
+        pkey = f"cph-{cand['id']}"
+        cr.text_input("טלפון", key=pkey, value=cand.get("phone") or "", width=140,
+                      placeholder="טלפון", label_visibility="collapsed",
+                      on_change=_phone_changed, args=(cand["id"], pkey))
+        cur = cand.get("status") or dm.SPEAKER_STATUSES[0]
+        skey = f"cst-{cand['id']}"
+        cr.selectbox(
+            "סטטוס", dm.SPEAKER_STATUSES, width=150,
+            index=dm.SPEAKER_STATUSES.index(cur) if cur in dm.SPEAKER_STATUSES else 0,
+            key=skey, label_visibility="collapsed",
+            on_change=_panelist_status_changed,
+            args=(cand["id"], skey, l["id"], mid, cand["name"]))
+        if not done:
+            cr.button("✅ סגור", key=f"pclose-{cand['id']}", type="primary",
+                      help="סוגר את המרצה הזה לפאנל; השאר נשארים",
+                      on_click=_close_panelist_clicked, args=(cand["id"], mid))
+        cr.button("🗑", key=f"ib-rmp-{cand['id']}", help="הסרה מהפאנל",
+                  on_click=_remove_panelist, args=(cand["id"], l["id"], mid))
+    if not cands:
+        _empty("עוד לא נוספו מרצים לפאנל.",
+               "כל מרצה נסגר בנפרד, ואף אחד לא מוסר כשאחר נסגר.")
+
+    with st.form(f"addpan-{l['id']}", border=False):
+        fr = st.container(horizontal=True, wrap=True, gap="small")
+        fr.text_input("שם מרצה", key=f"pn-{l['id']}", width="stretch",
+                      label_visibility="collapsed", placeholder="שם מרצה לפאנל")
+        fr.text_input("טלפון", key=f"pp-{l['id']}", width=150,
+                      label_visibility="collapsed", placeholder="טלפון (רשות)")
+        fr.form_submit_button("➕ לפאנל", on_click=_add_panelist_clicked,
+                              args=(l["id"], mid, False))
+        fr.form_submit_button("✅ הוסף וסגור", type="primary",
+                              help="מוסיף את השם לפאנל וסוגר אותו בלחיצה אחת",
+                              on_click=_add_panelist_clicked, args=(l["id"], mid, True))
+
+
 @st.dialog("עריכת מקטע", width="large")
 def _lesson_edit_dialog(mid: int, l: dict) -> None:
     """The slot's editor as a modal. It used to unfold inline inside the card
@@ -2871,9 +2962,17 @@ def _lesson_edit_dialog(mid: int, l: dict) -> None:
     if cancel:
         st.rerun()
     if saved:
+        # «—» clears the field: upsert_lesson skips None, so a slot made a panel
+        # by mistake could never go back to having no format at all
         dm.upsert_lesson(mid, l["slot_order"], title=title,
-                         description=desc, lesson_role=role or None, fmt=fmt or None,
+                         description=desc, lesson_role=role or "", fmt=fmt or "",
                          student_id=st.session_state.student_id)
+        # a slot that becomes a panel keeps the speaker it already closed, and
+        # its speaker line is derived from the panel's rows from now on
+        if dm.is_panel({**l, "title": title, "lesson_role": role, "format": fmt}):
+            if not dm.is_panel(l):
+                dm.adopt_panel_speaker(l)
+            dm.refresh_panel_speakers(l["id"])
         dm.set_lesson_duration(mid, l["id"], int(duration))
         source = None
         if up is not None:
@@ -2988,6 +3087,7 @@ def _topic_and_structure(mid: int, tasks: list[dict],
         # role OR format OR title — a pair that set only the FORMAT to חבורות
         # used to get an ordinary speaker slot, with no «מי מעביר» anywhere.
         is_chavurot = dm.is_chavurot(l)
+        is_panel = dm.is_panel(l)
         my_tasks = linked.get(l["id"], [])
         with st.container(border=True, key=f"card-l-{l['id']}"):
             head = _clean(slot_names.get(l["id"], f"שיעור {lesson_no}"))
@@ -3000,6 +3100,8 @@ def _topic_and_structure(mid: int, tasks: list[dict],
                 chips.append(_chip(l["format"], "gray"))
             if is_chavurot and cands:
                 chips.append(_chip(_he_count(len(cands), "מעביר אחד", "מעבירים"), "blue"))
+            elif is_panel and cands:
+                chips.append(_chip(_he_count(len(cands), "מרצה אחד בפאנל", "מרצים בפאנל"), "blue"))
             elif not l.get("speaker_name") and cands:
                 chips.append(_chip(_he_count(len(cands), "מועמד אחד", "מועמדים"), "blue"))
             open_here = [t for t in my_tasks if t["status"] != "DONE"]
@@ -3026,6 +3128,8 @@ def _topic_and_structure(mid: int, tasks: list[dict],
 
             if is_chavurot:
                 _chavurot_rows(mid, l, cands)
+            elif is_panel:
+                _panel_rows(mid, l, cands)
             else:
                 _candidate_rows(mid, l, cands)
 
@@ -3677,7 +3781,10 @@ def _after_tab(mid: int) -> None:
 
     # --- budget, unchanged in substance ---
     st.divider()
-    speakers = [l["speaker_name"] for l in lessons if l.get("speaker_name")]
+    # a panel pays each of its speakers: one budget line per closed panelist
+    speakers = [name for l in lessons if l.get("speaker_name")
+                for name in (l["speaker_name"].split(dm.PANEL_SEP) if dm.is_panel(l)
+                             else [l["speaker_name"]])]
     for name in dm.get_budget_speaker_names(mid):
         if name not in speakers:
             speakers.append(name)

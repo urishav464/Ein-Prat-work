@@ -210,6 +210,11 @@ More probe traps that produced false test results here: **input placeholders nev
 
 ## The evening panel after the slot↔task round
 
+- **A panel slot renders `_panel_rows`** (format «פאנל» in the slot editor): one row per
+  speaker — name, editable phone, status, «✅ סגור» until closed, 🗑 — and an add form with
+  «➕ לפאנל» / «✅ הוסף וסגור» (`pn-`/`pp-` keys). Every callback re-derives the slot's speaker
+  line and runs the sync; measured on the harness: each add and each close is one fragment
+  run, 8–12 queries, and the four closes on #05's slot left four rows and a DONE «סגירת מרצה».
 - **A חבורות slot renders `_chavurot_rows`, not `_candidate_rows`.** It is a LIST of presenters,
   not a competition: no «סגרנו», each row carries a room picker (`dm.CHAVUROT_ROOMS`) and its own
   source-sheet field, and a room used twice shows ⚠️ on both rows.

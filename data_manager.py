@@ -1400,6 +1400,55 @@ def close_lesson_speaker(lesson_id: int, name: str,
     return {"closed": closed_name, "removed": removed, "logged": logged}
 
 
+# A panel: several speakers on one stage at once. Every one of them is closed,
+# and closing one never removes another — the opposite of close_lesson_speaker,
+# where closing X means the others are no longer needed. The slot's
+# speaker_name is DERIVED from the rows: every «✅ סגור», in the order they were
+# added, so the timeline, the invitation and the feedback all read the panel.
+PANEL_SEP = " · "
+
+
+def close_panelist(candidate_id: int, mishmar_id: Optional[int] = None,
+                   student_id: Optional[int] = None) -> dict:
+    """«סגרתי את X» on a panel: X's row becomes ✅ — through the journal's single
+    writer, like any status — and the other panelists stay as they are."""
+    logged = update_lesson_speaker_status(candidate_id, "✅ סגור",
+                                          mishmar_id=mishmar_id, student_id=student_id)
+    row = _one(_t("lesson_speakers").select("lesson_id,name").eq("id", candidate_id).execute())
+    speakers = refresh_panel_speakers(row["lesson_id"]) if row else ""
+    return {"closed": (row or {}).get("name"), "speakers": speakers, "logged": logged}
+
+
+def refresh_panel_speakers(lesson_id: int) -> str:
+    """speaker_name = every closed panelist, in the order they were added."""
+    rows = _rows(_t("lesson_speakers").select("name,status")
+                 .eq("lesson_id", lesson_id).order("id").execute())
+    joined = PANEL_SEP.join(r["name"] for r in rows if r.get("status") == "✅ סגור")
+    _t("lessons").update({"speaker_name": joined or None}).eq("id", lesson_id).execute()
+    return joined
+
+
+def adopt_panel_speaker(lesson: dict) -> bool:
+    """A slot that BECOMES a panel keeps the speaker it already closed. Closing
+    by a name with no candidate row behind it leaves speaker_name alone on the
+    slot, and the first refresh would drop it. Called once, when the slot
+    changes kind — never from a refresh, or a panelist removed on purpose
+    would come straight back."""
+    name = (lesson.get("speaker_name") or "").strip()
+    if not name or PANEL_SEP.strip() in name:
+        return False
+    rows = _rows(_t("lesson_speakers").select("id,name,status")
+                 .eq("lesson_id", lesson["id"]).execute())
+    match = next((r for r in rows if normalize_name(r["name"]) == normalize_name(name)), None)
+    if match:
+        if match.get("status") != "✅ סגור":
+            _t("lesson_speakers").update({"status": "✅ סגור"}).eq("id", match["id"]).execute()
+        return False
+    _t("lesson_speakers").insert({"lesson_id": lesson["id"], "name": name,
+                                  "status": "✅ סגור"}).execute()
+    return True
+
+
 def _storage_upload(path: str, data: bytes,
                     content_type: str = "application/octet-stream") -> tuple[Optional[str], Optional[str]]:
     """One file into the public `sources` bucket → `(public_url, error)`.
@@ -1842,6 +1891,11 @@ def _slot_task_satisfied(lesson: dict, text: str,
     t = _base_slot_text(text)          # «… — סבב ב׳» asks the same question
     ps = presenters or []
     if t.startswith("סגירת מרצה"):
+        if is_panel(lesson):
+            # a panel is closed when every speaker still in play is — not
+            # when the first one says yes; a «❌» is out of play
+            live = [p for p in ps if p.get("status") != "❌ לא יכול/ה"]
+            return bool(live) and all(p.get("status") == "✅ סגור" for p in live)
         return bool((lesson.get("speaker_name") or "").strip())
     if t.startswith("דף מקורות — שיעור"):
         return bool((lesson.get("source_url") or "").strip())
@@ -2448,6 +2502,15 @@ def _is_chavurot(lesson: dict) -> bool:
 is_chavurot = _is_chavurot
 
 
+def is_panel(lesson: dict) -> bool:
+    """Several speakers at once on one stage — format, role or title says
+    «פאנל», the way is_chavurot reads «חבורות». A חבורות slot is never a panel:
+    its presenters sit in rooms of their own."""
+    if _is_chavurot(lesson):
+        return False
+    return any("פאנל" in (lesson.get(k) or "") for k in ("format", "lesson_role", "title"))
+
+
 def suggest_lesson_for_task(task: dict, lessons: list[dict]) -> Optional[int]:
     """The slot a task is probably about — or None, which is a real answer.
 
@@ -2734,6 +2797,9 @@ _WRITES = {
     "add_lesson_speaker": ("lesson_speakers", "speakers"),
     "update_lesson_speaker_status": ("lesson_speakers", "speaker_outreach", "speakers"),
     "close_lesson_speaker": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),
+    "close_panelist": ("lesson_speakers", "lessons", "speaker_outreach", "speakers"),
+    "refresh_panel_speakers": ("lessons",),
+    "adopt_panel_speaker": ("lesson_speakers",),
     "delete_lesson_candidate": ("lesson_speakers",),
     "set_lesson_source": ("lessons",), "upload_source_sheet": ("lessons",),
     "add_budget_entry": ("budget",), "add_feedback": ("feedback",),

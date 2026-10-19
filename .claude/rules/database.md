@@ -210,6 +210,18 @@ panel instead of on a slot.
 - **`delete_lesson_with_tasks(mishmar_id, lesson_id)`** is how a slot (or a break) is removed:
   its OPEN tasks go with it, DONE ones stay as history, and the clock reflows. Bare `delete_lesson`
   leaves both the later start times and the tasks stale.
+- **A panel is several speakers closed at once (`is_panel`: «פאנל» in format, role or title;
+  a חבורות slot never is).** Its speakers are ordinary `lesson_speakers` rows, but closing one is
+  `close_panelist` — ✅ through `update_lesson_speaker_status` (so the journal logs every
+  panelist) and **nothing is deleted**, the opposite of `close_lesson_speaker`. The slot's
+  `speaker_name` is DERIVED by `refresh_panel_speakers`: every ✅ row in insertion order joined
+  by `PANEL_SEP` (« · »), so the timeline, the invitation and the feedback read the whole panel;
+  the budget splits it back into one line per panelist. «סגירת מרצה — שיעור N» stays the slot's
+  task (no rename, nothing for the reconciler to retire) and is satisfied only when every
+  panelist still in play («❌ לא יכול/ה» is out) is ✅. A slot that BECOMES a panel keeps the
+  speaker it had closed — `adopt_panel_speaker`, called once from the slot editor's save,
+  never from a refresh (a panelist removed on purpose would come back). The editor now writes
+  «—» as `""`: `upsert_lesson` skips `None`, so a format or role could never be cleared.
 - **`is_chavurot(lesson)`** (public alias of `_is_chavurot`) reads role **or** format **or** title.
   The UI used to test `lesson_role == "חבורות"` alone, so a slot marked חבורות in the FORMAT field
   never grew a presenters list.
