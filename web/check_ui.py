@@ -14,7 +14,8 @@ and checks, at 390px and 1500px:
 
   demo  Hebrew + RTL, no sideways scroll, the hero and its four-step stepper,
         a ✓ redrawn within a frame, no markdown markers on screen
-  auth  signed out → «כניסה עם Google» asks for provider=google with PKCE;
+  auth  signed out → «כניסה עם Google» asks for provider=google with PKCE,
+        and «מדיניות פרטיות» opens privacy.html — static, nothing from elsewhere;
         a stored session → exactly ONE rpc/v2_my_home, carrying the user's
         token; ✓ redrawn within a frame, then ONE v2_set_task_status naming
         that task, and undo saves «IN PROGRESS»; a failed save puts the task
@@ -294,6 +295,31 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
     ctx, page, errors = auth_page(browser, base, mock, 390, signed_in=False)
     page.get_by_role("button", name="כניסה עם Google").wait_for()
     page.screenshot(path=str(shots / "v2-signin-390.png"), full_page=True)
+
+    # the privacy policy Google's consent screen links to: linked under the
+    # button, relative (so it resolves under the sub-path), and the page itself
+    # static — no script, nothing fetched from anywhere else
+    href = page.get_by_role("link", name="מדיניות פרטיות").get_attribute("href")
+    checks["auth: the sign-in screen links the privacy page, relative to the site"] = href == "privacy.html"
+    pctx = browser.new_context(viewport={"width": 390, "height": 900}, locale="he-IL")
+    ppage = pctx.new_page()
+    fetched: list[str] = []
+    ppage.on("request", lambda r: fetched.append(r.url))
+    resp = ppage.goto(f"{base}/{href}")
+    pf = ppage.evaluate("""() => ({
+      dir: document.documentElement.dir, lang: document.documentElement.lang,
+      h1: document.querySelector('h1')?.textContent, scripts: document.scripts.length,
+      overflowX: document.documentElement.scrollWidth - window.innerWidth,
+      home: document.querySelector('a[href="./"]')?.href,
+    })""")
+    ppage.screenshot(path=str(shots / "v2-privacy-390.png"), full_page=True)
+    pctx.close()
+    facts["privacy"] = {**pf, "fetched": fetched}
+    checks["privacy: served under the sub-path, Hebrew RTL, no script, nothing from elsewhere"] = (
+        bool(resp) and resp.status == 200 and pf["dir"] == "rtl" and pf["lang"] == "he"
+        and pf["h1"] == "מדיניות פרטיות" and pf["scripts"] == 0 and pf["overflowX"] <= 0
+        and pf["home"] == base + "/" and all(u.startswith(base + "/") for u in fetched))
+
     page.get_by_role("button", name="כניסה עם Google").click()
     page.wait_for_url(f"{MOCK}/auth/v1/authorize**")
     q = parse_qs(next(c["query"] for c in mock.calls if c["path"] == "/auth/v1/authorize"))

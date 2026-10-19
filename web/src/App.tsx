@@ -494,6 +494,11 @@ export default function App() {
                   className="mt-5 w-full rounded-xl bg-navy px-4 py-3 font-bold text-white hover:bg-navy/90">
             כניסה עם Google
           </button>
+          {/* Google's consent screen links the same page (Branding → privacy
+              policy); relative, so it lives under /mishmar/ too */}
+          <a href="privacy.html" className="mt-4 inline-block text-xs text-muted underline underline-offset-2">
+            מדיניות פרטיות
+          </a>
         </Centered>
       );
     case "not_linked":
