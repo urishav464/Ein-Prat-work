@@ -8,5 +8,9 @@
     "directory": "./dist",
     // one page: any path the browser asks for gets index.html
     "not_found_handling": "single-page-application"
-  }
+  },
+  // the site's one address: https://mishmar-ein-prat.<account>.workers.dev
+  "workers_dev": true,
+  // no extra public address per uploaded version — one site, one address
+  "preview_urls": false
 }

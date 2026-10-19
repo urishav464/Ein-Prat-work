@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import demoData from "./demo.json";
-import { demoMode, supabase } from "./supabase";
+import { askedForDemo, configProblem, demoMode, supabase, type ConfigProblem } from "./supabase";
 import {
   clean, countdown, deadline, fmtDate, heTasks, heroOf, lateByMishmar, parseDate, phaseDue, progress,
   type Home, type LateGroup, type Mishmar, type Progress, type Status, type Task,
@@ -405,6 +405,39 @@ function HomeScreen({ home, today, onToggle, alert }: {
   );
 }
 
+// A build setting that cannot work: say which one and where it is fixed — a
+// blank page tells nobody anything. The demo stays one tap away.
+const CONFIG_HELP: Record<ConfigProblem, { title: string; body: string }> = {
+  url: {
+    title: "כתובת הפרויקט בהגדרות האתר לא תקינה",
+    body: "ההגדרה VITE_SUPABASE_URL צריכה להיות כתובת הפרויקט ב-Supabase, בצורה https://abcd.supabase.co — " +
+      "בלי מירכאות ובלי שום דבר אחרי ‎.co. מתקנים ב-Cloudflare: הפרויקט ← Settings ← Build ← Variables, ובונים מחדש.",
+  },
+  key: {
+    title: "המפתח בהגדרות האתר לא מזוהה",
+    body: "ההגדרה VITE_SUPABASE_ANON_KEY צריכה להיות המפתח הציבורי של Supabase: Project Settings ← API Keys ← " +
+      "Publishable key (מתחיל ב-sb_publishable_), או המפתח anon. מתקנים ב-Cloudflare ובונים מחדש.",
+  },
+  secret_key: {
+    title: "⚠️ בהגדרות האתר הוזן המפתח הסודי",
+    body: "בהגדרה VITE_SUPABASE_ANON_KEY נמצא מפתח סודי של Supabase. צריך להחליף אותו מיד במפתח הציבורי " +
+      "(Publishable key), ולהחליף ב-Supabase את המפתח הסודי עצמו.",
+  },
+};
+
+function ConfigScreen({ problem }: { problem: ConfigProblem }) {
+  const help = CONFIG_HELP[problem];
+  return (
+    <Centered>
+      <p className="font-display text-lg font-extrabold text-late" role="alert">{help.title}</p>
+      <p className="mt-2 text-sm text-muted">{help.body}</p>
+      <a href="?demo" className="mt-4 inline-block text-sm font-bold text-navy underline underline-offset-2">
+        למסך החניך במצב הדגמה ←
+      </a>
+    </Centered>
+  );
+}
+
 export default function App() {
   const [load, update] = useHome();
   const today = useMemo(
@@ -446,6 +479,8 @@ export default function App() {
     });
     queue.current.set(t.id, job);
   };
+
+  if (configProblem && !askedForDemo) return <ConfigScreen problem={configProblem} />;
 
   switch (load.kind) {
     case "loading":

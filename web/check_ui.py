@@ -25,7 +25,11 @@ and checks, at 390px and 1500px:
         «התנתקות» → back to the sign-in screen
 
 Both builds are served under a sub-path (/v2/), so every link, icon and the
-manifest must be relative to pass.
+manifest must be relative to pass. Three more builds check the settings as a
+person pastes them: with quotes, a space and «/rest/v1/» they still sign in;
+a URL that is not one gets a screen naming the setting (never a blank page)
+with the demo one tap away; and a secret key — a service_role JWT or
+sb_secret_ — fails the build itself.
 
 Exit 1 on any failed check. Screenshots land in --shots (default: a temp dir)."""
 import base64
@@ -46,16 +50,20 @@ from urllib.parse import parse_qs, urlparse
 WEB = Path(__file__).resolve().parent
 CHROME = os.environ.get("MISHMAR_CHROME", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 MOCK = "https://mock-project.supabase.invalid"
-ANON = "mock-anon-key"
+ANON = "sb_publishable_mock_key_for_tests"
 WIDTHS = (390, 1500)
 
 
-def build(out: Path, url: str, key: str) -> None:
+def build(out: Path, url: str, key: str, must_fail: bool = False) -> str:
+    """Build with these two settings. Returns the build's error text when it
+    failed and was expected to; a surprise either way stops the run."""
     env = dict(os.environ, VITE_SUPABASE_URL=url, VITE_SUPABASE_ANON_KEY=key)
     r = subprocess.run(["npx", "vite", "build", "--outDir", str(out), "--emptyOutDir"],
                        cwd=WEB, env=env, capture_output=True, text=True)
-    if r.returncode:
-        raise SystemExit(json.dumps({"ok": False, "build": r.stderr[-800:]}))
+    if bool(r.returncode) != must_fail:
+        raise SystemExit(json.dumps({"ok": False, "build": (r.stdout + r.stderr)[-800:],
+                                     "expected_failure": must_fail}))
+    return r.stdout + r.stderr if must_fail else ""
 
 
 def serve(root: Path, under: str = "v2") -> str:
@@ -431,6 +439,41 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
         ctx.close()
 
 
+def check_settings(browser, messy: str, badurl: str, shots: Path, checks: dict, facts: dict) -> None:
+    """Hand-pasted settings: cleaned when they can be, named when they cannot —
+    never a blank page."""
+    mock = MockSupabase()
+    ctx, page, errors = auth_page(browser, messy, mock, 390, signed_in=False)
+    try:
+        page.get_by_role("button", name="כניסה עם Google").click(timeout=5000)
+        page.wait_for_url(f"{MOCK}/auth/v1/authorize**", timeout=5000)
+        cleaned = True
+    except Exception:
+        cleaned = False
+    calls = [c for c in mock.calls if c["path"] == "/auth/v1/authorize"]
+    checks["settings: quotes, spaces and /rest/v1/ are cleaned — sign-in works"] = \
+        cleaned and len(calls) == 1 and not errors
+    ctx.close()
+
+    ctx, page, errors = auth_page(browser, badurl, MockSupabase(), 390, signed_in=False)
+    try:
+        page.get_by_role("alert").wait_for(timeout=5000)
+        alert = page.get_by_role("alert").inner_text()
+    except Exception:
+        alert = ""
+    page.screenshot(path=str(shots / "v2-bad-setting-390.png"))
+    page.get_by_role("link", name="למסך החניך במצב הדגמה").click()
+    try:
+        page.get_by_text("מצב הדגמה").first.wait_for(timeout=5000)
+        demo_ok = page.locator("h1").count() == 1
+    except Exception:
+        demo_ok = False
+    facts["settings.bad_url"] = {"alert": alert, "demo_after": demo_ok, "errors": errors}
+    checks["settings: a URL that is not one names the setting, no blank page; the demo still opens"] = \
+        "כתובת הפרויקט" in alert and demo_ok and not errors
+    ctx.close()
+
+
 def main(argv: list[str]) -> int:
     from playwright.sync_api import sync_playwright
     shots = Path(argv[argv.index("--shots") + 1]) if "--shots" in argv else Path(tempfile.mkdtemp(prefix="v2shots-"))
@@ -439,15 +482,25 @@ def main(argv: list[str]) -> int:
     if r.returncode:
         print(json.dumps({"ok": False, "tsc": (r.stdout + r.stderr)[-800:]}))
         return 1
+    checks: dict[str, bool] = {}
+    facts: dict = {}
     tmp = Path(tempfile.mkdtemp(prefix="v2build-"))
     build(tmp / "demo", "", "")
     build(tmp / "auth", MOCK, ANON)
-    checks: dict[str, bool] = {}
-    facts: dict = {}
+    # the settings as a person pastes them: quotes, a space, the REST path
+    build(tmp / "messy", f' "{MOCK}/rest/v1/" ', f'"{ANON}"')
+    build(tmp / "badurl", "mock-project", ANON)
+    # a secret key must never reach a page: the build itself refuses it
+    secret_jwt = ".".join([b64({"alg": "HS256", "typ": "JWT"}),
+                           b64({"role": "service_role", "iss": "supabase"}), "c2ln"])
+    refused = [build(tmp / "secret", MOCK, k, must_fail=True) for k in (secret_jwt, "sb_secret_mock")]
+    checks["build: a secret key (service_role JWT, sb_secret_) fails the build"] = \
+        all("SECRET Supabase key" in out for out in refused)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
         check_demo(browser, serve(tmp / "demo"), shots, checks, facts)
         check_auth(browser, serve(tmp / "auth"), shots, checks, facts)
+        check_settings(browser, serve(tmp / "messy"), serve(tmp / "badurl"), shots, checks, facts)
         browser.close()
     ok = all(checks.values())
     print(json.dumps({"ok": ok, "checks": checks, "facts": facts, "shots": str(shots)}, ensure_ascii=False))

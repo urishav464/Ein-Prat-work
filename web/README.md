@@ -40,54 +40,67 @@
 של האתר: לקרוא את מסך הבית, ולסמן ✓. הוא לא משנה אף טבלה ולא נוגע באפליקציה
 הנוכחית.
 
+> **אחרי ההרצה, ב-Security Advisor של Supabase יופיעו שתי אזהרות** «Signed-In Users
+> Can Execute SECURITY DEFINER Function» — אחת לכל דלת. זה צפוי: התפקיד של הדלתות הוא
+> בדיוק שמשתמש מחובר יפעיל אותן. הבודק קורא רק את ההגדרה של פונקציה, לא את מה שבתוכה,
+> ולכן לא רואה שכל דלת בודקת מי מתקשר ומרשה רק את המשמרים שלו (`test_v2.py` מוכיח את
+> זה). **לא ללחוץ שם על Revoke** — זה סוגר את הדלתות. ה-«Info» על טבלאות עם RLS בלי
+> כללים הוא ההגנה הקיימת של האפליקציה, וגם עליו אין מה לעשות.
+
 ### שלב ב — Cloudflare: האתר עצמו (10 דקות)
 
 **קודם מכינים שני ערכים:**
 - **כתובת הפרויקט** — ב-Streamlit Secrets, השורה `SUPABASE_URL = "https://….supabase.co"`:
-  מה שבתוך המירכאות.
+  מה שבתוך המירכאות. (גם מירכאות או רווח שנשארו בטעות בסדר — האתר מנקה אותם.)
 - **המפתח הציבורי** — ב-Supabase: ⚙️ **Project Settings** (בתחתית תפריט הצד) →
   **API Keys** → ה-**Publishable key** (מתחיל ב-`sb_publishable_`). אם אין כזה:
   הלשונית **Legacy API Keys** → המפתח שכתוב לידו `anon` `public`.
 
 > ⚠️ **לא** את `SUPABASE_KEY` שב-Streamlit Secrets, ולא אף מפתח שכתוב לידו `secret`
-> או `service_role` — הם פותחים הכל, והאתר שולח את הערכים האלה לכל דפדפן. המפתח
+> או `service_role` — הם פותחים הכל, והאתר שולח את הערכים האלה לכל דפדפן. מפתח כזה
+> גם לא יעבור: הבנייה עצמה נכשלת עליו (`vite.config.ts`) ולא מפרסמת כלום. המפתח
 > הציבורי בנוי להיות גלוי: המסד לא נותן לו כלום (ראו «מה גלוי ומה לא»). ולא בקובץ
 > `.env` בריפו — רק בהגדרות של Cloudflare.
 
 **ואז:**
 
 1. להירשם בחינם: https://dash.cloudflare.com/sign-up (מייל + סיסמה, ולאשר את המייל).
-2. בתפריט הצד: **Workers & Pages** → **Create application** → הלשונית **Pages** →
-   **Import an existing Git repository**.
+2. בתפריט הצד: **Workers & Pages** → **Create application** → **Import a repository**
+   (Cloudflare מוביל היום ל-Worker — זה בסדר: `web/wrangler.jsonc` מגדיר אותו כאתר
+   של קבצים סטטיים, בלי קוד שרת).
 3. **Connect GitHub** → כש-GitHub שואל: **Only select repositories** → `Ein-Prat-work`
-   → **Install & Authorize**.
-4. בחזרה ב-Cloudflare: לבחור `Ein-Prat-work` → **Begin setup**.
-5. למלא:
+   → **Install & Authorize** → בחזרה ב-Cloudflare לבחור את `Ein-Prat-work`.
+4. במסך **Set up your application** למלא:
 
    | שדה | מה לכתוב |
    |---|---|
-   | Project name | למשל `mishmar-ein-prat` — וזה שם האתר: `mishmar-ein-prat.pages.dev` |
-   | Production branch | `claude/mishmer-generator-setup-h5gxqx` (מהרשימה) |
-   | Framework preset | `None` |
+   | Project name | `mishmar-ein-prat` — **בדיוק כך**: זה השם שב-`web/wrangler.jsonc` |
    | Build command | `npm run build` |
-   | Build output directory | `dist` |
-   | Root directory (advanced) — לפתוח | `web` |
+   | Deploy command | `npx wrangler deploy` (ברירת המחדל) |
+   | Enable Preview builds | **לכבות** — אחרת כל שמירה בענפים אחרים בריפו (למשל השבת) מנסה לבנות כאן, נכשלת ושולחת מייל |
+   | Advanced settings → Path | `web` |
+   | ענף (אם מופיע) | `claude/mishmer-generator-setup-h5gxqx` |
 
-6. **Environment variables (advanced)** — לפתוח, ולהוסיף שניים (**+ Add variable**):
+5. **המשתנים** — אם תחת **Advanced settings** יש מקום למשתנים (Build variables),
+   להוסיף שניים שם:
 
    | Variable name | Value |
    |---|---|
    | `VITE_SUPABASE_URL` | כתובת הפרויקט |
    | `VITE_SUPABASE_ANON_KEY` | המפתח הציבורי |
 
-7. **Save and Deploy**, ולחכות 1–3 דקות ל-**Success**. כתובת האתר מופיעה שם; אם השם
-   היה תפוס, Cloudflare מוסיף לו תוספת — **הכתובת שמופיעה היא הקובעת**, ובה
-   משתמשים בשלב ג.
-8. **בדיקה ראשונה:** בטלפון, הכתובת עם `/?demo` בסוף (למשל
-   `https://mishmar-ein-prat.pages.dev/?demo`) → מסך הבית עם פס צהוב «מצב הדגמה»:
-   נתוני בדיקה מהמערכת, **השמות הוחלפו** («חניך/ה לדוגמה», «שותף/ה 1»…), ו-✓ מסמן
-   ומבטל מיד בלי לשמור בשום מקום. בלי `?demo` מופיע הכפתור «כניסה עם Google» —
+   אם אין — אחרי הבנייה הראשונה: הפרויקט → **Settings** → **Build** → **Variables and
+   secrets** (משתני **הבנייה**, לא «Variables and Secrets» של זמן הריצה), ואז לבנות שוב.
+6. **Deploy**, ולחכות 1–3 דקות להצלחה. כתובת האתר: `https://mishmar-ein-prat.<שם-החשבון>.workers.dev`.
+7. **בדיקה ראשונה:** בטלפון, הכתובת עם `/?demo` בסוף → מסך הבית עם פס צהוב «מצב
+   הדגמה»: נתוני בדיקה מהמערכת, **השמות הוחלפו** («חניך/ה לדוגמה», «שותף/ה 1»…), ו-✓
+   מסמן ומבטל מיד בלי לשמור בשום מקום. בלי `?demo` מופיע הכפתור «כניסה עם Google» —
    הוא יעבוד אחרי שלב ג.
+
+   > **כתובת חדשה לגמרי לוקחת זמן.** בפעם הראשונה Cloudflare יוצר גם את
+   > `<שם-החשבון>.workers.dev` עצמו, ועד שהכתובת מתפשטת ברשת הטלפון כותב
+   > `DNS_PROBE_FINISHED_NXDOMAIN` («This site can't be reached»). לחכות 15–30 דקות;
+   > לנסות גם בגלישה סלולרית במקום Wi-Fi, ובמחשב.
 
 ### שלב ג — כניסה עם Google (10 דקות)
 
@@ -108,7 +121,7 @@
    > ⚠️ **להוסיף, לא להחליף.** הכתובת של Streamlit שכבר רשומה שם חייבת להישאר,
    > אחרת הכניסה לאפליקציה הנוכחית תישבר.
 5. **Supabase** → **Authentication** → **URL Configuration**:
-   - **Site URL** ← כתובת האתר (למשל `https://mishmar-ein-prat.pages.dev`) → **Save**
+   - **Site URL** ← כתובת האתר (למשל `https://mishmar-ein-prat.urishav464.workers.dev`) → **Save**
    - **Redirect URLs** → **Add URL** ← אותה כתובת עם `/**` בסוף → **Save**
 6. (רשות) **Sign In / Providers** → **Email** → לכבות. לא משפיע על האפליקציה
    הנוכחית — היא לא משתמשת בכניסה של Supabase — והפונקציה ממילא מסרבת לכל מי
@@ -136,7 +149,10 @@
 
 | מה רואים | מה עושים |
 |---|---|
-| גם בלי `?demo` מופיע הפס הצהוב | שם של אחד המשתנים ב-Cloudflare לא נכתב נכון. מתקנים ב-**Settings → Variables and Secrets** (או **Environment variables**), ואז **Deployments** → ⋯ → **Retry deployment** — משתנה נכנס לתוקף רק בבנייה חדשה |
+| `DNS_PROBE_FINISHED_NXDOMAIN` / «This site can't be reached» | הכתובת חדשה ועוד לא התפשטה (ראו שלב ב-7) — לחכות 15–30 דקות, ולנסות בגלישה סלולרית ובמחשב. אם רשת ה-Wi-Fi מסוננת, ייתכן שהיא חוסמת כתובות חדשות |
+| גם בלי `?demo` מופיע הפס הצהוב | המשתנים לא הגיעו לבנייה (אולי שם לא מדויק, או שהם הוגדרו כמשתני זמן ריצה). מתקנים ב-**Settings → Build → Variables and secrets**, ואז בונים שוב — משתנה נכנס לתוקף רק בבנייה חדשה |
+| מסך «כתובת הפרויקט בהגדרות האתר לא תקינה» / «המפתח לא מזוהה» | הערך באחד המשתנים לא נכון — המסך עצמו אומר איזה ואיך לתקן; אחרי התיקון בונים שוב |
+| הבנייה ב-Cloudflare נכשלה עם «SECRET Supabase key» | הוזן המפתח הסודי. להחליף במפתח הציבורי ולבנות שוב — ולהחליף ב-Supabase את המפתח הסודי עצמו, כי הוא הודבק במקום שלא נועד לו |
 | Google כותב `redirect_uri_mismatch` | הכתובת מצעד ג-3 לא נוספה בדיוק — לבדוק שאין רווח או `/` מיותר. לפעמים לוקח ל-Google כמה דקות להתעדכן |
 | Google מסרב לשמור את הכתובת ומבקש *authorized domain* | **Google Auth Platform → Branding → Authorized domains → Add domain** → `supabase.co` → **Save**, ואז שוב צעד ג-4 |
 | חניך רואה «לא משויך» | הכתובת שלו לא משויכת — התיקון כמו היום: «שיוך חשבונות» בלוח הבקרה |
