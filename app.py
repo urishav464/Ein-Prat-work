@@ -1183,22 +1183,27 @@ def _dashboard_body() -> None:
     # «not linked» screen sends them here. Only the caption differs.
     with st.expander("🔗 שיוך חשבונות"):
         st.caption(
-            "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
-            "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
-            if auth_configured() else
-            "כתובת הגוגל של כל חניך, לכניסה לאתר החדש (urishav464.github.io/mishmar). "
-            "בלי שיוך, החניך ייכנס לשם אבל לא יראה את המשמרים שלו. "
-            "הכניסה לאפליקציה הזו לא משתנה — עדיין בשם."
+            ("כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
+             "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר. "
+             if auth_configured() else
+             "כתובת הגוגל של כל חניך, לכניסה לאתר החדש (urishav464.github.io/mishmar). "
+             "בלי שיוך, החניך ייכנס לשם אבל לא יראה את המשמרים שלו. "
+             "הכניסה לאפליקציה הזו לא משתנה — עדיין בשם. ")
+            + "בשורה של המדריך — הכתובת של המדריך עצמו: באתר החדש היא פותחת את "
+              "המסך של כל חניך, לצפייה בלבד."
         )
         with st.form("emails"):
-            students = [x for x in dm.get_students() if x["role"] == "student"]
-            for stu in students:
-                st.text_input(stu["name"], value=stu.get("email") or "",
+            # the trainees, then the instructor's own row (v2_home_as)
+            people = [x for x in dm.get_students() if x["role"] == "student"] + \
+                     [x for x in dm.get_students() if x["role"] == "instructor"]
+            for stu in people:
+                st.text_input(stu["name"] if stu["role"] == "student" else f"{stu['name']} (מדריך)",
+                              value=stu.get("email") or "",
                               key=f"em-{stu['id']}", placeholder="name@gmail.com")
             # the seventh form: it wrote and then reran the fragment, which
             # is one needless second run of the whole dashboard body
             st.form_submit_button("שמור שיוכים", on_click=_save_emails_clicked,
-                                  args=({x["id"]: x.get("email") or "" for x in students},))
+                                  args=({x["id"]: x.get("email") or "" for x in people},))
 
 
 # --------------------------------------------------------------------------

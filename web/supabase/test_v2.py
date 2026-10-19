@@ -18,15 +18,23 @@ address, and checks, as the roles Supabase gives a browser:
     authenticated, the linked address → «ok», case-insensitively, with ONLY
         that trainee's evenings and tasks — never the partner's own task —
         and no phone / contact / e-mail / details key anywhere in the answer
+    the instructor's address (on the role='instructor' row) → «instructor»
+        and the trainees to choose from — ids and names, nothing else; an
+        address on a trainee's row AND the instructor's → the trainee
+  v2_home_as(trainee)
+    the instructor → exactly that trainee's own v2_my_home() answer
+    anon, signed out, e-mail sign-up, a trainee, unknown address → refused
+    the instructor's own row, an id that does not exist → «not_found»
   v2_set_task_status(task, status)
-    anon, signed out, e-mail sign-up, unknown address → refused, nothing changes
+    anon, signed out, e-mail sign-up, unknown address, the instructor →
+        refused, nothing changes
     the linked trainee, a pair task of their evening  → «ok»: status and
         updated_at change, and no other column
     the partner's own task, another evening's task, a task that does not
         exist → «forbidden»; a status outside the table's three → «invalid_status»
   the catalog
     anon / authenticated hold no privilege on any table, view or sequence in
-    `public`; EXECUTE on exactly the two doors, for `authenticated` only; and
+    `public`; EXECUTE on exactly the three doors, for `authenticated` only; and
     no way into `v2_private`, the schema behind them
 
 `--on N` picks a trainee of evening N. `--export PATH` writes the «ok» answer,
@@ -81,8 +89,10 @@ SELECT 'schema', 'v2_private', r.role
  WHERE has_schema_privilege(r.role, 'v2_private', 'USAGE')
  ORDER BY 1, 2, 3
 """
-EXPECTED_LEAKS = [["function", "public.v2_my_home", "authenticated"],
+EXPECTED_LEAKS = [["function", "public.v2_home_as", "authenticated"],
+                  ["function", "public.v2_my_home", "authenticated"],
                   ["function", "public.v2_set_task_status", "authenticated"]]
+INSTRUCTOR = "instructor.test@example.org"
 
 
 def dsn_for(name: str) -> str:
@@ -174,6 +184,49 @@ def main(argv: list[str]) -> int:
         checks["no phone/contact/email/details key"] = not (keys_in(ok) & FORBIDDEN_KEYS)
         checks["has tasks"] = len(ok["tasks"]) > 0
 
+    # ---- the instructor: a list to choose from, then each trainee's own answer
+    cur.execute("SELECT id FROM students WHERE role = 'instructor' ORDER BY id LIMIT 1")
+    inst_id = (cur.fetchone() or [None])[0]
+    checks["the fixture has an instructor row"] = inst_id is not None
+    cur.execute("UPDATE students SET email = %s WHERE id = %s", (INSTRUCTOR, inst_id))
+    cur.execute("SELECT id, name FROM students WHERE role = 'student'")
+    roster = sorted(cur.fetchall())
+    cur.execute("SELECT id FROM students WHERE role = 'student' AND id <> %s ORDER BY id LIMIT 1", (me_id,))
+    other_id = cur.fetchone()[0]
+    boss = {"email": INSTRUCTOR.upper(), **GOOGLE}
+    trainee = {"email": EMAIL, **GOOGLE}
+
+    lst = call("authenticated", boss)
+    checks["instructor → the trainees to choose from, ids and names only"] = (
+        isinstance(lst, dict) and lst.get("status") == "instructor" and lst["me"]["id"] == inst_id
+        and sorted((t["id"], t["name"]) for t in lst["trainees"]) == roster
+        and all(set(t) == {"id", "name"} for t in lst["trainees"])
+        and not (keys_in(lst) & FORBIDDEN_KEYS))
+
+    def view(claims: dict | None, student_id: int, role: str = "authenticated"):
+        return call(role, claims, "SELECT public.v2_home_as(%s)", (student_id,))
+
+    checks["v2_home_as(trainee) = that trainee's own answer"] = view(boss, me_id) == ok
+    refused_view = {
+        "anon": view(boss, me_id, role="anon") == "denied",
+        "signed out": (view(None, me_id) or {}).get("status") == "signed_out",
+        "e-mail sign-up": (view({"email": INSTRUCTOR, "app_metadata": {"provider": "email"}},
+                                me_id) or {}).get("status") == "wrong_provider",
+        "a trainee": (view(trainee, other_id) or {}).get("status") == "forbidden",
+        "unknown address": (view({"email": "someone@example.org", **GOOGLE},
+                                 me_id) or {}).get("status") == "forbidden",
+    }
+    checks["v2_home_as: anon / signed out / e-mail / a trainee / unknown refused"] = all(refused_view.values())
+    checks["v2_home_as: the instructor's own row or a missing id → not_found"] = \
+        (view(boss, inst_id) or {}).get("status") == "not_found" \
+        and (view(boss, 2_000_000) or {}).get("status") == "not_found"
+
+    # one address on both rows: the trainee's row wins, as it did before this door
+    cur.execute("UPDATE students SET email = %s WHERE id = %s", (EMAIL, inst_id))
+    checks["an address on a trainee and the instructor → the trainee"] = \
+        (call("authenticated", trainee) or {}).get("status") == "ok"
+    cur.execute("UPDATE students SET email = %s WHERE id = %s", (INSTRUCTOR, inst_id))
+
     # ---- writing: v2_set_task_status()
     def row(task_id: int):
         cur.execute("SELECT to_jsonb(t) FROM tasks t WHERE id = %s", (task_id,))
@@ -223,6 +276,9 @@ def main(argv: list[str]) -> int:
     was = row(pair_task)
     checks["write: a status outside the three → invalid_status, unchanged"] = \
         (write(me, pair_task, "FINISHED") or {}).get("status") == "invalid_status" and row(pair_task) == was
+    was = row(pair_task)
+    checks["write: the instructor (view-only) → refused, unchanged"] = \
+        (write(boss, pair_task, "DONE") or {}).get("status") == "instructor" and row(pair_task) == was
 
     # ---- the catalog
     for table in ("tasks", "students", "speakers", "v_tasks_full"):
@@ -234,17 +290,19 @@ def main(argv: list[str]) -> int:
             checks[f"authenticated cannot read {table}"] = True
         finally:
             cur.execute("RESET ROLE")
-    cur.execute("SET ROLE authenticated")
-    try:
-        cur.execute("SELECT * FROM v2_private.caller()")
-        checks["authenticated cannot call v2_private.caller()"] = False
-    except psycopg2.errors.InsufficientPrivilege:
-        checks["authenticated cannot call v2_private.caller()"] = True
-    finally:
-        cur.execute("RESET ROLE")
+    for inner in ("SELECT * FROM v2_private.caller()", f"SELECT v2_private.home_of({me_id})"):
+        name = inner.split("v2_private.")[1].split("(")[0]
+        cur.execute("SET ROLE authenticated")
+        try:
+            cur.execute(inner)
+            checks[f"authenticated cannot call v2_private.{name}()"] = False
+        except psycopg2.errors.InsufficientPrivilege:
+            checks[f"authenticated cannot call v2_private.{name}()"] = True
+        finally:
+            cur.execute("RESET ROLE")
     cur.execute(LEAKS)
     leaks = [list(r) for r in cur.fetchall()]
-    checks["catalog: only the two doors, only for authenticated"] = leaks == EXPECTED_LEAKS
+    checks["catalog: only the three doors, only for authenticated"] = leaks == EXPECTED_LEAKS
 
     if export and checks.get("linked address → ok (case-insensitive)"):
         # placeholders for people: the demo must not carry real names

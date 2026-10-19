@@ -6,12 +6,16 @@ import {
   type Home, type LateGroup, type Mishmar, type Progress, type Status, type Task,
 } from "./model";
 
+type Trainee = { id: number; name: string };
+
 type Load =
   | { kind: "loading" }
   | { kind: "signed_out" }
   | { kind: "not_linked"; email: string }
   | { kind: "wrong_provider" }
   | { kind: "error"; message: string }
+  // the instructor's row: no evenings of their own — the trainees to view
+  | { kind: "instructor"; me: Trainee; trainees: Trainee[] }
   | { kind: "ok"; home: Home };
 
 function localToday(): Date {
@@ -35,6 +39,10 @@ function useHome(): [Load, (fn: (h: Home) => Home) => void] {
       const status = (data as { status?: string })?.status;
       if (status === "ok") return setLoad({ kind: "ok", home: data as Home });
       if (status === "not_linked") return setLoad({ kind: "not_linked", email: (data as { email: string }).email });
+      if (status === "instructor") {
+        const { me, trainees } = data as { me: Trainee; trainees: Trainee[] };
+        return setLoad({ kind: "instructor", me, trainees });
+      }
       if (status === "wrong_provider") return setLoad({ kind: "wrong_provider" });
       setLoad({ kind: "signed_out" });
     };
@@ -316,7 +324,13 @@ function MiniCard({ m, prog, today }: { m: Mishmar; prog: Progress; today: Date 
 
 // ---------------------------------------------------------------- screens
 
-function Shell({ children, name, alert }: { children: ReactNode; name?: string; alert?: string | null }) {
+// The instructor looking at one trainee's screen: whose it is, that a ✓ here
+// stays on this screen, and the way back to the list.
+type Preview = { name: string; onExit: () => void };
+
+function Shell({ children, name, alert, preview }: {
+  children: ReactNode; name?: string; alert?: string | null; preview?: Preview;
+}) {
   return (
     <div className="min-h-dvh">
       <header className="border-b border-line bg-sand/70">
@@ -332,6 +346,16 @@ function Shell({ children, name, alert }: { children: ReactNode; name?: string; 
       {demoMode && (
         <div className="bg-[#fff4d6] px-4 py-2 text-center text-sm text-[#8a5a00]" role="note">
           מצב הדגמה — נתונים לדוגמה מהמערכת, השמות הוחלפו. לחיצה על ✓ לא נשמרת.
+        </div>
+      )}
+      {preview && (
+        <div className="bg-navy-soft px-4 py-2 text-sm text-navy" role="note">
+          <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <span>מצב מדריך: כך {preview.name} רואה את האתר. סימון ✓ כאן לא נשמר.</span>
+            <button type="button" onClick={preview.onExit} className="font-bold underline underline-offset-2">
+              לרשימת החניכים
+            </button>
+          </div>
         </div>
       )}
       <main className="mx-auto max-w-4xl px-4 pb-16 pt-6">{children}</main>
@@ -355,8 +379,8 @@ function Centered({ children }: { children: ReactNode }) {
   );
 }
 
-function HomeScreen({ home, today, onToggle, alert }: {
-  home: Home; today: Date; onToggle?: (t: Task) => void; alert?: string | null;
+function HomeScreen({ home, today, onToggle, alert, preview }: {
+  home: Home; today: Date; onToggle?: (t: Task) => void; alert?: string | null; preview?: Preview;
 }) {
   const data = useMemo(() => {
     const byMid = new Map<number, Task[]>();
@@ -372,7 +396,7 @@ function HomeScreen({ home, today, onToggle, alert }: {
   }, [home, today]);
 
   return (
-    <Shell name={home.me.name} alert={alert}>
+    <Shell name={home.me.name} alert={alert} preview={preview}>
       <h1 className="font-display text-3xl font-extrabold text-navy">שלום, {home.me.name}</h1>
       {data.late.length > 0 && <LateSection groups={data.late} today={today} onToggle={onToggle} />}
       {data.hero && (
@@ -405,18 +429,49 @@ function HomeScreen({ home, today, onToggle, alert }: {
   );
 }
 
+// The instructor's way in: every trainee, one tap to see that trainee's home
+// exactly as they will — before the link goes out to them.
+function InstructorScreen({ me, trainees, opening, onPick, alert }: {
+  me: Trainee; trainees: Trainee[]; opening: number | null; onPick: (t: Trainee) => void; alert?: string | null;
+}) {
+  return (
+    <Shell name={me.name} alert={alert}>
+      <h1 className="font-display text-3xl font-extrabold text-navy">שלום, {me.name}</h1>
+      <p className="mt-2 text-muted">
+        כאן אפשר לראות את המסך של כל חניך, בדיוק כפי שהחניך רואה אותו, ולבדוק אותו לפני ששולחים את הקישור.
+        סימון ✓ במצב הזה לא נשמר.
+      </p>
+      <H2>החניכים</H2>
+      {trainees.length === 0 ? (
+        <p className="text-muted">אין עדיין חניכים במערכת.</p>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {trainees.map((t) => (
+            <button key={t.id} type="button" onClick={() => onPick(t)} disabled={opening !== null}
+                    className="rounded-xl border border-line bg-white px-4 py-3 text-start font-bold text-navy hover:border-navy disabled:opacity-60">
+              {opening === t.id ? "טוען…" : t.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </Shell>
+  );
+}
+
 // A build setting that cannot work: say which one and where it is fixed — a
 // blank page tells nobody anything. The demo stays one tap away.
 const CONFIG_HELP: Record<ConfigProblem, { title: string; body: string }> = {
   url: {
     title: "כתובת הפרויקט בהגדרות האתר לא תקינה",
     body: "ההגדרה VITE_SUPABASE_URL צריכה להיות כתובת הפרויקט ב-Supabase, בצורה https://abcd.supabase.co — " +
-      "בלי מירכאות ובלי שום דבר אחרי ‎.co. מתקנים ב-Cloudflare: הפרויקט ← Settings ← Build ← Variables, ובונים מחדש.",
+      "בלי מירכאות ובלי שום דבר אחרי ‎.co. מתקנים בריפו mishmar ב-GitHub: Settings ← Secrets and variables ← " +
+      "Actions ← Variables, ומריצים שוב את «Publish the site».",
   },
   key: {
     title: "המפתח בהגדרות האתר לא מזוהה",
     body: "ההגדרה VITE_SUPABASE_ANON_KEY צריכה להיות המפתח הציבורי של Supabase: Project Settings ← API Keys ← " +
-      "Publishable key (מתחיל ב-sb_publishable_), או המפתח anon. מתקנים ב-Cloudflare ובונים מחדש.",
+      "Publishable key (מתחיל ב-sb_publishable_), או המפתח anon. מתקנים ב-Variables של הריפו mishmar " +
+      "ומריצים שוב את «Publish the site».",
   },
   secret_key: {
     title: "⚠️ בהגדרות האתר הוזן המפתח הסודי",
@@ -480,6 +535,32 @@ export default function App() {
     queue.current.set(t.id, job);
   };
 
+  // The instructor's view of one trainee: the trainee's own answer, read-only.
+  // A ✓ changes this screen and nothing else — the door would refuse it anyway.
+  const [preview, setPreview] = useState<{ name: string; home: Home } | null>(null);
+  const [opening, setOpening] = useState<number | null>(null);
+  useEffect(() => {
+    if (load.kind !== "instructor") setPreview(null);     // signed out: no view to come back to
+  }, [load.kind]);
+  const openPreview = async (t: Trainee) => {
+    if (!supabase) return;
+    setSaveError(null);
+    setOpening(t.id);
+    const { data, error } = await supabase.rpc("v2_home_as", { p_student_id: t.id });
+    setOpening(null);
+    if (error || (data as { status?: string } | null)?.status !== "ok") {
+      setSaveError(`המסך של ${t.name} לא נפתח. נסו שוב.`);
+      return;
+    }
+    setPreview({ name: t.name, home: data as Home });
+  };
+  const togglePreview = (t: Task) => {
+    const next: Status = t.status === "DONE" ? "IN PROGRESS" : "DONE";
+    setPreview((p) => p && {
+      ...p, home: { ...p.home, tasks: p.home.tasks.map((x) => (x.id === t.id ? { ...x, status: next } : x)) },
+    });
+  };
+
   if (configProblem && !askedForDemo) return <ConfigScreen problem={configProblem} />;
 
   switch (load.kind) {
@@ -506,10 +587,13 @@ export default function App() {
         <Centered>
           <p>התחברת בתור <span dir="ltr" className="font-bold">{load.email}</span>, אבל הכתובת הזו עדיין לא משויכת לאף חניך.</p>
           <p className="mt-2 text-sm text-muted">בקשו מהמדריך לשייך אותה בלוח הבקרה, תחת «שיוך חשבונות».</p>
-          {/* the instructor is a students row with role 'instructor', so this
-              screen is exactly what they get — and it must not read as a fault */}
+          {/* an instructor whose address is not on the instructor's row yet
+              lands here too — it must not read as a fault */}
           <div className="mt-5 rounded-xl bg-navy-soft px-4 py-3 text-sm">
-            <p><span className="font-bold">חשבון של המדריך?</span> אב־הטיפוס הזה הוא המסך של החניכים, ולכן הכתובת לא מופיעה כאן.</p>
+            <p>
+              <span className="font-bold">חשבון של המדריך?</span> כדי לראות כאן את המסכים של החניכים, שייכו את
+              הכתובת הזו בלוח הבקרה, תחת «שיוך חשבונות», בשורה של המדריך.
+            </p>
             <a href="?demo" className="mt-2 inline-block font-bold text-navy underline underline-offset-2">
               למסך החניך במצב הדגמה ←
             </a>
@@ -526,6 +610,14 @@ export default function App() {
       );
     case "error":
       return <Centered><p className="text-late">משהו השתבש: {load.message}</p></Centered>;
+    case "instructor":
+      return preview ? (
+        <HomeScreen home={preview.home} today={today} onToggle={togglePreview} alert={saveError}
+                    preview={{ name: preview.name, onExit: () => setPreview(null) }} />
+      ) : (
+        <InstructorScreen me={load.me} trainees={load.trainees} opening={opening} onPick={openPreview}
+                          alert={saveError} />
+      );
     case "ok":
       return <HomeScreen home={load.home} today={today} onToggle={onToggle} alert={saveError} />;
   }

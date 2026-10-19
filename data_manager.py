@@ -726,9 +726,14 @@ def get_students() -> list[dict]:
 
 
 def get_student_by_email(email: str) -> Optional[dict]:
+    """A trainee only: the instructor's row carries an address too (it opens
+    the trainees' screens on the v2 site), and under Google sign-in that must
+    not log the instructor in as a trainee with no evenings — admin comes
+    from `admin_emails`."""
     if not (email or "").strip():
         return None
-    rows = _rows(_t("students").select("*").ilike("email", email.strip()).execute())
+    rows = _rows(_t("students").select("*").ilike("email", email.strip())
+                 .eq("role", "student").execute())
     return rows[0] if rows else None
 
 

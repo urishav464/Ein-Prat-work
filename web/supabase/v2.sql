@@ -9,14 +9,21 @@
 -- with the PUBLIC anon key, signed in through Supabase Auth (Google). The
 -- tables stay exactly as locked as today — RLS on, nothing granted to `anon`
 -- or `authenticated` — and a signed-in browser may call the functions below
--- and nothing else. Each answers only for the trainee whose Google address is
--- linked in `students.email` (the dashboard's «שיוך חשבונות»):
+-- and nothing else. Who is calling is the Google address, linked to a row of
+-- `students` in the dashboard's «שיוך חשבונות»:
 --
---   v2_my_home()                     their evenings, their pair's names, their
---                                    tasks. Never a phone, an e-mail, a contact
---                                    field or a task's free-text details.
---   v2_set_task_status(task, status) ✓ on a task of one of their evenings —
---                                    exactly what dm.update_task_status writes.
+--   v2_my_home()                     a trainee: their evenings, their pair's
+--                                    names, their tasks. Never a phone, an
+--                                    e-mail, a contact field or a task's
+--                                    free-text details. The instructor: the
+--                                    trainees' names, to choose whom to view.
+--   v2_set_task_status(task, status) ✓ on a task of one of the trainee's own
+--                                    evenings — exactly what
+--                                    dm.update_task_status writes.
+--   v2_home_as(trainee)              the instructor only: exactly what that
+--                                    trainee's v2_my_home() answers. Read-only —
+--                                    the instructor cannot write through
+--                                    v2_set_task_status.
 --
 -- A write made here does not pass through the Streamlit app's read cache, so
 -- that app shows it within CACHE_TTL_SECONDS (15 minutes) or at its next
@@ -30,6 +37,8 @@ REVOKE ALL ON SCHEMA v2_private FROM PUBLIC;
 REVOKE ALL ON SCHEMA v2_private FROM anon;
 REVOKE ALL ON SCHEMA v2_private FROM authenticated;
 
+-- status: signed_out · wrong_provider · ok (a trainee) · instructor ·
+-- not_linked. A trainee's row wins when one address is on both.
 CREATE OR REPLACE FUNCTION v2_private.caller(OUT status text, OUT student_id integer, OUT email text)
 LANGUAGE plpgsql
 STABLE
@@ -56,7 +65,15 @@ BEGIN
     SELECT s.id INTO student_id FROM students s
      WHERE lower(trim(coalesce(s.email, ''))) = em AND s.role = 'student'
      LIMIT 1;
-    status := CASE WHEN student_id IS NULL THEN 'not_linked' ELSE 'ok' END;
+    IF student_id IS NOT NULL THEN
+        status := 'ok';
+        RETURN;
+    END IF;
+    -- the instructor is a row of its own (role 'instructor'), linked the same way
+    SELECT s.id INTO student_id FROM students s
+     WHERE lower(trim(coalesce(s.email, ''))) = em AND s.role = 'instructor'
+     LIMIT 1;
+    status := CASE WHEN student_id IS NULL THEN 'not_linked' ELSE 'instructor' END;
 END
 $$;
 
@@ -65,26 +82,16 @@ REVOKE ALL ON FUNCTION v2_private.caller() FROM anon;
 REVOKE ALL ON FUNCTION v2_private.caller() FROM authenticated;
 
 
-CREATE OR REPLACE FUNCTION public.v2_my_home()
+-- One trainee's home, built in one place: what the trainee reads, and what the
+-- instructor's view of them reads — the two can never drift apart. Not a door:
+-- called only from the SECURITY DEFINER functions below.
+CREATE OR REPLACE FUNCTION v2_private.home_of(p_student_id integer)
 RETURNS jsonb
-LANGUAGE plpgsql
+LANGUAGE sql
 STABLE
-SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-DECLARE
-    c  record;
-    me students%ROWTYPE;
-BEGIN
-    SELECT * INTO c FROM v2_private.caller();
-    IF c.status = 'not_linked' THEN
-        RETURN jsonb_build_object('status', c.status, 'email', c.email);
-    ELSIF c.status <> 'ok' THEN
-        RETURN jsonb_build_object('status', c.status);
-    END IF;
-    SELECT * INTO me FROM students WHERE id = c.student_id;
-
-    RETURN jsonb_build_object(
+    SELECT jsonb_build_object(
         'status', 'ok',
         'as_of', to_char(current_date, 'YYYY-MM-DD'),
         'me', jsonb_build_object('id', me.id, 'name', me.name),
@@ -115,7 +122,43 @@ BEGIN
               JOIN assignments a ON a.mishmar_id = t.mishmar_id AND a.student_id = me.id
              -- NULL = the pair's task; a task assigned to the partner is theirs
              WHERE t.student_id IS NULL OR t.student_id = me.id)
-    );
+    )
+      FROM students me
+     WHERE me.id = p_student_id
+$$;
+
+REVOKE ALL ON FUNCTION v2_private.home_of(integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION v2_private.home_of(integer) FROM anon;
+REVOKE ALL ON FUNCTION v2_private.home_of(integer) FROM authenticated;
+
+
+CREATE OR REPLACE FUNCTION public.v2_my_home()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    c record;
+BEGIN
+    SELECT * INTO c FROM v2_private.caller();
+    IF c.status = 'not_linked' THEN
+        RETURN jsonb_build_object('status', c.status, 'email', c.email);
+    ELSIF c.status = 'instructor' THEN
+        -- no evenings of their own: the trainees to look at instead
+        -- (v2_home_as) — names and ids, nothing else
+        RETURN jsonb_build_object(
+            'status', 'instructor',
+            'me', (SELECT jsonb_build_object('id', s.id, 'name', s.name)
+                     FROM students s WHERE s.id = c.student_id),
+            'trainees', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', s.id, 'name', s.name)
+                                                   ORDER BY s.name), '[]'::jsonb)
+                           FROM students s WHERE s.role = 'student'));
+    ELSIF c.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', c.status);
+    END IF;
+    RETURN v2_private.home_of(c.student_id);
 END
 $$;
 
@@ -132,6 +175,7 @@ DECLARE
     t tasks%ROWTYPE;
 BEGIN
     SELECT * INTO c FROM v2_private.caller();
+    -- a trainee only: the instructor's status is «instructor», refused here too
     IF c.status <> 'ok' THEN
         RETURN jsonb_build_object('status', c.status);
     END IF;
@@ -157,6 +201,33 @@ END
 $$;
 
 
+-- The instructor sees a trainee's screen before the trainee gets the link:
+-- the very answer that trainee's own v2_my_home() gives, and nothing to write
+-- with. Anyone else is refused, whoever they ask about.
+CREATE OR REPLACE FUNCTION public.v2_home_as(p_student_id integer)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    c record;
+BEGIN
+    SELECT * INTO c FROM v2_private.caller();
+    IF c.status IN ('signed_out', 'wrong_provider') THEN
+        RETURN jsonb_build_object('status', c.status);
+    ELSIF c.status <> 'instructor' THEN
+        RETURN jsonb_build_object('status', 'forbidden');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM students WHERE id = p_student_id AND role = 'student') THEN
+        RETURN jsonb_build_object('status', 'not_found');
+    END IF;
+    RETURN v2_private.home_of(p_student_id);
+END
+$$;
+
+
 -- Postgres grants EXECUTE on a new function to PUBLIC, and Supabase's default
 -- privileges hand it to anon and authenticated as well: take it back from all
 -- of them, then give each door to the signed-in role only.
@@ -171,3 +242,9 @@ REVOKE ALL ON FUNCTION public.v2_set_task_status(bigint, text) FROM anon;
 REVOKE ALL ON FUNCTION public.v2_set_task_status(bigint, text) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.v2_set_task_status(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.v2_set_task_status(bigint, text) TO service_role;
+
+REVOKE ALL ON FUNCTION public.v2_home_as(integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.v2_home_as(integer) FROM anon;
+REVOKE ALL ON FUNCTION public.v2_home_as(integer) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.v2_home_as(integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.v2_home_as(integer) TO service_role;

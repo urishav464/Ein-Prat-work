@@ -22,8 +22,10 @@ and checks, at 390px and 1500px:
         back and says so; late tasks (made late against today) folded one
         <details> per Mishmar in date order, phases inside, the hero's own late
         task kept out; not_linked / wrong_provider / error screens, not_linked
-        with a working link to the demo (where the instructor lands);
-        «התנתקות» → back to the sign-in screen
+        with a working link to the demo; «התנתקות» → back to the sign-in
+        screen; the instructor → the trainees to choose from, ONE
+        rpc/v2_home_as for the one picked, that trainee's home under the
+        instructor's note, a ✓ redrawn with NO save sent, and back to the list
 
 Every build is served under a sub-path — /mishmar/, as GitHub Pages serves it
 (--under to change) — so every link, icon and the manifest must be relative to pass. Three more builds check the settings as a
@@ -207,9 +209,11 @@ def check_demo(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
 class MockSupabase:
     """Answers the browser's calls to the mock host; records what it was asked."""
 
-    def __init__(self, rpc_status: int = 200, rpc_body: dict | None = None, save_status: int = 200):
+    def __init__(self, rpc_status: int = 200, rpc_body: dict | None = None, save_status: int = 200,
+                 as_body: dict | None = None):
         self.rpc_status, self.rpc_body = rpc_status, rpc_body or {}
         self.save_status = save_status
+        self.as_body = as_body or {"status": "forbidden"}
         self.calls: list[dict] = []
 
     def __call__(self, route, request):
@@ -226,6 +230,9 @@ class MockSupabase:
         if u.path == "/rest/v1/rpc/v2_my_home":
             return route.fulfill(status=self.rpc_status, content_type="application/json",
                                  body=json.dumps(self.rpc_body, ensure_ascii=False))
+        if u.path == "/rest/v1/rpc/v2_home_as":
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps(self.as_body, ensure_ascii=False))
         if u.path == "/rest/v1/rpc/v2_set_task_status":
             ok = self.save_status == 200
             answer = ({"status": "ok", "task": {"id": (body or {}).get("p_task_id"),
@@ -465,6 +472,43 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
             except Exception:
                 href, landed = None, False
             checks["auth: not_linked → the instructor's way to the demo"] = href == "?demo" and landed
+        ctx.close()
+
+    # the instructor: the trainees to choose from, then one trainee's home as
+    # that trainee will see it — read-only: a ✓ there changes the screen only
+    trainee = demo["me"]["name"]
+    roster = {"status": "instructor", "me": {"id": 100, "name": "מדריך/ה לדוגמה"},
+              "trainees": [{"id": 1, "name": "חניך/ה א"}, {"id": 2, "name": trainee}]}
+    for w in WIDTHS:
+        mock = MockSupabase(rpc_body=roster, as_body=demo)
+        ctx, page, errors = auth_page(browser, base, mock, w, signed_in=True)
+        k = f"instructor@{w}: "
+        f: dict = {}
+        try:
+            page.get_by_role("heading", name="החניכים").wait_for(timeout=5000)
+            f["names"] = page.locator("main button").all_inner_texts()
+            page.screenshot(path=str(shots / f"v2-instructor-{w}.png"), full_page=True)
+            page.get_by_role("button", name=trainee).click()
+            page.get_by_text("מצב מדריך").first.wait_for(timeout=5000)
+            f["asked"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_home_as"]
+            f["h1"] = page.locator("h1").inner_text()
+            f["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+            page.screenshot(path=str(shots / f"v2-instructor-view-{w}.png"), full_page=True)
+            f["tick"] = page.evaluate(TICK)
+            page.wait_for_timeout(600)                     # a save, if one were sent, shows by now
+            f["saves"] = mock.count("/rest/v1/rpc/v2_set_task_status")
+            page.get_by_role("button", name="לרשימת החניכים").click()
+            page.get_by_role("heading", name="החניכים").wait_for(timeout=5000)
+            f["back"] = page.get_by_role("button", name=trainee).is_visible()
+        except Exception as e:                             # a missing step fails the checks below
+            f["failed_at"] = str(e).splitlines()[0]
+        facts[f"instructor@{w}"] = {k2: v for k2, v in f.items() if k2 != "tick"}
+        checks[k + "the trainees to choose from"] = f.get("names") == ["חניך/ה א", trainee]
+        checks[k + "one v2_home_as, for that trainee"] = f.get("asked") == [{"p_student_id": 2}]
+        checks[k + "that trainee's own home, under the instructor's note"] = f.get("h1") == f"שלום, {trainee}"
+        checks[k + "✓ redrawn, nothing saved"] = bool(f.get("tick")) and f["tick"]["gone"] and f.get("saves") == 0
+        checks[k + "back to the list"] = f.get("back") is True
+        checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
         ctx.close()
 
 
