@@ -16,11 +16,16 @@ and checks, at 390px and 1500px:
         a ✓ redrawn within a frame, no markdown markers on screen
   auth  signed out → «כניסה עם Google» asks for provider=google with PKCE;
         a stored session → exactly ONE rpc/v2_my_home, carrying the user's
-        token; every ✓ disabled (read-only); late tasks (made late against
-        today) folded one <details> per Mishmar in date order, phases inside,
-        the hero's own late task kept out; not_linked / wrong_provider / error
-        screens, not_linked with a working link to the demo (where the
-        instructor lands); «התנתקות» → back to the sign-in screen
+        token; ✓ redrawn within a frame, then ONE v2_set_task_status naming
+        that task, and undo saves «IN PROGRESS»; a failed save puts the task
+        back and says so; late tasks (made late against today) folded one
+        <details> per Mishmar in date order, phases inside, the hero's own late
+        task kept out; not_linked / wrong_provider / error screens, not_linked
+        with a working link to the demo (where the instructor lands);
+        «התנתקות» → back to the sign-in screen
+
+Both builds are served under a sub-path (/v2/), so every link, icon and the
+manifest must be relative to pass.
 
 Exit 1 on any failed check. Screenshots land in --shots (default: a temp dir)."""
 import base64
@@ -128,7 +133,8 @@ TICK = """async () => {
   await new Promise(r => requestAnimationFrame(() => r()));
   const ms = performance.now() - t0;
   return {before, after: {heading: heading(), done: doneHead()}, ms: Math.round(ms),
-          gone: ![...hero.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === label)};
+          gone: ![...hero.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === label),
+          label, hero: hero.querySelector('span').textContent};
 }"""
 
 
@@ -192,20 +198,32 @@ def check_demo(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
 class MockSupabase:
     """Answers the browser's calls to the mock host; records what it was asked."""
 
-    def __init__(self, rpc_status: int = 200, rpc_body: dict | None = None):
+    def __init__(self, rpc_status: int = 200, rpc_body: dict | None = None, save_status: int = 200):
         self.rpc_status, self.rpc_body = rpc_status, rpc_body or {}
+        self.save_status = save_status
         self.calls: list[dict] = []
 
     def __call__(self, route, request):
         u = urlparse(request.url)
+        try:
+            body = json.loads(request.post_data or "null")
+        except ValueError:
+            body = request.post_data
         self.calls.append({"path": u.path, "query": u.query, "method": request.method,
                            "auth": request.headers.get("authorization"),
-                           "apikey": request.headers.get("apikey")})
+                           "apikey": request.headers.get("apikey"), "body": body})
         if u.path == "/auth/v1/authorize":
             return route.fulfill(status=200, content_type="text/html", body="<p>mock Google</p>")
         if u.path == "/rest/v1/rpc/v2_my_home":
             return route.fulfill(status=self.rpc_status, content_type="application/json",
                                  body=json.dumps(self.rpc_body, ensure_ascii=False))
+        if u.path == "/rest/v1/rpc/v2_set_task_status":
+            ok = self.save_status == 200
+            answer = ({"status": "ok", "task": {"id": (body or {}).get("p_task_id"),
+                                                "status": (body or {}).get("p_status")}}
+                      if ok else {"code": "XX000", "message": "boom", "details": None, "hint": None})
+            return route.fulfill(status=self.save_status, content_type="application/json",
+                                 body=json.dumps(answer))
         if u.path == "/auth/v1/logout":
             return route.fulfill(status=204, body="")
         return route.fulfill(status=404, content_type="application/json", body="{}")
@@ -278,7 +296,8 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
     checks["auth: the sign-in screen raised no page error"] = not errors
     ctx.close()
 
-    # a stored session → one call, the user's token, read-only, sign-out works
+    # a stored session → one call, the user's token; ✓ saves; sign-out works
+    token = session()["access_token"].split(".")[0]
     for w in WIDTHS:
         mock = MockSupabase(rpc_body=demo)
         ctx, page, errors = auth_page(browser, base, mock, w, signed_in=True)
@@ -288,26 +307,65 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
           ticks: [...document.querySelectorAll('button[aria-label]')].length,
           enabledTicks: [...document.querySelectorAll('button[aria-label]:not([disabled])')].length,
           banner: [...document.querySelectorAll('[role=note]')].some(n => n.textContent.includes('מצב הדגמה')),
-          readOnlyNote: [...document.querySelectorAll('[role=note]')].some(n => n.textContent.includes('לצפייה בלבד')),
           overflowX: document.documentElement.scrollWidth - window.innerWidth,
         })""")
         page.screenshot(path=str(shots / f"v2-signedin-{w}.png"), full_page=True)
         rpc = [c for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_my_home"]
-        token = session()["access_token"].split(".")[0]
-        facts[f"signedin@{w}"] = {**f, "rpc_calls": len(rpc), "errors": errors}
         k = f"auth@{w}: "
         checks[k + "exactly one rpc/v2_my_home on load"] = len(rpc) == 1
         checks[k + "the call carries the user's token and the anon key"] = bool(rpc) and \
             (rpc[0]["auth"] or "").startswith("Bearer " + token) and rpc[0]["apikey"] == ANON
-        checks[k + "read-only: every ✓ disabled, and the screen says so"] = \
-            f["ticks"] > 0 and f["enabledTicks"] == 0 and f["readOnlyNote"]
+        checks[k + "every ✓ is live"] = f["ticks"] > 0 and f["enabledTicks"] == f["ticks"]
         checks[k + "no demo banner, no sideways scroll"] = not f["banner"] and f["overflowX"] <= 0
+
+        # ✓ on the hero's first open task: on screen within a frame, then ONE
+        # save naming that very task; undoing it saves «in progress», as the
+        # Streamlit home's «↩ החזר לתהליך» does
+        tick = page.evaluate(TICK)
+        page.wait_for_timeout(600)
+        hero_mid = int(re.search(r"#(\d+)", tick["hero"]).group(1)) if tick else None
+        desc = tick["label"].split(": ", 1)[1] if tick else None
+        task = next((t for t in demo["tasks"] if t["mishmar_id"] == hero_mid
+                     and t["task_description"].replace("*", "").replace("`", "").strip() == desc), None)
+        saves = [c for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_set_task_status"]
+        page.locator("summary", has_text="הושלמו").click()          # the done list starts folded
+        page.get_by_role("button", name=f"החזר לתהליך: {desc}", exact=True).first.click()
+        page.wait_for_timeout(600)
+        undo = [c for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_set_task_status"][len(saves):]
+        facts[f"signedin@{w}"] = {**f, "rpc_calls": len(rpc), "tick": tick,
+                                  "saves": [c["body"] for c in saves], "undo": [c["body"] for c in undo],
+                                  "errors": errors}
+        checks[k + "✓ on screen within a frame, then one save of that task"] = bool(tick) and bool(task) \
+            and tick["gone"] and tick["ms"] < 100 and len(saves) == 1 \
+            and saves[0]["body"] == {"p_task_id": task["id"], "p_status": "DONE"} \
+            and (saves[0]["auth"] or "").startswith("Bearer " + token)
+        checks[k + "undo saves «IN PROGRESS»"] = len(undo) == 1 and bool(task) \
+            and undo[0]["body"] == {"p_task_id": task["id"], "p_status": "IN PROGRESS"}
         if w == WIDTHS[0]:
             page.get_by_role("button", name="התנתקות").click()
             page.get_by_role("button", name="כניסה עם Google").wait_for(timeout=5000)
             checks[k + "«התנתקות» → logout call, back to sign-in"] = mock.count("/auth/v1/logout") == 1
         checks[k + "no page errors"] = not errors
         ctx.close()
+
+    # a save that fails: the task goes back to where it was, and the screen says so
+    mock = MockSupabase(rpc_body=demo, save_status=500)
+    ctx, page, errors = auth_page(browser, base, mock, 390, signed_in=True)
+    page.wait_for_selector("h1")
+    tick = page.evaluate(TICK)
+    try:
+        page.get_by_role("alert").wait_for(timeout=5000)
+        alert = page.get_by_role("alert").inner_text()
+    except Exception:
+        alert = ""
+    back = bool(tick) and page.evaluate(
+        "(label) => [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === label)",
+        tick["label"])
+    page.screenshot(path=str(shots / "v2-save-failed-390.png"))
+    facts["save-failed"] = {"alert": alert, "back": back, "errors": errors}
+    checks["auth: a failed save puts the task back and says so"] = \
+        bool(tick) and tick["gone"] and back and "לא נשמר" in alert and not errors
+    ctx.close()
 
     # late tasks: one folding row per Mishmar, in date order, phases inside
     home, expected = late_home(demo)

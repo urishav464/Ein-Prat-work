@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import demoData from "./demo.json";
 import { demoMode, supabase } from "./supabase";
 import {
   clean, countdown, deadline, fmtDate, heTasks, heroOf, lateByMishmar, parseDate, phaseDue, progress,
-  type Home, type LateGroup, type Mishmar, type Progress, type Task,
+  type Home, type LateGroup, type Mishmar, type Progress, type Status, type Task,
 } from "./model";
 
 type Load =
@@ -106,7 +106,7 @@ function CheckButton({ task, onToggle }: { task: Task; onToggle?: (t: Task) => v
       onClick={onToggle ? () => onToggle(task) : undefined}
       disabled={!onToggle}
       aria-label={label}
-      title={onToggle ? label : "בשלב הזה של הניסיון — לצפייה בלבד. מסמנים באפליקציה הרגילה."}
+      title={label}
       className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border text-base transition
         ${done ? "border-navy bg-navy text-white" : "border-navy/40 bg-white text-navy hover:bg-navy-soft"}
         disabled:cursor-not-allowed disabled:opacity-40`}
@@ -316,7 +316,7 @@ function MiniCard({ m, prog, today }: { m: Mishmar; prog: Progress; today: Date 
 
 // ---------------------------------------------------------------- screens
 
-function Shell({ children, name }: { children: ReactNode; name?: string }) {
+function Shell({ children, name, alert }: { children: ReactNode; name?: string; alert?: string | null }) {
   return (
     <div className="min-h-dvh">
       <header className="border-b border-line bg-sand/70">
@@ -334,13 +334,15 @@ function Shell({ children, name }: { children: ReactNode; name?: string }) {
           מצב הדגמה — נתונים לדוגמה מהמערכת, השמות הוחלפו. לחיצה על ✓ לא נשמרת.
         </div>
       )}
-      {/* a tooltip never shows on a phone, and a ✓ that does nothing reads as broken */}
-      {name && !demoMode && (
-        <div className="bg-navy-soft px-4 py-2 text-center text-sm text-navy" role="note">
-          גרסת ניסיון לצפייה בלבד — את המשימות מסמנים ✓ באפליקציה הרגילה.
+      <main className="mx-auto max-w-4xl px-4 pb-16 pt-6">{children}</main>
+      {/* pinned to the bottom: a failed save must be seen wherever the tap was */}
+      {alert && (
+        <div role="alert" className="fixed inset-x-0 bottom-0 z-10 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <p className="mx-auto max-w-md rounded-xl bg-late px-4 py-3 text-center text-sm font-semibold text-white shadow-lg">
+            {alert}
+          </p>
         </div>
       )}
-      <main className="mx-auto max-w-4xl px-4 pb-16 pt-6">{children}</main>
     </div>
   );
 }
@@ -353,7 +355,9 @@ function Centered({ children }: { children: ReactNode }) {
   );
 }
 
-function HomeScreen({ home, today, onToggle }: { home: Home; today: Date; onToggle?: (t: Task) => void }) {
+function HomeScreen({ home, today, onToggle, alert }: {
+  home: Home; today: Date; onToggle?: (t: Task) => void; alert?: string | null;
+}) {
   const data = useMemo(() => {
     const byMid = new Map<number, Task[]>();
     for (const t of home.tasks) byMid.set(t.mishmar_id, [...(byMid.get(t.mishmar_id) ?? []), t]);
@@ -368,7 +372,7 @@ function HomeScreen({ home, today, onToggle }: { home: Home; today: Date; onTogg
   }, [home, today]);
 
   return (
-    <Shell name={home.me.name}>
+    <Shell name={home.me.name} alert={alert}>
       <h1 className="font-display text-3xl font-extrabold text-navy">שלום, {home.me.name}</h1>
       {data.late.length > 0 && <LateSection groups={data.late} today={today} onToggle={onToggle} />}
       {data.hero && (
@@ -407,14 +411,41 @@ export default function App() {
     () => (demoMode && load.kind === "ok" ? parseDate(load.home.as_of) ?? localToday() : localToday()),
     [load],
   );
-  // demo: ✓ flips the task on screen at once — nothing is sent anywhere.
-  // Signed in, the prototype is read-only (writes come after the gate).
-  const onToggle = demoMode
-    ? (t: Task) => update((h) => ({
-        ...h,
-        tasks: h.tasks.map((x) => x.id === t.id ? { ...x, status: x.status === "DONE" ? "TO DO" : "DONE" } : x),
-      }))
-    : undefined;
+  const [saveError, setSaveError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!saveError) return;
+    const timer = setTimeout(() => setSaveError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [saveError]);
+  // one save at a time per task, in tap order: two quick taps must reach the
+  // database in the order they were made
+  const queue = useRef(new Map<number, Promise<void>>());
+
+  const setStatus = (id: number, status: Status, onlyIf?: Status) =>
+    update((h) => ({
+      ...h,
+      tasks: h.tasks.map((x) =>
+        x.id === id && (onlyIf === undefined || x.status === onlyIf) ? { ...x, status } : x),
+    }));
+
+  // ✓ marks DONE; undoing returns the task to «in progress», as the Streamlit
+  // home's «↩ החזר לתהליך» does. The screen changes first and the save follows,
+  // so a tap never waits on the network. The demo sends nothing anywhere.
+  const onToggle = (t: Task) => {
+    const next: Status = t.status === "DONE" ? "IN PROGRESS" : "DONE";
+    setSaveError(null);
+    setStatus(t.id, next);
+    if (demoMode || !supabase) return;
+    const sb = supabase;
+    const job = (queue.current.get(t.id) ?? Promise.resolve()).then(async () => {
+      const { data, error } = await sb.rpc("v2_set_task_status", { p_task_id: t.id, p_status: next });
+      if (error || (data as { status?: string } | null)?.status !== "ok") {
+        setStatus(t.id, t.status, next);   // back as it was, unless tapped again since
+        setSaveError("הסימון לא נשמר. בדקו את החיבור ונסו שוב.");
+      }
+    });
+    queue.current.set(t.id, job);
+  };
 
   switch (load.kind) {
     case "loading":
@@ -456,6 +487,6 @@ export default function App() {
     case "error":
       return <Centered><p className="text-late">משהו השתבש: {load.message}</p></Centered>;
     case "ok":
-      return <HomeScreen home={load.home} today={today} onToggle={onToggle} />;
+      return <HomeScreen home={load.home} today={today} onToggle={onToggle} alert={saveError} />;
   }
 }
