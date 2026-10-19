@@ -121,6 +121,8 @@ never by eye.
 
 No `[auth]` in secrets → name-only login, development only. `[auth]` present → Google OIDC **and the name box is removed entirely** — leaving it would keep the "type Uri" bypass open beside real authentication.
 
+**The live deployment runs name-only** — no `[auth]` block was ever set (learned 2026-10-19, setting up v2). So the dashboard's «🔗 שיוך חשבונות» form is on in **both** modes: it is where the trainees' Google addresses are typed for v2's sign-in (`web/`), whose «not linked» screen sends them there; only the caption differs. Under name-only login anyone who types «Uri» sees those addresses — the same exposure as the rest of the dashboard. A save writes only the addresses that changed (`_save_emails_clicked` gets the drawn values): it wrote all eight rows per save — one update instead of eight, 1.9 s → 0.8 s on the harness.
+
 ## Verifying the UI actually renders
 
 **The harness is committed: `scripts/harness/`.** `db.py up` builds a local PostgreSQL 16 fixture

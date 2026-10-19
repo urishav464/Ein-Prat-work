@@ -1178,21 +1178,27 @@ def _dashboard_body() -> None:
                                    or drift["added"] or drift["removed"])):
             _roster_dialog()
 
-    if auth_configured():
-        with st.expander("🔗 שיוך חשבונות"):
-            st.caption(
-                "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
-                "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
-            )
-            with st.form("emails"):
-                students = [x for x in dm.get_students() if x["role"] == "student"]
-                for stu in students:
-                    st.text_input(stu["name"], value=stu.get("email") or "",
-                                  key=f"em-{stu['id']}", placeholder="name@gmail.com")
-                # the seventh form: it wrote and then reran the fragment, which
-                # is one needless second run of the whole dashboard body
-                st.form_submit_button("שמור שיוכים", on_click=_save_emails_clicked,
-                                      args=([x["id"] for x in students],))
+    # Always on, not only under Google sign-in: the new site (web/) signs
+    # trainees in with Google while this app may still log in by name, and its
+    # «not linked» screen sends them here. Only the caption differs.
+    with st.expander("🔗 שיוך חשבונות"):
+        st.caption(
+            "כל חניך נכנס עם חשבון הגוגל שלו. שייכו כאן כתובת לכל שם — "
+            "בלי שיוך, החניך יתחבר אבל לא ייכנס לשום משמר."
+            if auth_configured() else
+            "כתובת הגוגל של כל חניך, לכניסה לאתר החדש (urishav464.github.io/mishmar). "
+            "בלי שיוך, החניך ייכנס לשם אבל לא יראה את המשמרים שלו. "
+            "הכניסה לאפליקציה הזו לא משתנה — עדיין בשם."
+        )
+        with st.form("emails"):
+            students = [x for x in dm.get_students() if x["role"] == "student"]
+            for stu in students:
+                st.text_input(stu["name"], value=stu.get("email") or "",
+                              key=f"em-{stu['id']}", placeholder="name@gmail.com")
+            # the seventh form: it wrote and then reran the fragment, which
+            # is one needless second run of the whole dashboard body
+            st.form_submit_button("שמור שיוכים", on_click=_save_emails_clicked,
+                                  args=({x["id"]: x.get("email") or "" for x in students},))
 
 
 # --------------------------------------------------------------------------
@@ -1299,13 +1305,18 @@ def _save_task_edit(t: dict, nonce: int, has_slots: bool) -> None:
     st.toast("נשמר")
 
 
-def _save_emails_clicked(student_ids: list[int]) -> None:
+def _save_emails_clicked(current: dict[int, str]) -> None:
     """on_click of «שמור שיוכים»: the writes land before the fragment run that
-    follows the submit, which already shows them."""
+    follows the submit, which already shows them. Only an address that changed
+    is written — the form wrote all eight rows on every save (eight round-trips
+    for one new address, measured 1.3 s of the 1.9 s save on the harness)."""
     n = 0
-    for sid in student_ids:
-        dm.set_student_email(sid, st.session_state.get(f"em-{sid}", "")); n += 1
-    st.toast(f"נשמרו {n} שיוכים")
+    for sid, old in current.items():
+        new = (st.session_state.get(f"em-{sid}", "") or "").strip()
+        if new != old:
+            dm.set_student_email(sid, new); n += 1
+    st.toast("אין שינוי לשמור" if not n
+             else "נשמר שיוך אחד" if n == 1 else f"נשמרו {n} שיוכים")
 
 
 def _save_start_time_clicked(all_upcoming: list[int]) -> None:
