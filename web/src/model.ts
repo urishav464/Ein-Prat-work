@@ -12,6 +12,9 @@ export interface Task {
   status: Status;
   category: string | null;
   due_date: string | null; // ISO yyyy-mm-dd
+  // the workfile's only (v2_workfile): the free text and the slot it is about
+  details?: string | null;
+  lesson_id?: number | null;
 }
 
 export interface Mishmar {
@@ -215,4 +218,118 @@ export function lateByMishmar(late: Task[], mishmarim: Mishmar[]): LateGroup[] {
 export function phaseDue(ph: Phase): Date | null {
   const ds = ph.tasks.map((t) => parseDate(t.due_date)).filter((d): d is Date => d !== null);
   return ds.length ? new Date(Math.min(...ds.map((d) => d.getTime()))) : null;
+}
+
+// ---- the workfile (v2_workfile): one evening whole
+
+// someone on a slot: a candidate, a closed speaker, a panelist or a חבורות presenter
+export interface Person {
+  id: number;
+  name: string;
+  status: string | null;
+  phone: string | null;
+  room: string | null;
+  source_url: string | null;
+}
+
+export interface Lesson {
+  id: number;
+  slot_order: number;
+  start_time: string | null;
+  duration_minutes: number | null;
+  is_break: boolean;
+  title: string | null;
+  description: string | null;
+  lesson_role: string | null;
+  format: string | null;
+  speaker_name: string | null;
+  source_url: string | null;
+  people: Person[];
+}
+
+export interface LogisticsItem {
+  id: number;
+  kind: string;
+  label: string;
+  detail: string | null;
+  done: boolean;
+}
+
+export interface Workfile {
+  status: "ok";
+  as_of: string;
+  viewer: "trainee" | "instructor";
+  mishmar: Mishmar & { note: string | null; start_time: string; invitation_url: string | null };
+  lessons: Lesson[];
+  logistics: LogisticsItem[];
+  tasks: Task[];
+}
+
+// dm.TASK_CATEGORIES — the add form's choices
+export const TASK_CATEGORIES = ["נושא", "מרצים", "הזמנה", "כיבוד", "קישוט", "תוכן", "לוגיסטיקה", "יום המשמר", "אחרי"];
+
+// dm.is_chavurot — role OR format OR title
+export function isChavurot(l: Lesson): boolean {
+  return [l.lesson_role, l.format, l.title].some((v) => (v ?? "").includes("חבורות"))
+    || (l.title ?? "").includes("חברותות");
+}
+
+// dm.is_panel — several speakers at once; a חבורות slot never is
+export function isPanel(l: Lesson): boolean {
+  return !isChavurot(l) && [l.format, l.lesson_role, l.title].some((v) => (v ?? "").includes("פאנל"));
+}
+
+// dm.is_feedback_task
+export function isFeedbackTask(t: Task): boolean {
+  return t.task_description.includes("משוב");
+}
+
+// app._slot_times — «20:00–21:15»
+export function slotTimes(l: Lesson): string {
+  const start = l.start_time ?? "--:--";
+  const m = /^(\d{1,2}):(\d{2})$/.exec(start);
+  if (!m || !l.duration_minutes) return start;
+  const end = (+m[1] * 60 + +m[2] + l.duration_minutes) % (24 * 60);
+  return `${start}–${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")}`;
+}
+
+const ROUND_ORDINALS = ["א׳", "ב׳", "ג׳", "ד׳"];
+
+// app._slot_names — one name per slot, unique: «שיעור N» counts every
+// non-break slot (as dm._slot_tasks numbers «סגירת מרצה — שיעור N»), a round
+// of חבורות says which round when the evening holds several, and two slots
+// with the same title are told apart by their start time
+export function slotNames(lessons: Lesson[]): Map<number, string> {
+  const slots = lessons.filter((l) => !l.is_break);
+  const rounds = slots.filter(isChavurot).map((l) => l.id);
+  const names = new Map<number, string>();
+  slots.forEach((l, i) => {
+    const title = (l.title ?? "").trim();
+    if (isChavurot(l)) {
+      const r = rounds.indexOf(l.id);
+      const suffix = rounds.length >= 2 && r < ROUND_ORDINALS.length ? ` — סבב ${ROUND_ORDINALS[r]}` : "";
+      names.set(l.id, (title || "חבורות") + suffix);
+    } else {
+      names.set(l.id, title || `שיעור ${i + 1}`);
+    }
+  });
+  const seen = new Map<string, number>();
+  for (const n of names.values()) seen.set(n, (seen.get(n) ?? 0) + 1);
+  for (const l of slots) {
+    const n = names.get(l.id)!;
+    if ((seen.get(n) ?? 0) > 1 && l.start_time) names.set(l.id, `${n} (${l.start_time})`);
+  }
+  return names;
+}
+
+// app._slot_label — a slot in a task's «שייך למקטע» line
+export function slotLabel(l: Lesson, index: number): string {
+  let title = (l.title ?? "").trim();
+  if (!title && isChavurot(l)) title = "חבורות";
+  return `${l.start_time ?? "--:--"} · ${title || `מקטע ${index}`}`;
+}
+
+export function localToday(): Date {
+  const n = new Date();
+  return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
 }

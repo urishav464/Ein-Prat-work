@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import demoData from "./demo.json";
-import { askedForDemo, configProblem, demoMode, supabase, type ConfigProblem } from "./supabase";
+import { askedForDemo, configProblem, demoMode, signOut, supabase, type ConfigProblem } from "./supabase";
+import { Card, Centered, CheckButton, Chip, H2, Shell, Stepper, type Preview } from "./ui";
+import WorkfileScreen from "./Workfile";
 import {
-  clean, countdown, deadline, fmtDate, heTasks, heroOf, lateByMishmar, parseDate, phaseDue, progress,
+  clean, countdown, deadline, fmtDate, heTasks, heroOf, lateByMishmar, localToday, parseDate, phaseDue, progress,
   type Home, type LateGroup, type Mishmar, type Progress, type Status, type Task,
 } from "./model";
 
@@ -18,17 +20,30 @@ type Load =
   | { kind: "instructor"; me: Trainee; trainees: Trainee[] }
   | { kind: "ok"; home: Home };
 
-function localToday(): Date {
-  const n = new Date();
-  return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+// #/m/8 — evening 8's workfile; anything else — the home. A hash route needs
+// nothing from the host: GitHub Pages serves the one index.html either way.
+function readRoute(): number | null {
+  const m = /^#\/m\/(\d+)$/.exec(window.location.hash);
+  return m ? Number(m[1]) : null;
+}
+
+function useRoute(): number | null {
+  const [mid, setMid] = useState(readRoute);
+  useEffect(() => {
+    const onHash = () => { setMid(readRoute()); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return mid;
 }
 
 // ---------------------------------------------------------------- data
 
-function useHome(): [Load, (fn: (h: Home) => Home) => void] {
+function useHome(): [Load, (fn: (h: Home) => Home) => void, () => void] {
   const [load, setLoad] = useState<Load>(
     demoMode ? { kind: "ok", home: demoData as Home } : { kind: "loading" },
   );
+  const refetch = useRef<() => void>(() => {});
   useEffect(() => {
     if (demoMode || !supabase) return;
     const sb = supabase;
@@ -52,6 +67,7 @@ function useHome(): [Load, (fn: (h: Home) => Home) => void] {
     // refresh (hourly) does refetch. Deferred: a Supabase call made inside this
     // callback can deadlock the auth lock.
     let last: string | null | undefined;
+    refetch.current = () => { if (last) void fetchHome(true); };
     const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
       const token = session?.access_token ?? null;
       if (token === last) return;
@@ -62,7 +78,7 @@ function useHome(): [Load, (fn: (h: Home) => Home) => void] {
   }, []);
   const update = (fn: (h: Home) => Home) =>
     setLoad((l) => (l.kind === "ok" ? { kind: "ok", home: fn(l.home) } : l));
-  return [load, update];
+  return [load, update, () => refetch.current()];
 }
 
 const signIn = () =>
@@ -71,90 +87,8 @@ const signIn = () =>
     provider: "google",
     options: { redirectTo: window.location.origin + window.location.pathname },
   });
-const signOut = () => supabase?.auth.signOut();
-
-// ---------------------------------------------------------------- primitives
-
-type ChipKind = "red" | "yellow" | "green" | "gray" | "gold" | "blue";
-const CHIP: Record<ChipKind, string> = {
-  red: "bg-late-bg text-late",
-  yellow: "bg-[#fff4d6] text-[#8a5a00]",
-  green: "bg-[#e6f4ea] text-[#137333]",
-  gray: "bg-[#edeae1] text-[#5a564c]",
-  gold: "bg-[#f6ecd2] text-[#7a5b12]",
-  blue: "bg-navy-soft text-navy",
-};
-
-function Chip({ kind, children }: { kind: ChipKind; children: ReactNode }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${CHIP[kind]}`}>
-      {children}
-    </span>
-  );
-}
-
-function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-2xl border border-line bg-white p-4 sm:p-5 ${className}`}>{children}</section>;
-}
-
-function H2({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="mt-8 mb-3 border-s-4 border-navy ps-3 font-display text-xl font-extrabold text-navy">
-      {children}
-    </h2>
-  );
-}
-
-function CheckButton({ task, onToggle }: { task: Task; onToggle?: (t: Task) => void }) {
-  const done = task.status === "DONE";
-  const label = done ? `החזר לתהליך: ${clean(task.task_description)}` : `סמן שבוצע: ${clean(task.task_description)}`;
-  return (
-    <button
-      type="button"
-      onClick={onToggle ? () => onToggle(task) : undefined}
-      disabled={!onToggle}
-      aria-label={label}
-      title={label}
-      className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border text-base transition
-        ${done ? "border-navy bg-navy text-white" : "border-navy/40 bg-white text-navy hover:bg-navy-soft"}
-        disabled:cursor-not-allowed disabled:opacity-40`}
-    >
-      ✓
-    </button>
-  );
-}
 
 // ---------------------------------------------------------------- pieces
-
-function Stepper({ prog }: { prog: Progress }) {
-  return (
-    <ol className="my-4 flex items-start" aria-label="שלבי הבנייה">
-      {prog.phases.map((ph, i) => {
-        const state = ph.complete ? "done" : i === prog.current ? "current" : "later";
-        return (
-          <li key={ph.key} className="flex flex-1 items-start">
-            <div className="flex w-full flex-col items-center text-center">
-              <span
-                className={`grid h-9 w-9 place-items-center rounded-full border-2 text-sm
-                  ${state === "done" ? "border-navy bg-navy text-white" : state === "current" ? "border-navy bg-navy-soft" : "border-line bg-white"}`}
-                aria-hidden
-              >
-                {ph.complete ? "✓" : ph.icon}
-              </span>
-              <span className={`mt-1 text-xs ${state === "current" ? "font-bold text-navy" : "text-muted"}`}>
-                {ph.label}
-              </span>
-              <span className="text-[11px] text-muted">{ph.total ? `${ph.done}/${ph.total}` : "—"}</span>
-            </div>
-            {i < prog.phases.length - 1 && (
-              <span aria-hidden className={`mt-4 h-0.5 flex-1 ${ph.complete ? "bg-navy" : "bg-line"}`} />
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
 
 function TaskCard({ t, today, onToggle }: { t: Task; today: Date; onToggle?: (t: Task) => void }) {
   const dl = deadline(t, today);
@@ -237,6 +171,9 @@ function Hero({ m, prog, me, today, onToggle }: {
       ) : prog.total > 0 && (
         <p className="mt-4 rounded-xl bg-[#e6f4ea] px-4 py-3 text-[#137333]">כל המשימות של השלב הנוכחי סגורות. 🎉</p>
       )}
+      <a href={`#/m/${m.id}`} className="mt-4 inline-block rounded-xl bg-navy px-4 py-2 font-bold text-white hover:bg-navy/90">
+        לתיק המשמר ←
+      </a>
     </Card>
   );
 }
@@ -292,7 +229,9 @@ function MiniCard({ m, prog, today }: { m: Mishmar; prog: Progress; today: Date 
   const cd = countdown(m, today);
   return (
     <Card className="!p-4">
-      <p className="font-bold">#{String(m.id).padStart(2, "0")} · {fmtDate(m.gregorian_date)}</p>
+      <a href={`#/m/${m.id}`} className="font-bold text-navy underline-offset-2 hover:underline">
+        #{String(m.id).padStart(2, "0")} · {fmtDate(m.gregorian_date)} <span className="text-sm">· לתיק ←</span>
+      </a>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {cd && <Chip kind={cd.kind}>{cd.text}</Chip>}
         {m.owners.length ? <Chip kind="blue">👥 {m.owners.join(" · ")}</Chip> : <Chip kind="gray">צוות</Chip>}
@@ -323,61 +262,6 @@ function MiniCard({ m, prog, today }: { m: Mishmar; prog: Progress; today: Date 
 }
 
 // ---------------------------------------------------------------- screens
-
-// The instructor looking at one trainee's screen: whose it is, that a ✓ here
-// stays on this screen, and the way back to the list.
-type Preview = { name: string; onExit: () => void };
-
-function Shell({ children, name, alert, preview }: {
-  children: ReactNode; name?: string; alert?: string | null; preview?: Preview;
-}) {
-  return (
-    <div className="min-h-dvh">
-      <header className="border-b border-line bg-sand/70">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-3">
-          <span className="font-display font-extrabold text-navy">🕯️ משמרים · עין פרת</span>
-          {name && !demoMode && (
-            <button type="button" onClick={signOut} className="text-sm text-muted underline-offset-2 hover:underline">
-              התנתקות
-            </button>
-          )}
-        </div>
-      </header>
-      {demoMode && (
-        <div className="bg-[#fff4d6] px-4 py-2 text-center text-sm text-[#8a5a00]" role="note">
-          מצב הדגמה — נתונים לדוגמה מהמערכת, השמות הוחלפו. לחיצה על ✓ לא נשמרת.
-        </div>
-      )}
-      {preview && (
-        <div className="bg-navy-soft px-4 py-2 text-sm text-navy" role="note">
-          <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <span>מצב מדריך: כך {preview.name} רואה את האתר. סימון ✓ כאן לא נשמר.</span>
-            <button type="button" onClick={preview.onExit} className="font-bold underline underline-offset-2">
-              לרשימת החניכים
-            </button>
-          </div>
-        </div>
-      )}
-      <main className="mx-auto max-w-4xl px-4 pb-16 pt-6">{children}</main>
-      {/* pinned to the bottom: a failed save must be seen wherever the tap was */}
-      {alert && (
-        <div role="alert" className="fixed inset-x-0 bottom-0 z-10 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <p className="mx-auto max-w-md rounded-xl bg-late px-4 py-3 text-center text-sm font-semibold text-white shadow-lg">
-            {alert}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Centered({ children }: { children: ReactNode }) {
-  return (
-    <Shell>
-      <div className="mx-auto mt-10 max-w-sm"><Card className="text-center">{children}</Card></div>
-    </Shell>
-  );
-}
 
 function HomeScreen({ home, today, onToggle, alert, preview }: {
   home: Home; today: Date; onToggle?: (t: Task) => void; alert?: string | null; preview?: Preview;
@@ -494,7 +378,14 @@ function ConfigScreen({ problem }: { problem: ConfigProblem }) {
 }
 
 export default function App() {
-  const [load, update] = useHome();
+  const route = useRoute();
+  const [load, update, reloadHome] = useHome();
+  // back on the home from a workfile: what was ticked there shows here too
+  const from = useRef(route);
+  useEffect(() => {
+    if (from.current !== null && route === null) reloadHome();
+    from.current = route;
+  }, [route]);
   const today = useMemo(
     () => (demoMode && load.kind === "ok" ? parseDate(load.home.as_of) ?? localToday() : localToday()),
     [load],
@@ -610,15 +501,18 @@ export default function App() {
       );
     case "error":
       return <Centered><p className="text-late">משהו השתבש: {load.message}</p></Centered>;
-    case "instructor":
+    case "instructor": {
+      const exit = { name: preview?.name ?? "", onExit: () => { setPreview(null); window.location.hash = "#/"; } };
+      if (route !== null) return <WorkfileScreen key={route} mid={route} preview={preview ? exit : undefined} />;
       return preview ? (
-        <HomeScreen home={preview.home} today={today} onToggle={togglePreview} alert={saveError}
-                    preview={{ name: preview.name, onExit: () => setPreview(null) }} />
+        <HomeScreen home={preview.home} today={today} onToggle={togglePreview} alert={saveError} preview={exit} />
       ) : (
         <InstructorScreen me={load.me} trainees={load.trainees} opening={opening} onPick={openPreview}
                           alert={saveError} />
       );
+    }
     case "ok":
+      if (route !== null) return <WorkfileScreen key={route} mid={route} />;
       return <HomeScreen home={load.home} today={today} onToggle={onToggle} alert={saveError} />;
   }
 }

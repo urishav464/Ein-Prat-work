@@ -1,0 +1,302 @@
+{
+ "as_of": "2026-10-19",
+ "tasks": [
+  {
+   "id": 38,
+   "status": "DONE",
+   "details": null,
+   "category": "נושא",
+   "due_date": "2026-09-24",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "סגירת נושא"
+  },
+  {
+   "id": 39,
+   "status": "DONE",
+   "details": null,
+   "category": "קישוט",
+   "due_date": "2026-10-08",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "תכנון קישוט וחלוקת משימות"
+  },
+  {
+   "id": 40,
+   "status": "DONE",
+   "details": null,
+   "category": "הזמנה",
+   "due_date": "2026-10-08",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "עיצוב הזמנה (קנבה)"
+  },
+  {
+   "id": 41,
+   "status": "DONE",
+   "details": null,
+   "category": "כיבוד",
+   "due_date": "2026-10-08",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "רשימת קניות"
+  },
+  {
+   "id": 42,
+   "status": "DONE",
+   "details": null,
+   "category": "הזמנה",
+   "due_date": "2026-10-08",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "הדפסה/רכישה"
+  },
+  {
+   "id": 43,
+   "status": "DONE",
+   "details": null,
+   "category": null,
+   "due_date": null,
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "סידור הבית מדרש"
+  },
+  {
+   "id": 44,
+   "status": "DONE",
+   "details": null,
+   "category": "אחרי",
+   "due_date": "2026-10-22",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "עדכון מאגר המרצים באפליקציה — סטטוסים, אזור, פרטי קשר"
+  },
+  {
+   "id": 45,
+   "status": "TO DO",
+   "details": null,
+   "category": "אחרי",
+   "due_date": "2026-10-22",
+   "lesson_id": null,
+   "mishmar_id": 5,
+   "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
+  },
+  {
+   "id": 183,
+   "status": "DONE",
+   "details": null,
+   "category": "מרצים",
+   "due_date": "2026-10-01",
+   "lesson_id": 8,
+   "mishmar_id": 5,
+   "task_description": "סגירת מרצה — שיעור 1"
+  },
+  {
+   "id": 184,
+   "status": "DONE",
+   "details": null,
+   "category": "תוכן",
+   "due_date": "2026-10-08",
+   "lesson_id": 8,
+   "mishmar_id": 5,
+   "task_description": "דף מקורות — שיעור 1"
+  },
+  {
+   "id": 185,
+   "status": "DONE",
+   "details": null,
+   "category": "מרצים",
+   "due_date": "2026-10-01",
+   "lesson_id": 10,
+   "mishmar_id": 5,
+   "task_description": "סגירת מרצה — שיעור 2"
+  },
+  {
+   "id": 186,
+   "status": "DONE",
+   "details": null,
+   "category": "תוכן",
+   "due_date": "2026-10-08",
+   "lesson_id": 10,
+   "mishmar_id": 5,
+   "task_description": "דף מקורות — שיעור 2"
+  },
+  {
+   "id": 187,
+   "status": "DONE",
+   "details": null,
+   "category": "מרצים",
+   "due_date": "2026-10-01",
+   "lesson_id": 12,
+   "mishmar_id": 5,
+   "task_description": "סגירת מרצה — שיעור 3"
+  },
+  {
+   "id": 188,
+   "status": "DONE",
+   "details": null,
+   "category": "תוכן",
+   "due_date": "2026-10-08",
+   "lesson_id": 12,
+   "mishmar_id": 5,
+   "task_description": "דף מקורות — שיעור 3"
+  },
+  {
+   "id": 189,
+   "status": "DONE",
+   "details": null,
+   "category": "תוכן",
+   "due_date": "2026-10-08",
+   "lesson_id": 14,
+   "mishmar_id": 5,
+   "task_description": "מי מעביר את התוכן — חבורות"
+  },
+  {
+   "id": 190,
+   "status": "DONE",
+   "details": null,
+   "category": "תוכן",
+   "due_date": "2026-10-08",
+   "lesson_id": 14,
+   "mishmar_id": 5,
+   "task_description": "דפי מקורות למעבירי החבורות"
+  },
+  {
+   "id": 191,
+   "status": "DONE",
+   "details": null,
+   "category": "לוגיסטיקה",
+   "due_date": "2026-10-15",
+   "lesson_id": 14,
+   "mishmar_id": 5,
+   "task_description": "חלוקת חללים למעבירי החבורות"
+  }
+ ],
+ "status": "ok",
+ "viewer": "trainee",
+ "lessons": [
+  {
+   "id": 8,
+   "title": null,
+   "format": null,
+   "people": [
+    {
+     "id": 1,
+     "name": "מרצה 1",
+     "room": null,
+     "phone": null,
+     "status": "⬜ לא פנינו",
+     "source_url": null
+    }
+   ],
+   "is_break": false,
+   "slot_order": 1,
+   "source_url": null,
+   "start_time": "20:00",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 75
+  },
+  {
+   "id": 9,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": true,
+   "slot_order": 2,
+   "source_url": null,
+   "start_time": "21:15",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 30
+  },
+  {
+   "id": 10,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": false,
+   "slot_order": 3,
+   "source_url": null,
+   "start_time": "21:45",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 75
+  },
+  {
+   "id": 11,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": true,
+   "slot_order": 4,
+   "source_url": null,
+   "start_time": "23:00",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 30
+  },
+  {
+   "id": 12,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": false,
+   "slot_order": 5,
+   "source_url": null,
+   "start_time": "23:30",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 75
+  },
+  {
+   "id": 13,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": true,
+   "slot_order": 6,
+   "source_url": null,
+   "start_time": "00:45",
+   "description": null,
+   "lesson_role": null,
+   "speaker_name": null,
+   "duration_minutes": 15
+  },
+  {
+   "id": 14,
+   "title": null,
+   "format": null,
+   "people": [],
+   "is_break": false,
+   "slot_order": 7,
+   "source_url": null,
+   "start_time": "01:00",
+   "description": null,
+   "lesson_role": "חבורות",
+   "speaker_name": null,
+   "duration_minutes": 60
+  }
+ ],
+ "mishmar": {
+  "id": 5,
+  "note": null,
+  "topic": "נושא בדיקה — גבולות הסמכות",
+  "owners": [
+   "חניך/ה לדוגמה",
+   "שותף/ה 1"
+  ],
+  "start_time": "20:00",
+  "hebrew_date": "ד׳ חשון תשפ״ז",
+  "mishmar_type": "חיצוני",
+  "gregorian_date": "15.10.2026",
+  "invitation_url": null,
+  "is_staff_built": false
+ },
+ "logistics": []
+}

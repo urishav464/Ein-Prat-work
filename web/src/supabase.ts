@@ -39,3 +39,5 @@ export const configProblem: ConfigProblem | null = problem;
 // (real-shaped, names replaced), and nothing is sent anywhere.
 export const askedForDemo = new URLSearchParams(window.location.search).has("demo");
 export const demoMode = !supabase || askedForDemo;
+
+export const signOut = () => supabase?.auth.signOut();

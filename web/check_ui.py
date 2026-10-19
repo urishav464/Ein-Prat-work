@@ -210,10 +210,11 @@ class MockSupabase:
     """Answers the browser's calls to the mock host; records what it was asked."""
 
     def __init__(self, rpc_status: int = 200, rpc_body: dict | None = None, save_status: int = 200,
-                 as_body: dict | None = None):
+                 as_body: dict | None = None, wf_body: dict | None = None):
         self.rpc_status, self.rpc_body = rpc_status, rpc_body or {}
         self.save_status = save_status
         self.as_body = as_body or {"status": "forbidden"}
+        self.wf_body = wf_body
         self.calls: list[dict] = []
 
     def __call__(self, route, request):
@@ -233,6 +234,30 @@ class MockSupabase:
         if u.path == "/rest/v1/rpc/v2_home_as":
             return route.fulfill(status=200, content_type="application/json",
                                  body=json.dumps(self.as_body, ensure_ascii=False))
+        # the workfile's doors answer like v2.sql does: the evening asked for,
+        # and the task as the database would store it
+        b = body if isinstance(body, dict) else {}
+        answer = None
+        if u.path == "/rest/v1/rpc/v2_workfile":
+            answer = json.loads(json.dumps(self.wf_body)) if self.wf_body else {"status": "forbidden"}
+            if self.wf_body:
+                answer["mishmar"]["id"] = b.get("p_mishmar_id")
+        elif u.path == "/rest/v1/rpc/v2_add_task":
+            answer = {"status": "ok", "task": {
+                "id": 9999, "mishmar_id": b.get("p_mishmar_id"), "task_description": b.get("p_text"),
+                "details": None, "status": "TO DO", "category": b.get("p_category") or "תוכן",
+                "due_date": None, "lesson_id": None}}
+        elif u.path == "/rest/v1/rpc/v2_edit_task":
+            base = next((t for t in (self.wf_body or {}).get("tasks", []) if t["id"] == b.get("p_task_id")), {})
+            answer = {"status": "ok", "task": {
+                **base, "task_description": b.get("p_text") or base.get("task_description"),
+                "details": b.get("p_details") or None, "due_date": b.get("p_due_date") or base.get("due_date"),
+                "lesson_id": b.get("p_lesson_id")}}
+        elif u.path == "/rest/v1/rpc/v2_delete_task":
+            answer = {"status": "ok", "task": {"id": b.get("p_task_id")}}
+        if answer is not None:
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps(answer, ensure_ascii=False))
         if u.path == "/rest/v1/rpc/v2_set_task_status":
             ok = self.save_status == 200
             answer = ({"status": "ok", "task": {"id": (body or {}).get("p_task_id"),
@@ -512,6 +537,154 @@ def check_auth(browser, base: str, shots: Path, checks: dict, facts: dict) -> No
         ctx.close()
 
 
+def workfile_fixture() -> dict:
+    """The demo evening, made worth testing: open tasks in every phase, people
+    with phones on its slots, a חבורות round with rooms — and one row with a
+    «javascript:» link that must never become a link."""
+    wf = json.loads((WEB / "src/demo_workfile.json").read_text(encoding="utf-8"))
+    wf["viewer"] = "trainee"
+    for t in wf["tasks"]:
+        t["status"] = "TO DO"
+    slots = [l for l in wf["lessons"] if not l["is_break"]]
+    slots[0]["people"] = [{"id": 501, "name": "מועמד/ת א", "status": "📩 נשלחה פנייה", "phone": "050-111-2222",
+                           "room": None, "source_url": None}]
+    slots[0]["source_url"] = "javascript:alert(1)"
+    rounds = [l for l in slots if "חבורות" in (l.get("lesson_role") or "")]
+    if rounds:
+        rounds[0]["people"] = [{"id": 502, "name": "מעביר/ה א", "status": None, "phone": None,
+                                "room": "כיתת שבייד", "source_url": "https://example.org/sheet"}]
+    return wf
+
+
+def wf_page(browser, base: str, mock: MockSupabase, width: int, mid: int):
+    ctx = browser.new_context(viewport={"width": width, "height": 900}, locale="he-IL")
+    ctx.route(f"{MOCK}/**", mock)
+    key = f"sb-{urlparse(MOCK).hostname.split('.')[0]}-auth-token"
+    ctx.add_init_script(f"localStorage.setItem({json.dumps(key)}, {json.dumps(json.dumps(session()))})")
+    page = ctx.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("dialog", lambda d: d.accept())            # «למחוק את המשימה…?» → yes
+    page.goto(f"{base}/#/m/{mid}")
+    return ctx, page, errors
+
+
+def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks: dict, facts: dict) -> None:
+    demo_home = json.loads((WEB / "src/demo.json").read_text(encoding="utf-8"))
+    wf = workfile_fixture()
+    mid = wf["mishmar"]["id"]
+
+    # the demo: a door from the home, three tabs, a local add
+    for w in WIDTHS:
+        ctx = browser.new_context(viewport={"width": w, "height": 900}, locale="he-IL")
+        page = ctx.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{demo_base}/?demo")
+        page.get_by_role("link", name=re.compile(rf"#{mid:02d}")).first.click()
+        k = f"workfile demo@{w}: "
+        try:
+            page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+            tabs = page.get_by_role("tab").all_inner_texts()
+            page.fill("#new-task", "משימה מקומית")
+            page.get_by_role("button", name="הוסף").click()
+            added = page.get_by_text("משימה מקומית").count() > 0
+            page.get_by_role("tab", name="הערב").click()
+            times = page.locator("section[id^=slot-]").first.inner_text()
+            overflow = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+            page.screenshot(path=str(shots / f"v2-workfile-demo-{w}.png"), full_page=True)
+        except Exception as e:
+            tabs, added, times, overflow = [], False, f"failed: {str(e).splitlines()[0]}", 1
+        facts[f"workfile demo@{w}"] = {"tabs": tabs, "first_slot": times[:80]}
+        checks[k + "the home's card opens it; three tabs; an add shows; slots with times"] = \
+            tabs == ["המשימות", "הערב", "לוגיסטיקה"] and added and bool(re.search(r"\d{2}:\d{2}–\d{2}:\d{2}", times))
+        checks[k + "no sideways scroll, no page errors"] = overflow <= 0 and not errors
+        ctx.close()
+
+    # signed in: one read, and every write is exactly one call that says what it does
+    for w in WIDTHS:
+        mock = MockSupabase(rpc_body=demo_home, wf_body=wf)
+        ctx, page, errors = wf_page(browser, auth_base, mock, w, mid)
+        k = f"workfile@{w}: "
+        f: dict = {}
+        try:
+            page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+            page.wait_for_timeout(800)
+            f["reads"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_workfile"]
+            # ✓ on the first open task of the open phase
+            tid = int(page.locator("details[open] [data-task]").first.get_attribute("data-task"))
+            page.locator(f"[data-task='{tid}'] button[aria-label^='סמן שבוצע']").click()
+            page.wait_for_timeout(400)
+            f["tick"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_set_task_status"]
+            f["tid"] = tid
+            # add
+            page.fill("#new-task", "משימה מהבדיקה")
+            page.select_option("select[aria-label='קטגוריה']", "קישוט")
+            page.get_by_role("button", name="הוסף").click()
+            page.locator("[data-task='9999']").wait_for(state="attached", timeout=5000)
+            f["add"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_add_task"]
+            # edit the ✓'d task: a new title, through the sheet
+            row = page.locator("[data-task]").filter(has=page.locator("button[aria-label^='עריכה']")).first
+            eid = int(row.get_attribute("data-task"))
+            row.locator("button[aria-label^='עריכה']").click()
+            sheet = page.get_by_role("dialog", name="עריכת משימה")
+            sheet.locator("input").first.fill("כותרת שנערכה")
+            sheet.get_by_role("button", name="💾 שמור").click()
+            page.get_by_text("כותרת שנערכה").first.wait_for(timeout=5000)
+            f["edit"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_edit_task"]
+            f["eid"] = eid
+            # delete the added one (the confirm is accepted by the page's dialog handler)
+            page.locator("[data-task='9999'] button[aria-label^='מחיקה']").click()
+            page.locator("[data-task='9999']").wait_for(state="detached", timeout=5000)
+            f["delete"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_delete_task"]
+            # the evening: a phone to tap, and no link made of a «javascript:» URL
+            page.get_by_role("tab", name="הערב").click()
+            f["tel"] = page.locator("a[href^='tel:']").evaluate_all("els => els.map(e => e.getAttribute('href'))")
+            f["js_links"] = page.locator("a[href^='javascript']").count()
+            f["https_links"] = page.locator("a[href^='https://example.org']").count()
+            f["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+            page.screenshot(path=str(shots / f"v2-workfile-evening-{w}.png"), full_page=True)
+        except Exception as e:
+            f["failed_at"] = str(e).splitlines()[0]
+        facts[f"workfile@{w}"] = f
+        checks[k + "exactly one v2_workfile, for that evening"] = f.get("reads") == [{"p_mishmar_id": mid}]
+        checks[k + "✓ → one v2_set_task_status for that task"] = \
+            f.get("tick") == [{"p_task_id": f.get("tid"), "p_status": "DONE"}]
+        checks[k + "add → one v2_add_task (text, category), the card appears"] = f.get("add") == [
+            {"p_mishmar_id": mid, "p_text": "משימה מהבדיקה", "p_category": "קישוט"}]
+        checks[k + "edit → one v2_edit_task with the new title, shown"] = bool(f.get("edit")) and len(f["edit"]) == 1 \
+            and f["edit"][0].get("p_task_id") == f.get("eid") and f["edit"][0].get("p_text") == "כותרת שנערכה"
+        checks[k + "delete → confirmed, one v2_delete_task, the card gone"] = f.get("delete") == [{"p_task_id": 9999}]
+        checks[k + "a phone is a tel: link; a «javascript:» URL never a link"] = \
+            f.get("tel") == ["tel:0501112222"] and f.get("js_links") == 0 and f.get("https_links", 0) >= 1
+        checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
+        ctx.close()
+
+    # the instructor: everything visible, nothing to write with
+    seen = dict(wf, viewer="instructor")
+    mock = MockSupabase(rpc_body={"status": "instructor", "me": {"id": 100, "name": "מדריך/ה לדוגמה"},
+                                  "trainees": []}, wf_body=seen)
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+        g = page.evaluate("""() => ({
+          add: !!document.querySelector('#new-task'),
+          edits: document.querySelectorAll('button[aria-label^="עריכה"], button[aria-label^="מחיקה"]').length,
+          live: [...document.querySelectorAll('button[aria-label^="סמן שבוצע"]')].filter(b => !b.disabled).length,
+          note: document.body.innerText.includes('צפייה בלבד'),
+        })""")
+    except Exception as e:
+        g = {"failed_at": str(e).splitlines()[0]}
+    writes = [c["path"] for c in mock.calls if c["path"] in (
+        "/rest/v1/rpc/v2_add_task", "/rest/v1/rpc/v2_edit_task", "/rest/v1/rpc/v2_delete_task",
+        "/rest/v1/rpc/v2_set_task_status")]
+    facts["workfile instructor"] = g
+    checks["workfile instructor: view-only — no add, no edit/delete, no live ✓, says so; no write sent"] = \
+        g.get("add") is False and g.get("edits") == 0 and g.get("live") == 0 and g.get("note") is True \
+        and not writes and not errors
+    ctx.close()
+
+
 def check_settings(browser, messy: str, badurl: str, shots: Path, checks: dict, facts: dict) -> None:
     """Hand-pasted settings: cleaned when they can be, named when they cannot —
     never a blank page."""
@@ -573,8 +746,10 @@ def main(argv: list[str]) -> int:
         all("SECRET Supabase key" in out for out in refused)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
-        check_demo(browser, serve(tmp / "demo", under), shots, checks, facts)
-        check_auth(browser, serve(tmp / "auth", under), shots, checks, facts)
+        demo_base, auth_base = serve(tmp / "demo", under), serve(tmp / "auth", under)
+        check_demo(browser, demo_base, shots, checks, facts)
+        check_auth(browser, auth_base, shots, checks, facts)
+        check_workfile(browser, demo_base, auth_base, shots, checks, facts)
         check_settings(browser, serve(tmp / "messy", under), serve(tmp / "badurl", under),
                        shots, checks, facts)
         browser.close()

@@ -2,6 +2,7 @@
 
     python3 scripts/harness/db.py up
     python3 web/supabase/test_v2.py [--on N] [--export web/src/demo.json]
+                                    [--export-workfile web/src/demo_workfile.json]
 
 Builds a throwaway copy of the fixture (`db.py fresh v2test`), gives it the
 grants a Supabase project hands out by itself — every table, sequence and new
@@ -29,17 +30,37 @@ address, and checks, as the roles Supabase gives a browser:
     anon, signed out, e-mail sign-up, unknown address, the instructor →
         refused, nothing changes
     the linked trainee, a pair task of their evening  → «ok»: status and
-        updated_at change, and no other column
-    the partner's own task, another evening's task, a task that does not
-        exist → «forbidden»; a status outside the table's three → «invalid_status»
+        updated_at change, and no other column; the partner's own task too
+        (both of the pair see it on the workfile, as in the Streamlit app)
+    another evening's task, a task that does not exist → «forbidden»; a
+        status outside the table's three → «invalid_status»
+  v2_workfile(evening)
+    the pair's own evening → every task of it, its slots and their people;
+        a phone ONLY inside lessons[].people[], no e-mail / contact anywhere
+    another evening, unknown address → «forbidden»; anon cannot call
+    the instructor → any evening, «viewer: instructor»; a missing one → not_found
+  v2_add_task / v2_edit_task / v2_delete_task
+    add: category and due date exactly what dm.add_task writes for the same
+        text (dm.classify_task / dm.compute_due_date), a pair task, not
+        generated; a bad category / empty or long text / another evening /
+        the instructor → refused, nothing inserted
+    edit: title, details, due date and slot change and nothing else; empty
+        title kept, empty details cleared, no date kept; a slot of another
+        evening, another evening's task, the instructor → refused, unchanged
+    delete: another evening's task, the instructor → refused, still there
+  the twins
+    every needle of dm._CATEGORY_RULES and every task text in the fixture
+    classifies the same in SQL; every category × date gets the same due date
   the catalog
     anon / authenticated hold no privilege on any table, view or sequence in
-    `public`; EXECUTE on exactly the three doors, for `authenticated` only; and
-    no way into `v2_private`, the schema behind them
+    `public`; EXECUTE on exactly the seven doors, for `authenticated` only;
+    and no way into `v2_private`, the schema behind them
 
 `--on N` picks a trainee of evening N. `--export PATH` writes the «ok» answer,
-names replaced by placeholders, as the front end's demo data. Prints one JSON
-line; exit 1 on any failed check."""
+names replaced by placeholders, as the front end's demo data, and
+`--export-workfile PATH` that trainee's workfile of evening N the same way —
+every person's name and phone replaced, links, notes and task details
+dropped. Prints one JSON line; exit 1 on any failed check."""
 import json
 import subprocess
 import sys
@@ -89,9 +110,13 @@ SELECT 'schema', 'v2_private', r.role
  WHERE has_schema_privilege(r.role, 'v2_private', 'USAGE')
  ORDER BY 1, 2, 3
 """
-EXPECTED_LEAKS = [["function", "public.v2_home_as", "authenticated"],
+EXPECTED_LEAKS = [["function", "public.v2_add_task", "authenticated"],
+                  ["function", "public.v2_delete_task", "authenticated"],
+                  ["function", "public.v2_edit_task", "authenticated"],
+                  ["function", "public.v2_home_as", "authenticated"],
                   ["function", "public.v2_my_home", "authenticated"],
-                  ["function", "public.v2_set_task_status", "authenticated"]]
+                  ["function", "public.v2_set_task_status", "authenticated"],
+                  ["function", "public.v2_workfile", "authenticated"]]
 INSTRUCTOR = "instructor.test@example.org"
 
 
@@ -118,7 +143,13 @@ def keys_in(obj) -> set:
 
 def main(argv: list[str]) -> int:
     import psycopg2
+    sys.path.insert(0, str(ROOT))
+    import logging
+    import streamlit                   # noqa: F401 — creates its loggers, then quiet them:
+    logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
+    import data_manager as dm          # the twins are checked against the real rules
     export = argv[argv.index("--export") + 1] if "--export" in argv else None
+    export_wf = argv[argv.index("--export-workfile") + 1] if "--export-workfile" in argv else None
     conn = psycopg2.connect(dsn_for("v2test"))
     conn.autocommit = True
     cur = conn.cursor()
@@ -265,20 +296,193 @@ def main(argv: list[str]) -> int:
     write(me, pair_task, before["status"])            # back as it was
 
     guarded = {}
-    for name, tid in (("partner's own task", partner_task), ("another evening's task", foreign_task),
+    for name, tid in (("another evening's task", foreign_task),
                       ("a task that does not exist", 2_000_000_000)):
-        if tid is None:
-            continue
         was = row(tid)
         guarded[name] = (write(me, tid, "DONE") or {}).get("status") == "forbidden" and row(tid) == was
-    checks["write: partner's / other evening's / missing task → forbidden, unchanged"] = \
-        bool(guarded) and all(guarded.values())
+    checks["write: other evening's / missing task → forbidden, unchanged"] = all(guarded.values())
+    if partner_task is not None:
+        was = row(partner_task)
+        res = write(me, partner_task, "DONE")
+        checks["write: the partner's own task → ok (both see it on the workfile)"] = \
+            (res or {}).get("status") == "ok" and row(partner_task)["status"] == "DONE"
+        write(me, partner_task, was["status"])        # back as it was
     was = row(pair_task)
     checks["write: a status outside the three → invalid_status, unchanged"] = \
         (write(me, pair_task, "FINISHED") or {}).get("status") == "invalid_status" and row(pair_task) == was
     was = row(pair_task)
     checks["write: the instructor (view-only) → refused, unchanged"] = \
         (write(boss, pair_task, "DONE") or {}).get("status") == "instructor" and row(pair_task) == was
+
+    # ---- the workfile: one evening whole, for its pair and the instructor
+    # The trainee's evening with the most slots (the one --on picked, if any).
+    # An evening without any gets one slot and one person with a phone, in this
+    # throwaway copy, so the phone rule is always exercised.
+    cur.execute("""SELECT a.mishmar_id FROM assignments a
+                    LEFT JOIN lessons l ON l.mishmar_id = a.mishmar_id
+                    WHERE a.student_id = %s GROUP BY a.mishmar_id
+                    ORDER BY (a.mishmar_id = %s) DESC, count(l.id) DESC, a.mishmar_id LIMIT 1""",
+                (me_id, on or 0))
+    wf_mid = cur.fetchone()[0]
+    cur.execute("SELECT id FROM lessons WHERE mishmar_id = %s AND NOT is_break ORDER BY slot_order LIMIT 1",
+                (wf_mid,))
+    got = cur.fetchone()
+    if got:
+        slot = got[0]
+    else:
+        cur.execute("INSERT INTO lessons (mishmar_id, slot_order, title) VALUES (%s, 1, 'מקטע בדיקה') "
+                    "RETURNING id", (wf_mid,))
+        slot = cur.fetchone()[0]
+    cur.execute("SELECT count(*) FROM lesson_speakers WHERE lesson_id = %s", (slot,))
+    if not cur.fetchone()[0]:
+        cur.execute("INSERT INTO lesson_speakers (lesson_id, name, phone) VALUES (%s, 'מועמד בדיקה', '050-1234567')",
+                    (slot,))
+    cur.execute("SELECT id FROM mishmarim WHERE id <> ALL(%s) ORDER BY id LIMIT 1", (my_mids,))
+    other_mid = cur.fetchone()[0]
+    cur.execute("SELECT id FROM lessons WHERE mishmar_id = %s ORDER BY id LIMIT 1", (other_mid,))
+    other_slot = (cur.fetchone() or [None])[0]
+    if other_slot is None:
+        cur.execute("INSERT INTO lessons (mishmar_id, slot_order, title) VALUES (%s, 1, 'מקטע זר') RETURNING id",
+                    (other_mid,))
+        other_slot = cur.fetchone()[0]
+
+    def wf(claims: dict | None, mid: int, role: str = "authenticated"):
+        return call(role, claims, "SELECT public.v2_workfile(%s)", (mid,))
+
+    def phone_paths(obj, path=()):
+        out = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == "phone":
+                    out.append(path)
+                out += phone_paths(v, path + (k,))
+        elif isinstance(obj, list):
+            for v in obj:
+                out += phone_paths(v, path + ("[]",))
+        return out
+
+    mine = wf(trainee, wf_mid)
+    cur.execute("SELECT count(*) FROM tasks WHERE mishmar_id = %s", (wf_mid,))
+    n_tasks = cur.fetchone()[0]
+    ok_wf = isinstance(mine, dict) and mine.get("status") == "ok"
+    checks["workfile: the pair's own evening → ok, every task of it, its slots"] = ok_wf \
+        and mine["viewer"] == "trainee" and mine["mishmar"]["id"] == wf_mid \
+        and len(mine["tasks"]) == n_tasks and any(l["people"] for l in mine["lessons"])
+    checks["workfile: a phone only on a slot's people; no e-mail / contact anywhere"] = ok_wf \
+        and bool(phone_paths(mine)) and all(p == ("lessons", "[]", "people", "[]") for p in phone_paths(mine)) \
+        and not (keys_in(mine) & {"email", "contact"})
+    refused_wf = {
+        "anon": wf(trainee, wf_mid, role="anon") == "denied",
+        "signed out": (wf(None, wf_mid) or {}).get("status") == "signed_out",
+        "e-mail sign-up": (wf({"email": EMAIL, "app_metadata": {"provider": "email"}}, wf_mid)
+                           or {}).get("status") == "wrong_provider",
+        "another evening": (wf(trainee, other_mid) or {}).get("status") == "forbidden",
+        "unknown address": (wf({"email": "someone@example.org", **GOOGLE}, wf_mid)
+                            or {}).get("status") == "forbidden",
+    }
+    checks["workfile: anon / signed out / e-mail / another evening / unknown refused"] = all(refused_wf.values())
+    seen = wf(boss, other_mid)
+    checks["workfile: the instructor → any evening, as the instructor; a missing one → not_found"] = \
+        (seen or {}).get("status") == "ok" and seen["viewer"] == "instructor" \
+        and (wf(boss, 2_000_000) or {}).get("status") == "not_found"
+
+    # ---- the task board's writes
+    def count_tasks(mid: int) -> int:
+        cur.execute("SELECT count(*) FROM tasks WHERE mishmar_id = %s", (mid,))
+        return cur.fetchone()[0]
+
+    def add(claims, mid, text, cat=None, role="authenticated"):
+        return call(role, claims, "SELECT public.v2_add_task(%s, %s, %s)", (mid, text, cat))
+
+    def edit(claims, tid, text, details, due, lesson, role="authenticated"):
+        return call(role, claims, "SELECT public.v2_edit_task(%s, %s, %s, %s, %s)",
+                    (tid, text, details, due, lesson))
+
+    def delete(claims, tid, role="authenticated"):
+        return call(role, claims, "SELECT public.v2_delete_task(%s)", (tid,))
+
+    cur.execute("SELECT gregorian_date FROM mishmarim WHERE id = %s", (wf_mid,))
+    evening = cur.fetchone()[0]
+    parity = {}
+    added = []
+    for text, cat in (("לקנות כיבוד לערב", None), ("לתאם עם המרצה", None),
+                      ("משימה בלי שום מילת מפתח", None), ("לסדר פרחים", "קישוט")):
+        res = add(trainee, wf_mid, text, cat)
+        t = (res or {}).get("task") or {}
+        want_cat = cat or dm.classify_task(text)
+        parity[text] = (res or {}).get("status") == "ok" and t.get("category") == want_cat \
+            and t.get("due_date") == dm.compute_due_date(evening, want_cat)
+        if t.get("id"):
+            added.append(t["id"])
+    checks["add: category and due date exactly as dm.add_task"] = all(parity.values())
+    new = row(added[0]) if added else {}
+    checks["add: a pair task, open, not generated, no slot"] = bool(new) and new["student_id"] is None \
+        and new["status"] == "TO DO" and new["generated"] is False and new["lesson_id"] is None
+    before_n = count_tasks(wf_mid), count_tasks(other_mid)
+    refused_add = {
+        "bad category": (add(trainee, wf_mid, "x", "המצאה") or {}).get("status") == "invalid_category",
+        "empty text": (add(trainee, wf_mid, "   ") or {}).get("status") == "invalid_text",
+        "long text": (add(trainee, wf_mid, "א" * 301) or {}).get("status") == "invalid_text",
+        "another evening": (add(trainee, other_mid, "x") or {}).get("status") == "forbidden",
+        "the instructor": (add(boss, wf_mid, "x") or {}).get("status") == "instructor",
+        "anon": add(trainee, wf_mid, "x", role="anon") == "denied",
+        "signed out": (add(None, wf_mid, "x") or {}).get("status") == "signed_out",
+    }
+    checks["add: bad category / empty / long / another evening / instructor / anon refused, nothing in"] = \
+        all(refused_add.values()) and (count_tasks(wf_mid), count_tasks(other_mid)) == before_n
+
+    tid = added[0] if added else 0
+    was = row(tid)
+    res = edit(trainee, tid, "  כותרת חדשה  ", "פרטים חדשים", "2026-12-01", slot)
+    now = row(tid)
+    changed = {k for k in now if now[k] != was[k]} if was and now else {"?"}
+    checks["edit: title, details, due date and slot — and nothing else"] = \
+        (res or {}).get("status") == "ok" and now["task_description"] == "כותרת חדשה" \
+        and now["details"] == "פרטים חדשים" and now["due_date"] == "2026-12-01" \
+        and now["lesson_id"] == slot \
+        and changed <= {"task_description", "details", "due_date", "lesson_id", "updated_at"}
+    edit(trainee, tid, "", "", None, None)
+    now = row(tid)
+    checks["edit: empty title kept, empty details cleared, no date kept, slot cleared"] = \
+        now["task_description"] == "כותרת חדשה" and now["details"] is None \
+        and now["due_date"] == "2026-12-01" and now["lesson_id"] is None
+    was = row(tid)
+    was_foreign = row(foreign_task)
+    refused_edit = {
+        "a slot of another evening": (edit(trainee, tid, "x", "", None, other_slot) or {}).get("status") == "forbidden",
+        "another evening's task": (edit(trainee, foreign_task, "x", "", None, None) or {}).get("status") == "forbidden",
+        "the instructor": (edit(boss, tid, "x", "", None, None) or {}).get("status") == "instructor",
+        "anon": edit(trainee, tid, "x", "", None, None, role="anon") == "denied",
+    }
+    checks["edit: another evening's slot / task, the instructor, anon refused — unchanged"] = \
+        all(refused_edit.values()) and row(tid) == was and row(foreign_task) == was_foreign
+
+    refused_del = {
+        "another evening's task": (delete(trainee, foreign_task) or {}).get("status") == "forbidden",
+        "the instructor": (delete(boss, tid) or {}).get("status") == "instructor",
+        "anon": delete(trainee, tid, role="anon") == "denied",
+    }
+    checks["delete: another evening's task, the instructor, anon refused — still there"] = \
+        all(refused_del.values()) and row(foreign_task) is not None and row(tid) is not None
+    gone = all((delete(trainee, t) or {}).get("status") == "ok" for t in added)
+    checks["delete: the pair's own task → gone"] = gone and all(row(t) is None for t in added)
+
+    # ---- the twins: the SQL copies of dm's rules must give the same answers
+    cur.execute("RESET ROLE")
+    texts = [n for _, needles in dm._CATEGORY_RULES for n in needles]
+    cur.execute("SELECT DISTINCT task_description FROM tasks")
+    texts += [r[0] for r in cur.fetchall()] + ["", "לשלוח תודה למרצים", "משימה בלי שום מילת מפתח"]
+    cur.execute("SELECT t, v2_private.classify_task(t) FROM unnest(%s::text[]) AS t", (texts,))
+    sql_cls = dict(cur.fetchall())
+    wrong_cls = [t for t in texts if sql_cls.get(t) != dm.classify_task(t)]
+    checks[f"twin: classify_task agrees on {len(set(texts))} texts (every needle, every task)"] = not wrong_cls
+    wrong_due = []
+    for d in ("15.10.2026", "1.1.2027", " 5.11.2026 ", "31.2.2027", "", "2026-10-15"):
+        for c in [*dm.DEADLINE_OFFSETS_DAYS, None, "אחר"]:
+            cur.execute("SELECT v2_private.due_date(%s, %s)::text", (d, c))
+            if cur.fetchone()[0] != dm.compute_due_date(d, c):
+                wrong_due.append((d, c))
+    checks["twin: due_date agrees on every category × date (incl. bad dates)"] = not wrong_due
 
     # ---- the catalog
     for table in ("tasks", "students", "speakers", "v_tasks_full"):
@@ -302,7 +506,7 @@ def main(argv: list[str]) -> int:
             cur.execute("RESET ROLE")
     cur.execute(LEAKS)
     leaks = [list(r) for r in cur.fetchall()]
-    checks["catalog: only the three doors, only for authenticated"] = leaks == EXPECTED_LEAKS
+    checks["catalog: only the seven doors, only for authenticated"] = leaks == EXPECTED_LEAKS
 
     if export and checks.get("linked address → ok (case-insensitive)"):
         # placeholders for people: the demo must not carry real names
@@ -327,6 +531,43 @@ def main(argv: list[str]) -> int:
         for m in demo["mishmarim"]:
             m["owners"] = [names.get(n, n) for n in m["owners"]]
         Path(export).write_text(json.dumps(demo, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+    if export_wf and ok_wf and checks.get("linked address → ok (case-insensitive)"):
+        # the same placeholders as the home export, and the people on the slots
+        # replaced too: a speaker's name and phone are real people's
+        names = {me_name: "חניך/ה לדוגמה"}
+        for m in ok["mishmarim"]:
+            for n in m["owners"]:
+                names.setdefault(n, f"שותף/ה {len(names)}")
+        people: dict[str, str] = {}
+
+        def person(n: str) -> str:
+            return people.setdefault(n, f"מרצה {len(people) + 1}")
+
+        demo = json.loads(json.dumps(wf(trainee, wf_mid), ensure_ascii=False))
+        m = demo["mishmar"]
+        m["owners"] = [names.get(n, n) for n in m["owners"]]
+        m["note"] = m["invitation_url"] = None
+        for l in demo["lessons"]:
+            for p in l["people"]:
+                p["name"] = person(p["name"])
+                p["phone"] = f"050-000000{len(people) % 10}" if p.get("phone") else None
+                p["source_url"] = None
+            if l.get("speaker_name"):
+                l["speaker_name"] = " · ".join(person(n) for n in l["speaker_name"].split(" · "))
+            l["source_url"] = None
+        for i in demo["logistics"]:
+            i["detail"] = None
+        # as the live app shows it: the home export's past-evening close, so
+        # the two demos agree about the same evening
+        from datetime import date
+        d, mo, y = (int(x) for x in m["gregorian_date"].split("."))
+        past = date(y, mo, d) < date.fromisoformat(demo["as_of"])
+        for t in demo["tasks"]:
+            t["details"] = None
+            if past and "משוב" not in t["task_description"]:
+                t["status"] = "DONE"
+        Path(export_wf).write_text(json.dumps(demo, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
     print(json.dumps({"ok": all(checks.values()), "checks": checks,
                       "public_role_privileges": leaks,
