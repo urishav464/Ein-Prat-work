@@ -333,3 +333,29 @@ export function localToday(): Date {
   const n = new Date();
   return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
 }
+
+// ---- the evening's structure (stage 2ב): the lists the editors offer — the
+// Streamlit slot editor's (app.LESSON_ROLES / LESSON_FORMATS / DURATION_OPTIONS)
+// and data_manager's (CHAVUROT_ROOMS, SPEAKER_STATUSES, PANEL_SEP). The doors
+// in v2.sql check the rooms and the statuses against the same lists.
+export const LESSON_ROLES = ["יסודות", "ערעור", "טוויסט", "נחיתה", "טקס", "מעגל שירה", "חבורות", "אחר"];
+export const LESSON_FORMATS = ["הרצאה", "חבורות", "פאנל", "דיבייט", "כתיבה", "טד", "ניגון", "טקס", "אחר"];
+export const DURATION_OPTIONS: [number, string][] = [[60, "שעה"], [75, "שעה ורבע"], [90, "שעה וחצי"]];
+export const CHAVUROT_ROOMS = ["בית מדרש", "כיתת בית מדרש", "כיתת שבייד", "ספריית שבייד"];
+export const DEFAULT_ROOM = CHAVUROT_ROOMS[0];
+export const CLOSED = "✅ סגור";
+export const SPEAKER_STATUSES = ["⬜ לא פנינו", "📩 נשלחה פנייה", CLOSED, "❌ לא יכול/ה", "⚠️ בתנאי"];
+export const PANEL_SEP = " · ";
+
+// dm.recompute_lesson_times — each slot starts at the evening's start plus the
+// durations before it (unset: a break 30, a lesson 75), and slot_order closes
+// its gaps. The site's clock comes from the database; the demo needs this.
+export function recomputeTimes(lessons: Lesson[], start: string): Lesson[] {
+  const m = /^\s*(\d+)\s*:\s*(\d+)\s*$/.exec(start || "20:00");
+  let minutes = m ? +m[1] * 60 + +m[2] : 20 * 60;
+  return [...lessons].sort((a, b) => a.slot_order - b.slot_order || a.id - b.id).map((l, i) => {
+    const stamp = `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    minutes += l.duration_minutes || (l.is_break ? 30 : 75);
+    return { ...l, start_time: stamp, slot_order: i + 1 };
+  });
+}

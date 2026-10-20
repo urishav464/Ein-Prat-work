@@ -2631,9 +2631,11 @@ def _candidate_status_changed(cid: int, key: str, mid: int, name: str) -> None:
         st.toast(_AMBIGUOUS_WARNING.format(name=name), icon="⚠️")
 
 
-def _close_candidate(lesson_id: int, name: str, mid: int) -> None:
+def _close_candidate(lesson_id: int, name: str, mid: int,
+                     cid: Optional[int] = None) -> None:
+    # by the row that was clicked: by name, «תמר» closed «תמר כהן»
     res = dm.close_lesson_speaker(lesson_id, name, mishmar_id=mid,
-                                  student_id=st.session_state.student_id)
+                                  student_id=st.session_state.student_id, candidate_id=cid)
     # The slot's own «סגירת מרצה» task is what this click means. The sync
     # derives completion from the slot's state, so it closes here AND catches
     # a task the sync created after the speaker was already closed.
@@ -2656,12 +2658,12 @@ def _add_candidate_clicked(lesson_id: int, mid: int, close: bool = False) -> Non
     phone = (st.session_state.get(pk) or "").strip()
     if not name:
         return
-    dm.add_lesson_speaker(lesson_id, name, phone=phone,
-                          student_id=st.session_state.student_id)
+    cid = dm.add_lesson_speaker(lesson_id, name, phone=phone,
+                                student_id=st.session_state.student_id)
     st.session_state[nk] = ""
     st.session_state[pk] = ""
     if close:
-        _close_candidate(lesson_id, name, mid)
+        _close_candidate(lesson_id, name, mid, cid)
     else:
         st.toast(f"«{name}» נוסף כמועמד — וגם למאגר המשותף")
 
@@ -2801,7 +2803,7 @@ def _candidate_rows(mid: int, l: dict, cands: list[dict]) -> None:
             on_change=_candidate_status_changed, args=(cand["id"], skey, mid, cand["name"]))
         cr.button("✅ סגור מרצה", key=f"close-{cand['id']}", type="primary",
                   help="הופך למרצה של השיעור; שאר המועמדים יוסרו ומשימת סגירת המרצה נסגרת",
-                  on_click=_close_candidate, args=(l["id"], cand["name"], mid))
+                  on_click=_close_candidate, args=(l["id"], cand["name"], mid, cand["id"]))
         cr.button("🗑", key=f"ib-rmc-{cand['id']}",
                   on_click=dm.delete_lesson_candidate, args=(cand["id"],))
 
@@ -2962,11 +2964,11 @@ def _lesson_edit_dialog(mid: int, l: dict) -> None:
     if cancel:
         st.rerun()
     if saved:
-        # «—» clears the field: upsert_lesson skips None, so a slot made a panel
-        # by mistake could never go back to having no format at all
-        dm.upsert_lesson(mid, l["slot_order"], title=title,
-                         description=desc, lesson_role=role or "", fmt=fmt or "",
-                         student_id=st.session_state.student_id)
+        # «—» clears the field: None is skipped, so a slot made a panel by
+        # mistake could never go back to having no format at all. By id, not
+        # by position: the v2 site renumbers slots, and `l` may be a cached row
+        dm.update_lesson(l["id"], title=title, description=desc,
+                         lesson_role=role or "", fmt=fmt or "")
         # a slot that becomes a panel keeps the speaker it already closed, and
         # its speaker line is derived from the panel's rows from now on
         if dm.is_panel({**l, "title": title, "lesson_role": role, "format": fmt}):

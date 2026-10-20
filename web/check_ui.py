@@ -685,6 +685,358 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
     ctx.close()
 
 
+STRUCTURE_DOORS = ("v2_set_topic", "v2_add_slot", "v2_save_slot", "v2_delete_slot", "v2_reopen_slot",
+                   "v2_add_person", "v2_edit_person", "v2_set_person_status", "v2_remove_person")
+CLOSED = "✅ סגור"
+
+
+class StructureMock(MockSupabase):
+    """The workfile's mock, now also answering the nine structure doors the
+    way v2.sql does — {status, workfile, result}, the workfile being the
+    evening after the change. What a door WRITES is test_v2_structure.py's
+    business; here the question is whether the screen sends the right call
+    and draws the answer. `refuse` makes a door say no; `fail` makes it 500."""
+
+    def __init__(self, wf: dict, **kw):
+        super().__init__(wf_body=wf, **kw)
+        self.wf = json.loads(json.dumps(wf))
+        self.refuse: dict[str, str] = {}
+        self.fail = False
+        self.next_id = 7000
+
+    def _id(self) -> int:
+        self.next_id += 1
+        return self.next_id
+
+    def _lesson(self, lid):
+        return next((l for l in self.wf["lessons"] if l["id"] == lid), None)
+
+    def _person(self, pid):
+        for l in self.wf["lessons"]:
+            for p in l["people"]:
+                if p["id"] == pid:
+                    return l, p
+        return None, None
+
+    def _apply(self, door: str, b: dict) -> dict:
+        wf, result = self.wf, {}
+        if door == "v2_set_topic" or (door == "v2_add_slot" and b["p_kind"] == "skeleton"):
+            if door == "v2_set_topic":
+                wf["mishmar"]["topic"] = b["p_topic"].strip()
+            if not wf["lessons"]:
+                for n, (brk, mins, role) in enumerate([(False, 75, None), (True, 30, None), (False, 75, None),
+                                                       (True, 30, None), (False, 75, None), (True, 15, None),
+                                                       (False, 60, "חבורות")], 1):
+                    wf["lessons"].append({"id": self._id(), "slot_order": n, "start_time": None,
+                                          "duration_minutes": mins, "is_break": brk, "title": None,
+                                          "description": None, "lesson_role": role, "format": None,
+                                          "speaker_name": None, "source_url": None, "people": []})
+        elif door == "v2_add_slot":
+            k = b["p_kind"]
+            wf["lessons"].append({"id": self._id(), "slot_order": len(wf["lessons"]) + 1, "start_time": "02:00",
+                                  "duration_minutes": 15 if k == "break" else 60, "is_break": k == "break",
+                                  "title": None, "description": None,
+                                  "lesson_role": "חבורות" if k == "chavurot" else None, "format": None,
+                                  "speaker_name": None, "source_url": None, "people": []})
+        elif door == "v2_save_slot":
+            l = self._lesson(b["p_lesson_id"])
+            l["duration_minutes"] = b["p_duration"]
+            if not l["is_break"]:
+                l.update(title=b["p_title"], lesson_role=b["p_role"], format=b["p_format"],
+                         description=b["p_description"], source_url=b["p_source_url"] or None)
+        elif door == "v2_delete_slot":
+            wf["lessons"] = [l for l in wf["lessons"] if l["id"] != b["p_lesson_id"]]
+        elif door == "v2_reopen_slot":
+            self._lesson(b["p_lesson_id"])["speaker_name"] = None
+        elif door == "v2_add_person":
+            l = self._lesson(b["p_lesson_id"])
+            p = {"id": self._id(), "name": b["p_name"], "status": "⬜ לא פנינו", "phone": b["p_phone"] or None,
+                 "room": b["p_room"] or None, "source_url": None}
+            l["people"].append(p)
+            result["person"] = p["id"]
+            if b["p_close"]:
+                result.update(closed=p["name"], removed=[x["name"] for x in l["people"] if x is not p], logged=True)
+                l["people"], l["speaker_name"] = [dict(p, status=CLOSED)], p["name"]
+        elif door == "v2_edit_person":
+            _, p = self._person(b["p_person_id"])
+            for k in ("phone", "room", "source_url"):
+                if b[f"p_{k}"] is not None:
+                    p[k] = b[f"p_{k}"] or None
+        elif door == "v2_set_person_status":
+            l, p = self._person(b["p_person_id"])
+            if b["p_status"] == CLOSED and "פאנל" not in (l.get("format") or ""):
+                result.update(closed=p["name"], removed=[x["name"] for x in l["people"] if x is not p], logged=True)
+                l["people"], l["speaker_name"] = [dict(p, status=CLOSED)], p["name"]
+            else:
+                p["status"] = b["p_status"]
+                result["logged"] = True
+        elif door == "v2_remove_person":
+            l, p = self._person(b["p_person_id"])
+            l["people"] = [x for x in l["people"] if x is not p]
+            result["removed"] = p["name"]
+        result["sync"] = {"created": 0, "removed": 0, "adopted": 0, "completed": 0, "renamed": 0}
+        return {"status": "ok", "workfile": json.loads(json.dumps(wf)), "result": result}
+
+    def __call__(self, route, request):
+        u = urlparse(request.url)
+        door = u.path.rsplit("/", 1)[-1]
+        if u.path.startswith("/rest/v1/rpc/") and door in STRUCTURE_DOORS:
+            body = json.loads(request.post_data or "{}")
+            self.calls.append({"path": u.path, "body": body})
+            if self.fail:
+                return route.fulfill(status=500, content_type="application/json",
+                                     body=json.dumps({"code": "XX000", "message": "boom"}))
+            answer = {"status": self.refuse[door]} if door in self.refuse else self._apply(door, body)
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps(answer, ensure_ascii=False))
+        if u.path == "/rest/v1/rpc/v2_workfile":
+            self.wf_body = self.wf                      # a reload reads what was written
+        return super().__call__(route, request)
+
+    def sent(self, door: str) -> list:
+        return [c["body"] for c in self.calls if c["path"] == f"/rest/v1/rpc/{door}"]
+
+
+def check_structure(browser, demo_base: str, auth_base: str, shots: Path, checks: dict, facts: dict) -> None:
+    """Stage 2ב: every editor of the evening sends ONE call with what it says,
+    and draws the evening the answer carries; a refusal and a failure say so
+    and change nothing; the instructor sees no editor; the demo changes the
+    screen and sends nothing."""
+    demo_home = json.loads((WEB / "src/demo.json").read_text(encoding="utf-8"))
+    base_wf = workfile_fixture()
+    mid = base_wf["mishmar"]["id"]
+    slot0 = next(l for l in base_wf["lessons"] if not l["is_break"])
+    rnd = next(l for l in base_wf["lessons"] if "חבורות" in (l.get("lesson_role") or ""))
+
+    for w in WIDTHS:
+        mock = StructureMock(base_wf, rpc_body=demo_home)
+        ctx, page, errors = wf_page(browser, auth_base, mock, w, mid)
+        k = f"structure@{w}: "
+        f: dict = {}
+        notice = page.get_by_role("status")
+        alert = page.get_by_role("alert")
+        try:
+            page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+            page.get_by_role("tab", name="הערב").click()
+            card = page.locator(f"#slot-{slot0['id']}")
+            # a candidate
+            form = page.locator(f"[data-add='{slot0['id']}']")
+            form.get_by_label("שם מרצה אפשרי").fill("מועמד/ת ב")
+            form.get_by_label("טלפון").fill("052-333-4444")
+            form.get_by_role("button", name="➕ מועמד").click()
+            card.get_by_text("מועמד/ת ב").first.wait_for(timeout=5000)
+            f["add"] = mock.sent("v2_add_person")
+            f["notice"] = notice.inner_text(timeout=3000)
+            new_id = f["new_id"] = mock.next_id
+            # its status, its phone
+            card.get_by_label("סטטוס: מועמד/ת ב").select_option("📩 נשלחה פנייה")
+            page.wait_for_timeout(400)
+            f["status"] = mock.sent("v2_set_person_status")
+            card.get_by_role("button", name="עריכת טלפון: מועמד/ת ב").click()
+            card.get_by_label("טלפון: מועמד/ת ב").fill("053-1")
+            card.get_by_role("button", name="💾").click()
+            card.locator("a[href='tel:0531']").wait_for(timeout=5000)
+            f["phone"] = mock.sent("v2_edit_person")
+            # close the first — the other goes (the confirm is accepted)
+            card.get_by_role("button", name="סגירה: מועמד/ת א").click()
+            card.get_by_role("button", name="🔄 החלפה").wait_for(timeout=5000)
+            f["close"] = mock.sent("v2_set_person_status")[1:]
+            f["closed_view"] = card.inner_text()
+            card.get_by_role("button", name="🔄 החלפה").click()
+            card.get_by_role("button", name="סגירה: מועמד/ת א").wait_for(timeout=5000)
+            f["reopen"] = mock.sent("v2_reopen_slot")
+            card.get_by_role("button", name="הסרה: מועמד/ת א").click()
+            card.get_by_text("מועמד/ת א").first.wait_for(state="detached", timeout=5000)
+            f["remove"] = mock.sent("v2_remove_person")
+            # the slot's editor: a title, and it becomes a panel
+            card.get_by_role("button", name="עריכת המקטע: שיעור 1").click()
+            sheet = page.get_by_role("dialog", name="עריכת מקטע")
+            sheet.get_by_label("כותרת").fill("פתיחה מהבדיקה")
+            sheet.get_by_label("פורמט").select_option("פאנל")
+            sheet.get_by_label("📎 קישור לדף מקורות").fill("javascript:alert(1)")
+            f["bad_link_blocked"] = sheet.get_by_role("button", name="💾 שמירה").is_disabled()
+            sheet.get_by_label("📎 קישור לדף מקורות").fill("https://example.org/sheet-1")
+            sheet.get_by_role("button", name="💾 שמירה").click()
+            card.get_by_text("פתיחה מהבדיקה").wait_for(timeout=5000)
+            f["save"] = mock.sent("v2_save_slot")
+            f["panel_form"] = card.get_by_role("button", name="➕ לפאנל").count()
+            # a break: added at the end, its length, then gone
+            breaks = page.locator("[data-break]").count()
+            page.get_by_role("button", name="➕ הפסקה").click()
+            page.wait_for_function(f"document.querySelectorAll('[data-break]').length > {breaks}", timeout=5000)
+            brk = f["brk"] = mock.next_id
+            f["add_break"] = mock.sent("v2_add_slot")
+            page.locator(f"[data-break='{brk}'] select").select_option("20")
+            page.wait_for_timeout(400)
+            f["break_len"] = [c for c in mock.sent("v2_save_slot") if c["p_lesson_id"] == brk]
+            page.locator(f"[data-break='{brk}'] button[aria-label='מחיקת ההפסקה']").click()
+            page.locator(f"[data-break='{brk}']").wait_for(state="detached", timeout=5000)
+            f["del_break"] = mock.sent("v2_delete_slot")
+            # חבורות: a room, a presenter with a room
+            rcard = page.locator(f"#slot-{rnd['id']}")
+            rcard.get_by_label("חלל: מעביר/ה א").select_option("ספריית שבייד")
+            page.wait_for_timeout(400)
+            f["room"] = [c for c in mock.sent("v2_edit_person") if c["p_room"] is not None]
+            rform = page.locator(f"[data-add='{rnd['id']}']")
+            rform.get_by_label("שם המעביר").fill("מעביר/ה ב")
+            rform.get_by_label("חלל", exact=True).select_option("כיתת בית מדרש")
+            rform.get_by_role("button", name="➕ מעביר").click()
+            rcard.get_by_text("מעביר/ה ב").first.wait_for(timeout=5000)
+            f["presenter"] = mock.sent("v2_add_person")[1:]
+            page.screenshot(path=str(shots / f"v2-evening-edit-{w}.png"), full_page=True)
+            # a refusal: said, nothing redrawn
+            mock.refuse["v2_add_person"] = "too_many"
+            before_people = page.locator("[data-person]").count()
+            form.get_by_label("שם מרצה לפאנל").fill("אחד יותר מדי")
+            form.get_by_role("button", name="➕ לפאנל").click()
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('המקסימום')",
+                                   timeout=5000)
+            f["refused"] = alert.inner_text()
+            f["refused_same"] = page.locator("[data-person]").count() == before_people
+            # a failure: said
+            mock.refuse.clear()
+            mock.fail = True
+            page.get_by_role("button", name="➕ שיעור").click()
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('לא נשמר')",
+                                   timeout=5000)
+            f["failed"] = alert.inner_text()
+            f["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+        except Exception as e:
+            f["failed_at"] = str(e).splitlines()[0]
+            page.screenshot(path=str(shots / f"v2-evening-edit-failed-{w}.png"), full_page=True)
+        facts[f"structure@{w}"] = {key: v for key, v in f.items() if key != "closed_view"}
+        checks[k + "a candidate → one v2_add_person (name, phone), drawn, said"] = f.get("add") == [{
+            "p_lesson_id": slot0["id"], "p_name": "מועמד/ת ב", "p_phone": "052-333-4444", "p_room": "",
+            "p_close": False}] and "נוסף כמועמד" in f.get("notice", "")
+        checks[k + "a status → one v2_set_person_status"] = (f.get("status") or [None])[:1] == [
+            {"p_person_id": f.get("new_id"), "p_status": "📩 נשלחה פנייה"}]
+        checks[k + "a phone → one v2_edit_person (phone only), drawn as tel:"] = f.get("phone") == [
+            {"p_person_id": f.get("new_id"), "p_phone": "053-1", "p_room": None, "p_source_url": None}]
+        checks[k + "close → confirmed, one call with ✅, the closed view with «🔄 החלפה»"] = \
+            f.get("close") == [{"p_person_id": 501, "p_status": CLOSED}] and "✅ סגור" in f.get("closed_view", "")
+        checks[k + "reopen / remove → one call each, drawn"] = f.get("reopen") == [{"p_lesson_id": slot0["id"]}] \
+            and f.get("remove") == [{"p_person_id": 501}]
+        checks[k + "the slot's editor → one v2_save_slot with every field; a javascript: link blocked; "
+                   "a panel's form drawn"] = f.get("bad_link_blocked") is True and f.get("save") == [{
+            "p_lesson_id": slot0["id"], "p_title": "פתיחה מהבדיקה", "p_duration": slot0["duration_minutes"],
+            "p_role": "", "p_format": "פאנל", "p_description": "", "p_source_url": "https://example.org/sheet-1"}] \
+            and f.get("panel_form") == 1
+        checks[k + "a break: added, its length, deleted — one call each"] = \
+            f.get("add_break") == [{"p_mishmar_id": mid, "p_kind": "break"}] \
+            and len(f.get("break_len", [])) == 1 and f["break_len"][0]["p_duration"] == 20 \
+            and f.get("del_break") == [{"p_lesson_id": f.get("brk")}]
+        checks[k + "חבורות: a room → one v2_edit_person (room only); a presenter with a room"] = \
+            f.get("room") == [{"p_person_id": 502, "p_phone": None, "p_room": "ספריית שבייד", "p_source_url": None}] \
+            and f.get("presenter") == [{"p_lesson_id": rnd["id"], "p_name": "מעביר/ה ב", "p_phone": "",
+                                        "p_room": "כיתת בית מדרש", "p_close": False}]
+        checks[k + "a refusal is said, and nothing redrawn"] = "המקסימום" in f.get("refused", "") \
+            and f.get("refused_same") is True
+        checks[k + "a failed call is said"] = "לא נשמר" in f.get("failed", "")
+        checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
+        ctx.close()
+
+    # an evening with no topic: the first step closes it; then ✏️ renames it
+    blank = json.loads(json.dumps(base_wf))
+    blank["mishmar"]["topic"], blank["lessons"] = None, []
+    mock = StructureMock(blank, rpc_body=demo_home)
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    g: dict = {}
+    try:
+        page.locator("#topic-new").fill("נושא מהבדיקה")
+        page.get_by_role("button", name="🎯 סגירת הנושא").click()
+        page.get_by_role("button", name="עריכת הנושא").wait_for(timeout=5000)
+        g["close"] = mock.sent("v2_set_topic")
+        page.get_by_role("tab", name="הערב").click()
+        g["slots"] = page.locator("section[id^=slot-]").count()
+        page.get_by_role("button", name="עריכת הנושא").click()
+        page.get_by_label("שם הנושא").fill("נושא שני")
+        page.get_by_role("button", name="💾 שמירה").click()
+        page.get_by_text("נושא שני").wait_for(timeout=5000)
+        g["rename"] = mock.sent("v2_set_topic")[1:]
+        page.screenshot(path=str(shots / "v2-topic-390.png"), full_page=True)
+    except Exception as e:
+        g["failed_at"] = str(e).splitlines()[0]
+    facts["structure topic"] = g
+    checks["structure topic: closed → one v2_set_topic, the skeleton drawn; ✏️ → one more"] = \
+        g.get("close") == [{"p_mishmar_id": mid, "p_topic": "נושא מהבדיקה"}] and g.get("slots") == 4 \
+        and g.get("rename") == [{"p_mishmar_id": mid, "p_topic": "נושא שני"}] and not errors
+    ctx.close()
+
+    # a topic and no structure: «✨ יצירת שלד הערב»
+    bare = dict(json.loads(json.dumps(base_wf)), lessons=[])
+    mock = StructureMock(bare, rpc_body=demo_home)
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("tab", name="הערב").click()
+        page.get_by_role("button", name=re.compile("יצירת שלד הערב")).click()
+        page.locator("section[id^=slot-]").first.wait_for(timeout=5000)
+        built = mock.sent("v2_add_slot")
+    except Exception as e:
+        built = [str(e).splitlines()[0]]
+    checks["structure skeleton: one v2_add_slot(skeleton), the slots drawn"] = \
+        built == [{"p_mishmar_id": mid, "p_kind": "skeleton"}] and not errors
+    ctx.close()
+
+    # the instructor: the same evening, not one editor, not one write
+    mock = StructureMock(dict(base_wf, viewer="instructor"),
+                         rpc_body={"status": "instructor", "me": {"id": 100, "name": "מדריך/ה לדוגמה"}, "trainees": []})
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("tab", name="הערב").click()
+        page.locator("section[id^=slot-]").first.wait_for(timeout=5000)
+        h = page.evaluate("""() => ({
+          editors: document.querySelectorAll('[data-add], select, button[aria-label^="עריכת"], '
+                   + 'button[aria-label^="סגירה"], button[aria-label^="הסרה"], button[aria-label="מחיקת ההפסקה"]').length,
+          adds: [...document.querySelectorAll('button')].filter(b => b.textContent.startsWith('➕')).length,
+          topicEdit: !!document.querySelector('button[aria-label="עריכת הנושא"]'),
+          phones: document.querySelectorAll('a[href^="tel:"]').length,
+        })""")
+    except Exception as e:
+        h = {"failed_at": str(e).splitlines()[0]}
+    facts["structure instructor"] = h
+    checks["structure instructor: phones shown, not one editor, no write sent"] = \
+        h.get("editors") == 0 and h.get("adds") == 0 and h.get("topicEdit") is False and h.get("phones", 0) >= 1 \
+        and not any(c["path"].rsplit("/", 1)[-1] in STRUCTURE_DOORS for c in mock.calls) and not errors
+    ctx.close()
+
+    # the demo: the change on the screen, said, nothing sent anywhere
+    for w in WIDTHS:
+        ctx = browser.new_context(viewport={"width": w, "height": 900}, locale="he-IL")
+        sent: list[str] = []
+        ctx.on("request", lambda r: sent.append(r.url) if "/rpc/" in r.url else None)
+        page = ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        d: dict = {}
+        try:
+            page.goto(f"{demo_base}/?demo#/m/{mid}")
+            page.get_by_role("tab", name="הערב").click()
+            d["note"] = page.get_by_text("בהדגמה השינויים לא נשמרים").count()
+            demo_slot = page.locator("section[id^=slot-]").first
+            demo_form = demo_slot.locator("[data-add]")
+            demo_form.get_by_label("שם מרצה אפשרי").fill("מועמד/ת בהדגמה")
+            demo_form.get_by_role("button", name="➕ מועמד").click()
+            demo_slot.get_by_text("מועמד/ת בהדגמה").wait_for(timeout=5000)
+            demo_slot.get_by_role("button", name="סגירה: מועמד/ת בהדגמה").click()
+            demo_slot.get_by_role("button", name="🔄 החלפה").wait_for(timeout=5000)
+            d["closed_alone"] = demo_slot.locator("[data-person]").count() == 0 \
+                and "מועמד/ת בהדגמה" in demo_slot.inner_text()
+            first_times = page.locator("section[id^=slot-]").nth(1).inner_text()
+            page.locator("[data-break] select").first.select_option("45")
+            page.wait_for_timeout(300)
+            d["reflowed"] = page.locator("section[id^=slot-]").nth(1).inner_text() != first_times
+            d["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+            page.screenshot(path=str(shots / f"v2-evening-demo-{w}.png"), full_page=True)
+        except Exception as e:
+            d["failed_at"] = str(e).splitlines()[0]
+        facts[f"structure demo@{w}"] = d
+        checks[f"structure demo@{w}: says it saves nothing; add, close, a break's length — on the screen; "
+               "no call sent"] = d.get("note") == 1 and d.get("closed_alone") is True and d.get("reflowed") is True \
+            and not sent and d.get("overflowX", 1) <= 0 and not errors
+        ctx.close()
+
+
 def check_settings(browser, messy: str, badurl: str, shots: Path, checks: dict, facts: dict) -> None:
     """Hand-pasted settings: cleaned when they can be, named when they cannot —
     never a blank page."""
@@ -750,6 +1102,7 @@ def main(argv: list[str]) -> int:
         check_demo(browser, demo_base, shots, checks, facts)
         check_auth(browser, auth_base, shots, checks, facts)
         check_workfile(browser, demo_base, auth_base, shots, checks, facts)
+        check_structure(browser, demo_base, auth_base, shots, checks, facts)
         check_settings(browser, serve(tmp / "messy", under), serve(tmp / "badurl", under),
                        shots, checks, facts)
         browser.close()

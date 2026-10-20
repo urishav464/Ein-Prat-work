@@ -230,6 +230,9 @@ More probe traps that produced false test results here: **input placeholders nev
 - **Cards fill their row**: `flex: 1 1 240px` on `.st-key-pipeline-grid` / `.st-key-pipeline-past`
   children, capped (`max-width`) only above 1101px so a lone card does not sit in a stripe, and
   forced to 100% below 740px. Measured 4 / 1 / 1 across at 1500 / 900 / 390 with no h-overflow.
+- **The slot editor saves by the slot's id** (`dm.update_lesson`), not by `slot_order`: the v2 site
+  renumbers an evening's slots while this app may show a card up to 15 minutes old. Measured on
+  the harness: a 💾 in the dialog wrote lesson 8, #05's first slot, and no other row.
 - **Closing a speaker happens next to the candidate** («✅ סגור מרצה» on each candidate row); there
   is no slot-level «סגירת מרצה» button — it only ever created a task the sync had already made,
   and a pair typed a name into the add form and pressed it. The add form is one flex row under the

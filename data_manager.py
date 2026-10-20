@@ -1374,14 +1374,24 @@ def update_lesson_speaker_status(candidate_id: int, status: str,
 
 def close_lesson_speaker(lesson_id: int, name: str,
                          mishmar_id: Optional[int] = None,
-                         student_id: Optional[int] = None) -> dict:
+                         student_id: Optional[int] = None,
+                         candidate_id: Optional[int] = None) -> dict:
     """«סגרתי את X»: X becomes the lesson's speaker, the journal logs ✅, and
-    the other candidates vanish — X stays as the single closed row."""
+    the other candidates vanish — X stays as the single closed row.
+
+    `candidate_id` is the row the click was on, and it decides. Without one
+    the name decides — exactly or as part of a longer name, first by id — and
+    a click on «תמר» closed «תמר כהן» when she was listed first. v2's
+    `v2_private.close_speaker` is this function's twin, always by id."""
     name = (name or "").strip()
-    cands = _rows(_t("lesson_speakers").select("*").eq("lesson_id", lesson_id).execute())
-    match = next((c for c in cands
-                  if normalize_name(c["name"]) == normalize_name(name)
-                  or normalize_name(name) in normalize_name(c["name"])), None)
+    cands = _rows(_t("lesson_speakers").select("*").eq("lesson_id", lesson_id)
+                  .order("id").execute())
+    if candidate_id is not None:
+        match = next((c for c in cands if c["id"] == candidate_id), None)
+    else:
+        match = next((c for c in cands
+                      if normalize_name(c["name"]) == normalize_name(name)
+                      or normalize_name(name) in normalize_name(c["name"])), None)
     closed_name = (match or {}).get("name") or name
     _t("lessons").update({"speaker_name": closed_name}).eq("id", lesson_id).execute()
     removed = []
@@ -1438,7 +1448,7 @@ def adopt_panel_speaker(lesson: dict) -> bool:
     if not name or PANEL_SEP.strip() in name:
         return False
     rows = _rows(_t("lesson_speakers").select("id,name,status")
-                 .eq("lesson_id", lesson["id"]).execute())
+                 .eq("lesson_id", lesson["id"]).order("id").execute())
     match = next((r for r in rows if normalize_name(r["name"]) == normalize_name(name)), None)
     if match:
         if match.get("status") != "✅ סגור":
@@ -1576,6 +1586,23 @@ def upsert_lesson(mishmar_id: int, slot_order: int, title: Optional[str] = None,
                 # than pick one; the UI asks which person is meant.
                 pass
     return lesson_id
+
+
+def update_lesson(lesson_id: int, title: Optional[str] = None,
+                  description: Optional[str] = None,
+                  lesson_role: Optional[str] = None,
+                  fmt: Optional[str] = None) -> bool:
+    """The slot editor's save, keyed on the slot's ID. `upsert_lesson` keys on
+    `slot_order`, and the v2 site renumbers an evening's slots while this app
+    may hold rows up to CACHE_TTL_SECONDS old: by position, a save from a stale
+    card would land on whichever slot now sits there. Only non-None fields are
+    written; "" clears one."""
+    fields = {"title": title, "description": description,
+              "lesson_role": lesson_role, "format": fmt}
+    given = {k: v for k, v in fields.items() if v is not None}
+    if not given:
+        return False
+    return bool(_rows(_t("lessons").update(given).eq("id", lesson_id).execute()))
 
 
 def delete_lesson(lesson_id: int) -> bool:
@@ -2783,6 +2810,7 @@ _WRITES = {
     # the column lives on mishmarim, and every slot's clock is derived from it
     "set_mishmar_start_time": ("mishmarim", "lessons"),
     "upsert_lesson": ("lessons", "speaker_outreach", "speakers"),
+    "update_lesson": ("lessons",),
     "delete_lesson": ("lessons", "tasks"),          # tasks: ON DELETE SET NULL
     "create_default_timeline": ("lessons", "tasks"), "recompute_lesson_times": ("lessons",),
     "set_lesson_duration": ("lessons",), "add_lesson_slot": ("lessons",),

@@ -1,17 +1,20 @@
 // The workfile (תיק המשמר) — one evening whole: who and when, the task board
-// to work on, and the evening's structure and logistics to read. A port of
-// app._workfile_body: the same phases, the same task rules, the same names.
-// The structure, logistics, feedback and budget are still EDITED in the
-// Streamlit app (stages 2ב–2ג); this screen says so where it matters.
+// and the evening's structure to work on (Evening.tsx), its logistics to read.
+// A port of app._workfile_body: the same phases, the same task rules, the same
+// names. Logistics, feedback and budget are still EDITED in the Streamlit app
+// (stage 2ג); this screen says so where it matters.
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import demoWorkfile from "./demo_workfile.json";
+import { demoApply } from "./demoEdits";
+import { EveningTab, TopicCard, TopicLine, type Editor } from "./Evening";
 import {
-  TASK_CATEGORIES, clean, countdown, deadline, fmtDate, isChavurot, isFeedbackTask, isPanel, localToday,
+  TASK_CATEGORIES, clean, countdown, deadline, fmtDate, isChavurot, isFeedbackTask, localToday,
   parseDate, progress, slotLabel, slotNames, slotTimes,
-  type Lesson, type LogisticsItem, type Person, type Progress, type Status, type Task, type Workfile,
+  type Lesson, type LogisticsItem, type Progress, type Status, type Task, type Workfile,
 } from "./model";
+import { NOT_SAVED, describe, refusal, type StructureAnswer, type StructureCall } from "./structure";
 import { demoMode, supabase } from "./supabase";
-import { Card, Centered, CheckButton, Chip, H2, Shell, Stepper, safeUrl, type ChipKind, type Preview } from "./ui";
+import { Card, Centered, CheckButton, Chip, H2, Shell, Stepper, safeUrl, type Preview } from "./ui";
 
 type Tab = "tasks" | "evening" | "logistics";
 
@@ -21,10 +24,6 @@ type WfLoad =
   | { kind: "missing" }
   | { kind: "forbidden" }
   | { kind: "error"; message: string };
-
-const STATUS_KIND: Record<string, ChipKind> = {
-  "✅ סגור": "green", "📩 נשלחה פנייה": "blue", "⚠️ בתנאי": "yellow", "❌ לא יכול/ה": "red", "⬜ לא פנינו": "gray",
-};
 
 const LATER = "בינתיים עורכים את זה באפליקציה הנוכחית — זה יגיע לכאן בשלב הבא.";
 
@@ -78,12 +77,14 @@ function WorkfileBody({ wf, update, preview }: {
   const [tab, setTab] = useState<Tab>("tasks");
   const [focus, setFocus] = useState<number | null>(null);
   const [alert, setAlert] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   useEffect(() => {
-    if (!alert) return;
-    const timer = setTimeout(() => setAlert(null), 6000);
+    if (!alert && !notice) return;
+    const timer = setTimeout(() => { setAlert(null); setNotice(null); }, 6000);
     return () => clearTimeout(timer);
-  }, [alert]);
+  }, [alert, notice]);
   // a door to a slot lands on it once its tab has drawn
   useEffect(() => {
     if (tab !== "evening" || focus === null) return;
@@ -104,7 +105,9 @@ function WorkfileBody({ wf, update, preview }: {
   const setStatus = (id: number, status: Status, onlyIf?: Status) =>
     setTasks((ts) => ts.map((x) => (x.id === id && (onlyIf === undefined || x.status === onlyIf) ? { ...x, status } : x)));
 
-  const onToggle = readOnly ? undefined : (t: Task) => {
+  // while a change to the structure is on its way, a ✓ waits — its answer
+  // redraws the whole evening, tasks included
+  const onToggle = readOnly || busy ? undefined : (t: Task) => {
     const next: Status = t.status === "DONE" ? "IN PROGRESS" : "DONE";
     setAlert(null);
     setStatus(t.id, next);
@@ -175,6 +178,46 @@ function WorkfileBody({ wf, update, preview }: {
     setTasks((ts) => ts.filter((x) => x.id !== t.id));
   };
 
+  // ---- the evening's structure: one door per change, one change at a time.
+  // The answer is the whole evening, reconciled with its tasks by the
+  // database, and the screen is redrawn from it. In the demo the same change
+  // is made on the screen only (demoEdits.ts).
+  const run = async (call: StructureCall): Promise<boolean> => {
+    if (busy) return false;
+    setAlert(null);
+    setNotice(null);
+    let answer: StructureAnswer | null;
+    if (demoMode || !supabase) {
+      answer = demoApply(wf, call);
+    } else {
+      setBusy(true);
+      try {
+        await Promise.all([...queue.current.values()]);          // a ✓ on its way lands first
+        const { data, error } = await supabase.rpc(call.door, call.args);
+        answer = error ? null : (data as StructureAnswer | null);
+      } catch {
+        answer = null;
+      } finally {
+        setBusy(false);
+      }
+    }
+    if (!answer) {
+      setAlert(NOT_SAVED);
+      return false;
+    }
+    const next = answer.workfile;
+    if (answer.status !== "ok" || !next) {
+      setAlert(refusal(answer.status));
+      return false;
+    }
+    const said = describe(call, wf, answer.result ?? {});
+    update(() => next);
+    if (said.warning) setAlert(said.warning);
+    else setNotice(said.notice);
+    return true;
+  };
+  const editor: Editor = readOnly ? null : { run, busy };
+
   // «פתח ↗» — to where the task is done (app._wf_task_card's door)
   const onOpen = (t: Task) => {
     if (t.lesson_id && slots.some((l) => l.id === t.lesson_id)) {
@@ -191,14 +234,15 @@ function WorkfileBody({ wf, update, preview }: {
 
   const actions = readOnly ? null : { onEdit: setEditing, onDelete };
   return (
-    <Shell name={wf.viewer} alert={alert} preview={preview}>
+    <Shell name={wf.viewer} alert={alert} notice={notice} preview={preview}>
       <a href="#/" className="text-sm font-bold text-navy underline underline-offset-2">→ למסך הבית</a>
       {readOnly && !preview && (
         <p className="mt-3 rounded-xl bg-navy-soft px-4 py-2 text-sm text-navy" role="note">
           מצב מדריך — צפייה בלבד. השינויים נעשים על ידי הזוג.
         </p>
       )}
-      <IdentityCard wf={wf} prog={prog} today={today} />
+      <IdentityCard wf={wf} prog={prog} today={today} edit={editor} />
+      {!m.topic && editor && <TopicCard wf={wf} edit={editor} />}
 
       <div role="tablist" aria-label="חלקי התיק" className="mt-6 grid grid-cols-3 gap-1 rounded-xl bg-sand p-1">
         {([["tasks", "המשימות"], ["evening", "הערב"], ["logistics", "לוגיסטיקה"]] as [Tab, string][]).map(([k, label]) => (
@@ -213,7 +257,7 @@ function WorkfileBody({ wf, update, preview }: {
         <TasksTab wf={wf} prog={prog} today={today} slots={slots} onToggle={onToggle} actions={actions}
                   onOpen={onOpen} onAdd={readOnly ? null : onAdd} />
       )}
-      {tab === "evening" && <EveningTab wf={wf} today={today} onToggle={onToggle} />}
+      {tab === "evening" && <EveningTab wf={wf} today={today} onToggle={onToggle} edit={editor} />}
       {tab === "logistics" && <LogisticsTab wf={wf} />}
 
       {editing && (
@@ -226,7 +270,7 @@ function WorkfileBody({ wf, update, preview }: {
 
 // ---------------------------------------------------------------- the card on top
 
-function IdentityCard({ wf, prog, today }: { wf: Workfile; prog: Progress; today: Date }) {
+function IdentityCard({ wf, prog, today, edit }: { wf: Workfile; prog: Progress; today: Date; edit: Editor }) {
   const m = wf.mishmar;
   const cd = countdown(m, today);
   return (
@@ -235,7 +279,7 @@ function IdentityCard({ wf, prog, today }: { wf: Workfile; prog: Progress; today
         <h1 className="font-display text-2xl font-extrabold text-navy">🕯️ משמר #{String(m.id).padStart(2, "0")}</h1>
         <span className="text-muted">{m.gregorian_date} · {m.hebrew_date}</span>
       </div>
-      <p className="mt-2 text-lg font-bold">{m.topic ?? <span className="font-normal text-muted">הנושא עוד לא נסגר</span>}</p>
+      <TopicLine wf={wf} edit={edit} />
       <div className="mt-2 flex flex-wrap gap-1.5">
         {cd && <Chip kind={cd.kind}>{cd.text}</Chip>}
         {m.owners.length > 0 && <Chip kind="blue">👥 {m.owners.join(" · ")}</Chip>}
@@ -282,11 +326,6 @@ function TasksTab({ wf, prog, today, slots, onToggle, actions, onOpen, onAdd }: 
   );
   return (
     <div className="mt-4 space-y-2">
-      {!wf.mishmar.topic && (
-        <p className="rounded-xl bg-[#fff4d6] px-4 py-3 text-sm text-[#8a5a00]">
-          הנושא עוד לא נסגר. סגירת הנושא (ובניית שלד הערב) — {LATER}
-        </p>
-      )}
       {onlyFeedback && <p className="text-sm text-muted">🌙 הערב התקיים — כל המשימות נסגרו, נשאר רק המשוב.</p>}
       {prog.phases.map((ph, i) => {
         const ts = ph.tasks.filter((t) => t.status !== "DONE" && t.category !== "יום המשמר").sort(byDue);
@@ -464,137 +503,6 @@ function EditSheet({ t, slots, onClose, onSave }: {
           <button type="button" onClick={onClose} className="rounded-lg border border-line px-4 py-2">ביטול</button>
         </div>
       </form>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- the evening
-
-function Phone({ phone }: { phone: string | null }) {
-  if (!phone) return null;
-  const dial = phone.replace(/[^\d+]/g, "");
-  return dial ? <a href={`tel:${dial}`} dir="ltr" className="text-sm font-semibold text-navy underline underline-offset-2">📞 {phone}</a> : null;
-}
-
-function SheetLink({ url }: { url: string | null }) {
-  const href = safeUrl(url);
-  return href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-navy underline underline-offset-2">📎 דף מקורות</a> : null;
-}
-
-function PeopleRows({ l }: { l: Lesson }) {
-  const people = l.people;
-  if (isChavurot(l)) {
-    if (!people.length) return <p className="text-sm text-muted">עוד לא נוספו מעבירים.</p>;
-    return (
-      <>
-        <p className="text-sm font-bold">מעבירי החבורות:</p>
-        <ul className="space-y-1">
-          {people.map((p) => (
-            <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>👥 <span className="font-semibold">{p.name}</span></span>
-              <Chip kind={p.room ? "blue" : "gray"}>{p.room ?? "טרם נקבע חלל"}</Chip>
-              <SheetLink url={p.source_url} />
-              <Phone phone={p.phone} />
-            </li>
-          ))}
-        </ul>
-      </>
-    );
-  }
-  if (isPanel(l)) {
-    if (!people.length) return <p className="text-sm text-muted">עוד לא נוספו מרצים לפאנל.</p>;
-    return (
-      <>
-        <p className="text-sm font-bold">מרצי הפאנל:</p>
-        <PersonList people={people} />
-      </>
-    );
-  }
-  if (l.speaker_name) {
-    const p = people.find((x) => x.name === l.speaker_name);
-    return (
-      <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span>🎤 <span className="font-semibold">{l.speaker_name}</span></span>
-        <Chip kind="green">✅ סגור</Chip>
-        {p && <Phone phone={p.phone} />}
-      </p>
-    );
-  }
-  if (!people.length) return <p className="text-sm text-muted">עוד אין מרצה ואין מועמדים.</p>;
-  return (
-    <>
-      <p className="text-sm font-bold">מרצים אופציונליים:</p>
-      <PersonList people={people} />
-    </>
-  );
-}
-
-function PersonList({ people }: { people: Person[] }) {
-  return (
-    <ul className="space-y-1">
-      {people.map((p) => (
-        <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>🎤 <span className="font-semibold">{p.name}</span></span>
-          {p.status && <Chip kind={STATUS_KIND[p.status] ?? "gray"}>{p.status}</Chip>}
-          <Phone phone={p.phone} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function EveningTab({ wf, today, onToggle }: { wf: Workfile; today: Date; onToggle?: (t: Task) => void }) {
-  const names = slotNames(wf.lessons);
-  const openBySlot = new Map<number, Task[]>();
-  for (const t of wf.tasks) {
-    if (t.lesson_id && t.status !== "DONE") openBySlot.set(t.lesson_id, [...(openBySlot.get(t.lesson_id) ?? []), t]);
-  }
-  if (!wf.lessons.length) {
-    return (
-      <div className="mt-4">
-        <p className="text-muted">לערב הזה עוד אין מבנה{wf.mishmar.topic ? "" : " — הוא נבנה כשהנושא נסגר"}.</p>
-        <p className="mt-2 text-sm text-muted">{LATER}</p>
-      </div>
-    );
-  }
-  return (
-    <div className="mt-4 space-y-2">
-      {wf.lessons.map((l) => l.is_break ? (
-        <p key={l.id} className="flex items-center gap-2 px-2 text-sm text-muted">
-          ☕ הפסקה · <span dir="ltr">{slotTimes(l)}</span>
-        </p>
-      ) : (
-        <Card key={l.id} id={`slot-${l.id}`} className="scroll-mt-4 !p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Chip kind="blue"><span dir="ltr">{slotTimes(l)}</span></Chip>
-            <span className="font-bold">{names.get(l.id)}</span>
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {l.lesson_role && <Chip kind="gold">{l.lesson_role}</Chip>}
-            {l.format && <Chip kind="gray">{l.format}</Chip>}
-          </div>
-          {l.description && <p className="mt-2 text-sm text-muted">{clean(l.description).slice(0, 180)}</p>}
-          {safeUrl(l.source_url) && <p className="mt-1"><SheetLink url={l.source_url} /></p>}
-          <div className="mt-2 space-y-1"><PeopleRows l={l} /></div>
-          {(openBySlot.get(l.id) ?? []).length > 0 && (
-            <div className="mt-3 space-y-1.5 border-t border-line pt-2">
-              {(openBySlot.get(l.id) ?? []).map((t) => {
-                const dl = deadline(t, today);
-                return (
-                  <div key={t.id} className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1 text-sm">
-                      <span className="font-semibold">{clean(t.task_description)}</span>
-                      {dl.overdue && <span className="block text-late">⏰ {dl.nudge}</span>}
-                    </div>
-                    <CheckButton task={t} onToggle={onToggle} />
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      ))}
-      <p className="pt-2 text-sm text-muted">עריכת מבנה הערב (מקטעים, מרצים, חבורות ופאנל) — {LATER}</p>
     </div>
   );
 }

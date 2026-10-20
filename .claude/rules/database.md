@@ -66,7 +66,7 @@ paths:
   · **`PREFERRED` is the draw's preference, not a constraint**: the pairing the trainees were last told, so the evenings that can stay, stay. It is frozen in the script rather than read back out of `schedule.md`, or a second run would read its own output and could drift.
   **A fresh database needs no SQL**: `parse_tasks_md` takes any name from the index table's first cell and links an owner whenever it resolves to a student — it used to accept only `חניך N` in both places, so after the names were written in, a first-run seed produced ten placeholders and zero assignments (proven on a fresh PG16: the students, 38 links, 2 per Mishmar; the migration on top changes nothing).
 - **The evening timeline is derived, never hand-typed.** `lessons.start_time` is computed by `recompute_lesson_times()` from **`mishmarim.start_time`** (schema 9; `EVENING_START` = 20:00 is only the default) plus cumulative `duration_minutes` (breaks are ordinary rows with `is_break`); every duration edit reflows the whole evening, so slots cannot overlap. **`first_start` defaults to `None`, meaning «this Mishmar's own hour»** — that is the entire start-time feature: all six callers that reflow the clock work from the right hour without knowing the column exists. `mishmar_start(mid)` is the single reader (labels, toasts, the invitation skill); `set_mishmar_start_time(mid, "HH:MM")` is the single writer, validates the stamp and **refuses** rather than silently falling back to 20:00, and is reachable **only from the instructor's dashboard** — the whole clock of an evening hangs on it, so it is not a field a pair nudges from inside their own workfile. `create_default_timeline()` builds the real skeleton — three 75-minute lessons, 30/30/15-minute breaks, an hour of חבורות — with titles/roles/formats EMPTY by design, and both topic-close paths (form and chat tool) call it when the evening is empty.
-- **Candidate speakers** (`lesson_speakers`): `add_lesson_speaker()` also teaches the shared index the person exists (manual source, phone as contact, title auto-split); candidate statuses route through `record_outreach()`; `close_lesson_speaker()` implements «סגרתי את X» — X becomes `lessons.speaker_name` with one ✅ row, the other candidates are deleted, the journal logs the close. **Phones live only in `lesson_speakers.phone` and `speakers.contact` — never in chat context or the generator digest.**
+- **Candidate speakers** (`lesson_speakers`): `add_lesson_speaker()` also teaches the shared index the person exists (manual source, phone as contact, title auto-split); candidate statuses route through `record_outreach()`; `close_lesson_speaker()` implements «סגרתי את X» — X becomes `lessons.speaker_name` with one ✅ row, the other candidates are deleted, the journal logs the close. **It closes the row that was clicked** (`candidate_id`, passed by both of the app's buttons; candidates ordered by id): by name it matched «תמר» inside «תמר כהן» and closed whoever was listed first. **Phones live only in `lesson_speakers.phone` and `speakers.contact` — never in chat context or the generator digest.**
 - The status ladder merged in v2: `⏳ ממתין לתשובה` folded into `📩 נשלחה פנייה` — constants AND idempotent UPDATEs in the schema file; do not reintroduce it.
 - **The schema is versioned, and the app checks it.** `supabase_schema.sql` stamps `app_meta.schema_version`; `data_manager.REQUIRED_SCHEMA_VERSION` is what the code expects; `storage_ready()` returns `schema_stale` and `main()` shows a banner naming both numbers. **Bump `REQUIRED_SCHEMA_VERSION` in the same commit as any `ALTER`/`CREATE TABLE`** — without it a database one version behind looks healthy and then throws a redacted `APIError` deep inside a screen. That is exactly how a missing `logistics_items` blanked the entire workfile: the panel raised inside the right column, so the tasks column and the reset button never rendered either.
 - **A missing relation degrades; everything else stays loud.** `_missing_relation(exc)` recognises only PGRST205/204/106 and "does not exist"; `get_logistics` and `get_searches_for` return empty on it and re-raise anything else. In `app.py` the three evening panels are wrapped in `_safe()` so one broken panel can never blank a column.
@@ -113,6 +113,23 @@ panel instead of on a slot.
   shape (`_is_generated` — a hand-written task linked to the slot is never touched), and clears
   open tasks whose slot is gone. **DONE rows are never touched.** `create_default_timeline` calls
   it, so a new Mishmar is born synced; an existing one catches up from «🔄 סנכרן משימות למקטעים».
+- **It has a twin in SQL, and so does everything around it (stage 2ב).** The v2 site edits the
+  same evenings through `web/supabase/v2.sql`, so `v2_private.sync_lesson_tasks` repeats this
+  function step for step and in the same order (rename → complete → adopt → create → retire, then
+  the orphans, then the dead slots), beside twins of the clock (`recompute_times`,
+  `create_default_timeline`, `delete_slot`), the people (`close_speaker`, `set_person_status`,
+  `refresh_panel`, `adopt_panel_speaker`), the index (`resolve_speaker` — ambiguity is «none»,
+  `learn_speaker`, `learn_phone`, `split_title`, `norm_name`) and the journal's single writer
+  (`record_outreach`). Every structure door runs the Streamlit callback's writes and then the
+  sync, and answers with the evening as `v2_workfile` shows it; each takes a per-evening advisory
+  lock, so the pair's two phones cannot both create one task. **`web/supabase/test_v2_structure.py`
+  is the contract**: two copies of the fixture, `data_manager` through the shim on one and the
+  doors as the trainee on the other — a fixed scenario through every path of every door, old states
+  for the reconciler (orphans, a stale number, a DONE round label, a human task in our wording, a
+  slot deleted the bare way, a task on a break, no durations, a closed speaker with no row), and
+  seeded random walks — comparing the evening, the index and the journal after every step, and
+  proving it saw every refusal of every door. `--sql FILE` runs it against a copy of `v2.sql`:
+  twelve planted bugs, each caught. Change a rule here → change its twin in the same commit.
 - **Ownership is PROVENANCE, not wording: `tasks.generated` (schema 7).** `sync_lesson_tasks` is the
   only writer of `generated = true` (`add_task(..., generated=True)`), and `_is_generated(task)` is
   the only ownership test — every rename, retire, adopt and slot-delete goes through it. Before
@@ -150,7 +167,10 @@ panel instead of on a slot.
   `len(rows) + 1` collided after a deletion — orders 1,2,4,5 produced 5 again, and the new break
   sorted next to the old 5, mid-evening. `get_lessons` orders by `slot_order` then `id`; the
   recompute closes gaps (1..N) in the same pass that reflows the clock. `upsert_lesson` keys on
-  `slot_order`, which is why callers must read fresh rows after any structural change.
+  `slot_order`, which is why callers must read fresh rows after any structural change — and why
+  the slot editor now saves through **`update_lesson(lesson_id, …)`**, by id: the v2 site
+  renumbers slots while this app may hold rows up to `CACHE_TTL_SECONDS` old, and a save by
+  position from a stale card would land on whichever slot sits there now.
 - **An evening can hold more than one round of חבורות, and every round is its own.**
   `#01` and the alumni evening both do. `round_suffix(i, total)` appends «— סבב א׳ / ב׳ / ג׳ / ד׳»
   to the three חבורות texts **only when `total ≥ 2`** — a single round must keep reading

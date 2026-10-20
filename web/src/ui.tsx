@@ -87,8 +87,8 @@ export function Stepper({ prog }: { prog: Progress }) {
 // stays on this screen, and the way back to the list.
 export type Preview = { name: string; onExit: () => void };
 
-export function Shell({ children, name, alert, preview }: {
-  children: ReactNode; name?: string; alert?: string | null; preview?: Preview;
+export function Shell({ children, name, alert, notice, preview }: {
+  children: ReactNode; name?: string; alert?: string | null; notice?: string | null; preview?: Preview;
 }) {
   return (
     <div className="min-h-dvh">
@@ -118,14 +118,21 @@ export function Shell({ children, name, alert, preview }: {
         </div>
       )}
       <main className="mx-auto max-w-4xl px-4 pb-16 pt-6">{children}</main>
-      {/* pinned to the bottom: a failed save must be seen wherever the tap was */}
-      {alert && (
-        <div role="alert" className="fixed inset-x-0 bottom-0 z-10 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      {/* pinned to the bottom: a failed save must be seen wherever the tap was —
+          and so must what a change did (the app's toast) */}
+      {alert ? (
+        <div role="alert" className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <p className="mx-auto max-w-md rounded-xl bg-late px-4 py-3 text-center text-sm font-semibold text-white shadow-lg">
             {alert}
           </p>
         </div>
-      )}
+      ) : notice ? (
+        <div role="status" className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <p className="mx-auto max-w-md rounded-xl bg-navy px-4 py-3 text-center text-sm font-semibold text-white shadow-lg">
+            {notice}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -48,12 +48,22 @@ address, and checks, as the roles Supabase gives a browser:
         title kept, empty details cleared, no date kept; a slot of another
         evening, another evening's task, the instructor → refused, unchanged
     delete: another evening's task, the instructor → refused, still there
+  the structure doors (v2_set_topic … v2_remove_person, stage 2ב)
+    anon, signed out, e-mail sign-up, unknown address, another evening's
+        slot or person, one that does not exist, the instructor → refused at
+        every one of the nine, and nothing anywhere changes
+    an empty topic, an unknown kind of slot, 4 minutes, a javascript: link,
+        a fifth room, an invented status → refused by name
+    a person added → «ok», and the answer IS a fresh v2_workfile (a phone only
+        on a slot's people, no e-mail / contact); a status → one journal line
+        in the trainee's name; removed → gone. What the doors write is
+        test_v2_structure.py's: step for step against data_manager
   the twins
     every needle of dm._CATEGORY_RULES and every task text in the fixture
     classifies the same in SQL; every category × date gets the same due date
   the catalog
     anon / authenticated hold no privilege on any table, view or sequence in
-    `public`; EXECUTE on exactly the seven doors, for `authenticated` only;
+    `public`; EXECUTE on exactly the sixteen doors, for `authenticated` only;
     and no way into `v2_private`, the schema behind them
 
 `--on N` picks a trainee of evening N. `--export PATH` writes the «ok» answer,
@@ -110,12 +120,21 @@ SELECT 'schema', 'v2_private', r.role
  WHERE has_schema_privilege(r.role, 'v2_private', 'USAGE')
  ORDER BY 1, 2, 3
 """
-EXPECTED_LEAKS = [["function", "public.v2_add_task", "authenticated"],
+EXPECTED_LEAKS = [["function", "public.v2_add_person", "authenticated"],
+                  ["function", "public.v2_add_slot", "authenticated"],
+                  ["function", "public.v2_add_task", "authenticated"],
+                  ["function", "public.v2_delete_slot", "authenticated"],
                   ["function", "public.v2_delete_task", "authenticated"],
+                  ["function", "public.v2_edit_person", "authenticated"],
                   ["function", "public.v2_edit_task", "authenticated"],
                   ["function", "public.v2_home_as", "authenticated"],
                   ["function", "public.v2_my_home", "authenticated"],
+                  ["function", "public.v2_remove_person", "authenticated"],
+                  ["function", "public.v2_reopen_slot", "authenticated"],
+                  ["function", "public.v2_save_slot", "authenticated"],
+                  ["function", "public.v2_set_person_status", "authenticated"],
                   ["function", "public.v2_set_task_status", "authenticated"],
+                  ["function", "public.v2_set_topic", "authenticated"],
                   ["function", "public.v2_workfile", "authenticated"]]
 INSTRUCTOR = "instructor.test@example.org"
 
@@ -467,6 +486,105 @@ def main(argv: list[str]) -> int:
     gone = all((delete(trainee, t) or {}).get("status") == "ok" for t in added)
     checks["delete: the pair's own task → gone"] = gone and all(row(t) is None for t in added)
 
+    # ---- the evening's structure (stage 2ב): who may write, and what comes back.
+    # What each door WRITES is test_v2_structure.py's: every step against
+    # data_manager, on two copies of the fixture.
+    cur.execute("SELECT id FROM lesson_speakers WHERE lesson_id = %s ORDER BY id LIMIT 1", (slot,))
+    my_person = cur.fetchone()[0]
+    cur.execute("INSERT INTO lesson_speakers (lesson_id, name, phone) VALUES (%s, 'מועמד זר', '050-0000000') "
+                "RETURNING id", (other_slot,))
+    other_person = cur.fetchone()[0]
+
+    def state() -> str:
+        """Everything a structure door may touch, as one value."""
+        cur.execute("RESET ROLE")
+        cur.execute("""SELECT md5(concat_ws('|',
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM lessons x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM lesson_speakers x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM tasks x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM speakers x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM speaker_outreach x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM mishmarim x)))""")
+        return cur.fetchone()[0]
+
+    # each door: (the call on the pair's own evening, the same on another evening's)
+    doors = {
+        "v2_set_topic": ("SELECT public.v2_set_topic(%s, %s)", (wf_mid, "נושא"), (other_mid, "נושא")),
+        "v2_add_slot": ("SELECT public.v2_add_slot(%s, %s)", (wf_mid, "lesson"), (other_mid, "lesson")),
+        "v2_save_slot": ("SELECT public.v2_save_slot(%s, %s, %s, %s, %s, %s, %s)",
+                         (slot, "כותרת", 75, "", "", "", ""), (other_slot, "כותרת", 75, "", "", "", "")),
+        "v2_delete_slot": ("SELECT public.v2_delete_slot(%s)", (slot,), (other_slot,)),
+        "v2_reopen_slot": ("SELECT public.v2_reopen_slot(%s)", (slot,), (other_slot,)),
+        "v2_add_person": ("SELECT public.v2_add_person(%s, %s, %s, %s, %s)",
+                          (slot, "מועמד", "", "", False), (other_slot, "מועמד", "", "", False)),
+        "v2_edit_person": ("SELECT public.v2_edit_person(%s, %s, %s, %s)",
+                           (my_person, "050-1", None, None), (other_person, "050-1", None, None)),
+        "v2_set_person_status": ("SELECT public.v2_set_person_status(%s, %s)",
+                                 (my_person, "📩 נשלחה פנייה"), (other_person, "📩 נשלחה פנייה")),
+        "v2_remove_person": ("SELECT public.v2_remove_person(%s)", (my_person,), (other_person,)),
+    }
+    missing = {"v2_set_topic": (2_000_000, "נושא"), "v2_add_slot": (2_000_000, "lesson")}
+    before = state()
+    refused_structure = {}
+    for name, (q, mine_args, other_args) in doors.items():
+        gone_args = missing.get(name, (2_000_000_000,) + mine_args[1:])
+        refused_structure[name] = {
+            "anon": call("anon", trainee, q, mine_args) == "denied",
+            "signed out": (call("authenticated", None, q, mine_args) or {}).get("status") == "signed_out",
+            "e-mail sign-up": (call("authenticated", {"email": EMAIL, "app_metadata": {"provider": "email"}},
+                                    q, mine_args) or {}).get("status") == "wrong_provider",
+            "unknown address": (call("authenticated", {"email": "someone@example.org", **GOOGLE}, q, mine_args)
+                                or {}).get("status") == "not_linked",
+            "another evening": (call("authenticated", trainee, q, other_args) or {}).get("status") == "forbidden",
+            "missing": (call("authenticated", trainee, q, gone_args) or {}).get("status") == "forbidden",
+            "the instructor": (call("authenticated", boss, q, mine_args) or {}).get("status") == "instructor",
+        }
+    bad = {name: [k for k, v in r.items() if not v] for name, r in refused_structure.items()
+           if not all(r.values())}
+    checks["structure: anon / signed out / e-mail / unknown / another evening / missing / instructor "
+           "refused, at every one of the nine doors"] = not bad
+    if bad:
+        checks[f"structure refusals that failed: {bad}"] = False
+    invalid = {
+        "an empty topic": (doors["v2_set_topic"][0], (wf_mid, "   "), "invalid_text"),
+        "a kind of slot": (doors["v2_add_slot"][0], (wf_mid, "אולם"), "invalid_kind"),
+        "four minutes": (doors["v2_save_slot"][0], (slot, "", 4, "", "", "", ""), "invalid_duration"),
+        "a javascript: link": (doors["v2_save_slot"][0], (slot, "", 75, "", "", "", "javascript:alert(1)"),
+                               "invalid_url"),
+        "a fifth room": (doors["v2_add_person"][0], (slot, "מעביר", "", "חדר אוכל", False), "invalid_room"),
+        "a status of one's own": (doors["v2_set_person_status"][0], (my_person, "סגרנו בערך"), "invalid_status"),
+    }
+    wrong_answers = [k for k, (q, args, want) in invalid.items()
+                     if (call("authenticated", trainee, q, args) or {}).get("status") != want]
+    checks["structure: empty topic / unknown kind / 4 minutes / javascript: / a fifth room / "
+           "an invented status → refused by name"] = not wrong_answers
+    checks["structure: no refused call changed anything"] = state() == before
+
+    # one write all the way: the answer is the evening as v2_workfile shows it now
+    res = call("authenticated", trainee, doors["v2_add_person"][0], (slot, "מועמד בדיקה ב", "050-7654321", "", False))
+    fresh = wf(trainee, wf_mid)
+    ok_struct = (res or {}).get("status") == "ok"
+    checks["structure: a person added → ok, and the answer IS a fresh v2_workfile"] = ok_struct \
+        and res["workfile"] == fresh and any(p["name"] == "מועמד בדיקה ב" for l in fresh["lessons"]
+                                             for p in l["people"])
+    checks["structure: the answer — a phone only on a slot's people; no e-mail / contact"] = ok_struct \
+        and all(p == ("workfile", "lessons", "[]", "people", "[]") for p in phone_paths(res)) \
+        and not (keys_in(res) & {"email", "contact"})
+    added_person = (res or {}).get("result", {}).get("person")
+    cur.execute("RESET ROLE")
+    cur.execute("SELECT count(*) FROM speaker_outreach WHERE student_id = %s", (me_id,))
+    journal_before = cur.fetchone()[0]
+    res = call("authenticated", trainee, doors["v2_set_person_status"][0], (added_person, "📩 נשלחה פנייה"))
+    cur.execute("RESET ROLE")
+    cur.execute("SELECT count(*) FROM speaker_outreach WHERE student_id = %s", (me_id,))
+    checks["structure: a status → ok, one line in the journal, in the trainee's name"] = \
+        (res or {}).get("status") == "ok" and cur.fetchone()[0] == journal_before + 1
+    res = call("authenticated", trainee, doors["v2_remove_person"][0], (added_person,))
+    cur.execute("RESET ROLE")
+    cur.execute("SELECT count(*) FROM lesson_speakers WHERE id = %s", (added_person or 0,))
+    checks["structure: the person removed → ok, gone"] = (res or {}).get("status") == "ok" \
+        and cur.fetchone()[0] == 0
+
     # ---- the twins: the SQL copies of dm's rules must give the same answers
     cur.execute("RESET ROLE")
     texts = [n for _, needles in dm._CATEGORY_RULES for n in needles]
@@ -494,7 +612,9 @@ def main(argv: list[str]) -> int:
             checks[f"authenticated cannot read {table}"] = True
         finally:
             cur.execute("RESET ROLE")
-    for inner in ("SELECT * FROM v2_private.caller()", f"SELECT v2_private.home_of({me_id})"):
+    for inner in ("SELECT * FROM v2_private.caller()", f"SELECT v2_private.home_of({me_id})",
+                  f"SELECT v2_private.sync_lesson_tasks({wf_mid})",
+                  "SELECT v2_private.record_outreach('✅ סגור', 'x', 1, 1)"):
         name = inner.split("v2_private.")[1].split("(")[0]
         cur.execute("SET ROLE authenticated")
         try:
@@ -506,7 +626,7 @@ def main(argv: list[str]) -> int:
             cur.execute("RESET ROLE")
     cur.execute(LEAKS)
     leaks = [list(r) for r in cur.fetchall()]
-    checks["catalog: only the seven doors, only for authenticated"] = leaks == EXPECTED_LEAKS
+    checks["catalog: only the sixteen doors, only for authenticated"] = leaks == EXPECTED_LEAKS
 
     if export and checks.get("linked address → ok (case-insensitive)"):
         # placeholders for people: the demo must not carry real names
