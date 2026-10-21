@@ -8,8 +8,8 @@ import demoWorkfile from "./demo_workfile.json";
 import { demoApply } from "./demoEdits";
 import { EveningTab, TopicCard, TopicLine, type Editor } from "./Evening";
 import {
-  TASK_CATEGORIES, clean, countdown, deadline, fmtDate, isChavurot, isFeedbackTask, localToday,
-  parseDate, progress, slotLabel, slotNames, slotTimes,
+  PHASES, TASK_CATEGORIES, clean, countdown, deadline, fmtDate, isChavurot, isFeedbackTask, localToday,
+  parseDate, phaseOf, progress, slotLabel, slotNames, slotTimes,
   type Lesson, type LogisticsItem, type Progress, type Status, type Task, type Workfile,
 } from "./model";
 import { NOT_SAVED, describe, refusal, type StructureAnswer, type StructureCall } from "./structure";
@@ -318,6 +318,16 @@ function TasksTab({ wf, prog, today, slots, onToggle, actions, onOpen, onAdd }: 
   const byDue = (a: Task, b: Task) => (a.due_date ?? "9999").localeCompare(b.due_date ?? "9999");
   const open = wf.tasks.filter((t) => t.status !== "DONE");
   const done = wf.tasks.filter((t) => t.status === "DONE");
+  // what was done, in the order the evening is built — the same groups as
+  // the open board above it, the day itself between logistics and after
+  const doneGroups = [
+    ...PHASES.slice(0, 3).map((p) => ({
+      key: p.key, icon: p.icon, label: p.label,
+      tasks: done.filter((t) => phaseOf(t) === p.key && t.category !== "יום המשמר"),
+    })),
+    { key: "day", icon: "🕯️", label: "יום המשמר עצמו", tasks: done.filter((t) => t.category === "יום המשמר") },
+    { key: "after", icon: PHASES[3].icon, label: PHASES[3].label, tasks: done.filter((t) => phaseOf(t) === "after") },
+  ].filter((g) => g.tasks.length).map((g) => ({ ...g, tasks: [...g.tasks].sort(byDue) }));
   const dayOf = open.filter((t) => t.category === "יום המשמר").sort(byDue);
   const evening = parseDate(wf.mishmar.gregorian_date);
   const onlyFeedback = evening && evening < today && open.every(isFeedbackTask);
@@ -360,7 +370,16 @@ function TasksTab({ wf, prog, today, slots, onToggle, actions, onOpen, onAdd }: 
             <span className="chev text-muted" aria-hidden>‹</span>
             <span className="font-bold">✅ בוצעו <span className="font-normal text-muted">({done.length})</span></span>
           </summary>
-          <div className="space-y-2 px-3 pb-3">{done.map(row)}</div>
+          <div className="space-y-3 px-3 pb-3">
+            {doneGroups.map((g) => (
+              <div key={g.key}>
+                <p className="mb-1.5 text-sm font-bold text-muted">
+                  {g.icon} {g.label} <span className="font-normal">({g.tasks.length})</span>
+                </p>
+                <div className="space-y-2">{g.tasks.map(row)}</div>
+              </div>
+            ))}
+          </div>
         </details>
       )}
     </div>

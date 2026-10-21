@@ -213,7 +213,7 @@ Google מציג את הסוד של המפתח רק פעם אחת, ברגע שה�
 python3 scripts/harness/db.py up
 python3 web/supabase/test_v2.py            # 54 בדיקות אבטחה מול PostgreSQL 16 מקומי
 python3 web/supabase/test_v2_structure.py  # מבנה הערב: האתר מול האפליקציה, צעד אחר צעד
-python3 web/check_ui.py                     # 113 בדיקות בכרום, בטלפון (390) ובמחשב (1500)
+python3 web/check_ui.py                     # 115 בדיקות בכרום, בטלפון (390) ובמחשב (1500)
 ```
 
 (אותה סביבת Python של ה-harness — `psycopg2` ו-Playwright — ו-`npm install` שבוצע ב-`web/`.)

@@ -637,6 +637,11 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
             page.locator("[data-task='9999'] button[aria-label^='מחיקה']").click()
             page.locator("[data-task='9999']").wait_for(state="detached", timeout=5000)
             f["delete"] = [c["body"] for c in mock.calls if c["path"] == "/rest/v1/rpc/v2_delete_task"]
+            # what was done is split by phase too, like the open board
+            done_box = page.locator("details", has=page.locator("summary", has_text="בוצעו"))
+            done_box.locator("summary").click()
+            f["done_groups"] = [t.strip() for t in done_box.locator("p.mb-1\\.5").all_inner_texts()]
+            f["done_rows"] = done_box.locator("[data-task]").count()
             # the evening: a phone to tap, and no link made of a «javascript:» URL
             page.get_by_role("tab", name="הערב").click()
             f["tel"] = page.locator("a[href^='tel:']").evaluate_all("els => els.map(e => e.getAttribute('href'))")
@@ -655,6 +660,10 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
         checks[k + "edit → one v2_edit_task with the new title, shown"] = bool(f.get("edit")) and len(f["edit"]) == 1 \
             and f["edit"][0].get("p_task_id") == f.get("eid") and f["edit"][0].get("p_text") == "כותרת שנערכה"
         checks[k + "delete → confirmed, one v2_delete_task, the card gone"] = f.get("delete") == [{"p_task_id": 9999}]
+        phase_names = ("נושא", "מרצים ותוכן", "לוגיסטיקה", "יום המשמר עצמו", "אחרי הערב")
+        checks[k + "«בוצעו» is split by phase, every done task under one heading"] = \
+            bool(f.get("done_groups")) and f.get("done_rows", 0) >= 1 \
+            and all(any(n in g for n in phase_names) for g in f["done_groups"])
         checks[k + "a phone is a tel: link; a «javascript:» URL never a link"] = \
             f.get("tel") == ["tel:0501112222"] and f.get("js_links") == 0 and f.get("https_links", 0) >= 1
         checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
