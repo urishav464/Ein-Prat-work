@@ -4,7 +4,7 @@
 // _panel_rows, _chavurot_rows), through the doors in web/supabase/v2.sql.
 // A write waits for the database, whose answer is the whole evening —
 // reconciled with its tasks — and the screen is drawn from that answer.
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   CHAVUROT_ROOMS, CLOSED, DEFAULT_ROOM, DURATION_OPTIONS, LESSON_FORMATS, LESSON_ROLES, SPEAKER_STATUSES,
   clean, deadline, isChavurot, isPanel, slotNames, slotTimes, type Lesson, type Person, type Task, type Workfile,
@@ -12,9 +12,15 @@ import {
 import type { SlotKind, StructureCall } from "./structure";
 import { demoMode } from "./supabase";
 import { Card, CheckButton, Chip, safeUrl, type ChipKind } from "./ui";
+import { ACCEPT, type Target } from "./uploads";
 
-// null: nothing on this screen writes (the instructor)
-export type Editor = { run: (call: StructureCall) => Promise<boolean>; busy: boolean } | null;
+// null: nothing on this screen writes (the instructor). `upload` stores a
+// file and answers with its link — or null, having said why on the screen.
+export type Editor = {
+  run: (call: StructureCall) => Promise<boolean>;
+  upload: (target: Target, id: number, file: File) => Promise<string | null>;
+  busy: boolean;
+} | null;
 
 const STATUS_KIND: Record<string, ChipKind> = {
   "✅ סגור": "green", "📩 נשלחה פנייה": "blue", "⚠️ בתנאי": "yellow", "❌ לא יכול/ה": "red", "⬜ לא פנינו": "gray",
@@ -165,6 +171,34 @@ function SheetField({ p, edit }: { p: Person; edit: NonNullable<Editor> }) {
       <button type="button" onClick={() => setOpen(false)} className={SECONDARY}>ביטול</button>
       {bad && <span className="w-full text-sm text-late">קישור צריך להתחיל ב-https://</span>}
     </form>
+  );
+}
+
+// a file from the phone or the computer, as a source sheet — the link it
+// gets is the caller's to save (app's «📎 דף מקורות» uploader)
+function UploadButton({ target, id, label, edit, onUploaded }: {
+  target: Target; id: number; label: string; edit: NonNullable<Editor>; onUploaded: (url: string, name: string) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [sending, setSending] = useState(false);
+  const pick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";                         // the same file again is a new pick
+    if (!file) return;
+    setSending(true);
+    const url = await edit.upload(target, id, file);
+    setSending(false);
+    if (url) onUploaded(url, file.name);
+  };
+  return (
+    <>
+      <input ref={input} type="file" accept={ACCEPT} onChange={pick} className="hidden" tabIndex={-1} aria-hidden
+             data-upload={`${target}-${id}`} />
+      <button type="button" disabled={edit.busy} onClick={() => input.current?.click()} aria-label={label}
+              className="rounded-lg px-1.5 py-0.5 text-sm text-navy hover:bg-navy-soft disabled:opacity-50">
+        {sending ? "מעלה…" : "📤 העלאת קובץ"}
+      </button>
+    </>
   );
 }
 
@@ -352,6 +386,12 @@ function Presenters({ l, edit }: { l: Lesson; edit: Editor }) {
                 <SheetLink url={p.source_url} />
                 <Phone phone={p.phone} />
                 {edit && <SheetField p={p} edit={edit} />}
+                {edit && (
+                  <UploadButton target="presenter" id={p.id} label={`העלאת דף מקורות: ${p.name}`} edit={edit}
+                                onUploaded={(url) => edit.run({ door: "v2_edit_person", args: {
+                                  p_person_id: p.id, p_phone: null, p_room: null, p_source_url: url,
+                                } })} />
+                )}
               </div>
             </li>
           );
@@ -364,8 +404,8 @@ function Presenters({ l, edit }: { l: Lesson; edit: Editor }) {
 
 // ---------------------------------------------------------------- the slot editor
 
-// app._lesson_edit_dialog — title, length, role, format, description, a link
-// to the source sheet (uploading a file comes with stage 2ג), and the delete
+// app._lesson_edit_dialog — title, length, role, format, description, the
+// source sheet (a link, or a file uploaded into one), and the delete
 function SlotSheet({ l, name, edit, onClose }: { l: Lesson; name: string; edit: NonNullable<Editor>; onClose: () => void }) {
   const [title, setTitle] = useState(l.title ?? "");
   const [duration, setDuration] = useState(l.duration_minutes ?? 75);
@@ -373,19 +413,23 @@ function SlotSheet({ l, name, edit, onClose }: { l: Lesson; name: string; edit: 
   const [format, setFormat] = useState(l.format ?? "");
   const [description, setDescription] = useState(l.description ?? "");
   const [link, setLink] = useState(l.source_url ?? "");
+  const [uploaded, setUploaded] = useState<string | null>(null);   // the file the link now points at
   const bad = link.trim() !== "" && !HTTP.test(link.trim());
   // the three lengths the app offers, and the slot's own when it is another
   const own = l.duration_minutes ?? 75;
   const durations = DURATION_OPTIONS.some(([m]) => m === own) ? DURATION_OPTIONS
     : [...DURATION_OPTIONS, [own, `${own} דק׳`] as [number, string]].sort((a, b) => a[0] - b[0]);
   const draft = { ...l, title, lesson_role: role, format };
+  const [saving, setSaving] = useState(false);     // busy is also an upload on its way
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (bad) return;
+    setSaving(true);
     const ok = await edit.run({ door: "v2_save_slot", args: {
       p_lesson_id: l.id, p_title: title, p_duration: duration, p_role: role, p_format: format,
       p_description: description, p_source_url: link,
     } });
+    setSaving(false);
     if (ok) onClose();
   };
   const remove = async () => {
@@ -427,13 +471,21 @@ function SlotSheet({ l, name, edit, onClose }: { l: Lesson; name: string; edit: 
                     className={`mt-1 w-full font-normal ${FIELD}`} />
         </label>
         <label className="block text-sm font-bold">📎 קישור לדף מקורות
-          <input type="url" dir="ltr" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…"
-                 className={`mt-1 w-full font-normal ${FIELD}`} />
+          <input type="url" dir="ltr" value={link} onChange={(e) => { setLink(e.target.value); setUploaded(null); }}
+                 placeholder="https://…" className={`mt-1 w-full font-normal ${FIELD}`} />
           {bad && <span className="mt-1 block font-normal text-late">קישור צריך להתחיל ב-https://</span>}
-          <span className="mt-1 block font-normal text-muted">העלאת קובץ — בינתיים באפליקציה הנוכחית.</span>
         </label>
+        <div className="-mt-1 flex flex-wrap items-center gap-x-2 text-sm">
+          <span className="text-muted">או קובץ:</span>
+          <UploadButton target="lesson" id={l.id} label="העלאת קובץ לדף המקורות" edit={edit}
+                        onUploaded={(url, file) => { setLink(url); setUploaded(file); }} />
+          <span className="w-full text-muted" role={uploaded ? "status" : undefined}>
+            {uploaded ? `✓ «${uploaded}» הועלה — הוא נשמר כדף המקורות בלחיצה על «💾 שמירה».`
+              : "PDF, Word, PowerPoint או תמונה, עד 20MB."}
+          </span>
+        </div>
         <div className="flex flex-wrap gap-2 pt-1">
-          <button type="submit" disabled={edit.busy || bad} className={`flex-1 ${PRIMARY}`}>{edit.busy ? "שומר…" : "💾 שמירה"}</button>
+          <button type="submit" disabled={edit.busy || bad} className={`flex-1 ${PRIMARY}`}>{saving ? "שומר…" : "💾 שמירה"}</button>
           <button type="button" onClick={onClose} className={SECONDARY}>ביטול</button>
           <button type="button" onClick={remove} disabled={edit.busy} className={`${SECONDARY} text-late`}>🗑 מחיקת המקטע</button>
         </div>

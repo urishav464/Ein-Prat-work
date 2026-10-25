@@ -254,7 +254,11 @@ panel instead of on a slot.
   the night) · משוב. Anything belonging to a
   slot is created by `sync_lesson_tasks` and dies with the slot.
 - **`upload_source_sheet` returns `(url, error)`** — the old silent `None` turned a Storage
-  misconfiguration into a button that looked broken.
+  misconfiguration into a button that looked broken. **The v2 site stores sheets too**, through
+  the Edge Function `web/supabase/functions/v2-tools`, under the same key: `upload.ts` twins
+  `_safe_filename`, `_content_tag` and this function's path, and `test_v2_tools.py` compares them
+  on the same names and bytes — change one, change the other. v2 sets the file's type from its
+  extension (a PDF opens in the browser); this app still stores `application/octet-stream`.
 - **Rooms drive day-of tasks.** `DEFAULT_ROOM` (בית מדרש) is where presenter #1 is assumed to sit,
   covered by the template's «סידור הבית מדרש». With **two or more** presenters, every distinct
   other room they chose yields a slot-owned «סידור <חלל>» (`יום המשמר`), created and retired by

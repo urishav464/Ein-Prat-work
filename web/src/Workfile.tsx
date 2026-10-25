@@ -14,6 +14,7 @@ import {
 } from "./model";
 import { NOT_SAVED, describe, refusal, type StructureAnswer, type StructureCall } from "./structure";
 import { demoMode, supabase } from "./supabase";
+import { DEMO_UPLOAD, UPLOAD_FAILED, checkFile, uploadRefusal, type Target, type UploadAnswer } from "./uploads";
 import { Card, Centered, CheckButton, Chip, H2, Shell, Stepper, safeUrl, type Preview } from "./ui";
 
 type Tab = "tasks" | "evening" | "logistics";
@@ -216,7 +217,50 @@ function WorkfileBody({ wf, update, preview }: {
     else setNotice(said.notice);
     return true;
   };
-  const editor: Editor = readOnly ? null : { run, busy };
+
+  // ---- a source sheet as a file: the v2-tools function stores it and answers
+  // with its public link, which the caller then saves through a door. The
+  // function asks the database who is calling, as every door does.
+  const upload = async (target: Target, id: number, file: File): Promise<string | null> => {
+    if (busy) return null;
+    setAlert(null);
+    setNotice(null);
+    const checked = checkFile(file.name, file.size);
+    if (!checked.ok) {
+      setAlert(uploadRefusal(checked.status));
+      return null;
+    }
+    if (demoMode || !supabase) {
+      setNotice(DEMO_UPLOAD);
+      return null;
+    }
+    const form = new FormData();
+    form.set("action", "upload");
+    form.set("mishmar", String(m.id));
+    form.set("target", target);
+    form.set("id", String(id));
+    form.set("file", file);
+    let answer: UploadAnswer | null;
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("v2-tools", { body: form });
+      answer = error ? null : (data as UploadAnswer | null);
+    } catch {
+      answer = null;
+    } finally {
+      setBusy(false);
+    }
+    if (!answer) {
+      setAlert(UPLOAD_FAILED);
+      return null;
+    }
+    if (answer.status !== "ok" || !answer.url) {
+      setAlert(uploadRefusal(answer.status));
+      return null;
+    }
+    return answer.url;
+  };
+  const editor: Editor = readOnly ? null : { run, upload, busy };
 
   // «פתח ↗» — to where the task is done (app._wf_task_card's door)
   const onOpen = (t: Task) => {

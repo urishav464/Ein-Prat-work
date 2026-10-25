@@ -286,6 +286,11 @@ def late_home(demo: dict) -> tuple[dict, list[tuple[int, int, int]]]:
     Returns the home and the expected groups: (mishmar id, tasks, phases)."""
     home = json.loads(json.dumps(demo))
     today = date.today()
+    # nothing late but what is made late here: the demo's own open tasks fall
+    # behind as the real calendar passes them (#05's feedback, from 25.10.2026)
+    for t in home["tasks"]:
+        if t["status"] != "DONE" and t.get("due_date") and t["due_date"] < today.isoformat():
+            t["due_date"] = (today + timedelta(days=30)).isoformat()
     ms = sorted(home["mishmarim"], key=lambda m: _dmy(m["gregorian_date"]))
     upcoming = [m for m in ms if _dmy(m["gregorian_date"]) >= today]
     hero = upcoming[0] if upcoming else ms[-1]
@@ -1046,6 +1051,175 @@ def check_structure(browser, demo_base: str, auth_base: str, shots: Path, checks
         ctx.close()
 
 
+TOOLS = "/functions/v1/v2-tools"
+
+
+class UploadMock(StructureMock):
+    """…and the v2-tools Edge Function: it reads the multipart form the browser
+    sends and answers like handler.ts — {status, url, path}. What the function
+    itself checks is test_v2_tools.py's; here: one call per file picked, with
+    the right fields, and the link saved through the right door."""
+
+    def __init__(self, wf: dict, **kw):
+        super().__init__(wf, **kw)
+        self.tool_refuse: str | None = None
+        self.tool_fail = False
+
+    def __call__(self, route, request):
+        if urlparse(request.url).path != TOOLS:
+            return super().__call__(route, request)
+        from email.parser import BytesParser
+        from email.policy import default
+        raw = request.post_data_buffer or b""
+        msg = BytesParser(policy=default).parsebytes(
+            b"Content-Type: " + request.headers.get("content-type", "").encode() + b"\r\n\r\n" + raw)
+        fields: dict = {}
+        for part in msg.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            data = part.get_payload(decode=True) or b""
+            fields[name] = {"size": len(data)} if part.get_filename() is not None else data.decode()
+        self.calls.append({"path": TOOLS, "auth": request.headers.get("authorization"), "body": fields})
+        if self.tool_fail:
+            return route.fulfill(status=500, content_type="application/json", body='{"status":"boom"}')
+        if self.tool_refuse:
+            answer = {"status": self.tool_refuse}
+        else:
+            path = f"mishmar-{int(fields.get('mishmar', 0)):02d}/{fields.get('target')}-{fields.get('id')}-0a1b2c3d-sheet.pdf"
+            answer = {"status": "ok", "path": path, "url": f"{MOCK}/storage/v1/object/public/sources/{path}"}
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
+
+
+def check_upload(browser, demo_base: str, auth_base: str, shots: Path, checks: dict, facts: dict) -> None:
+    """A source sheet as a file: the slot's editor and a presenter of חבורות
+    each send ONE call to v2-tools with the file and what it is for, then save
+    the link through the door they already use; a file that cannot be a sheet
+    never leaves the phone; a refusal and a failure say so and save nothing;
+    the instructor gets no upload at all; the demo says it uploads nowhere."""
+    demo_home = json.loads((WEB / "src/demo.json").read_text(encoding="utf-8"))
+    base_wf = workfile_fixture()
+    mid = base_wf["mishmar"]["id"]
+    slot0 = next(l for l in base_wf["lessons"] if not l["is_break"])
+    pdf = {"name": "דף מקורות.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4 a sheet"}
+    tool_url = lambda target, i: f"{MOCK}/storage/v1/object/public/sources/mishmar-{mid:02d}/{target}-{i}-0a1b2c3d-sheet.pdf"
+
+    for w in WIDTHS:
+        mock = UploadMock(base_wf, rpc_body=demo_home)
+        ctx, page, errors = wf_page(browser, auth_base, mock, w, mid)
+        k = f"upload@{w}: "
+        f: dict = {}
+        alert = page.get_by_role("alert")
+        tools = lambda: [c for c in mock.calls if c["path"] == TOOLS]
+        try:
+            page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+            page.get_by_role("tab", name="הערב").click()
+            card = page.locator(f"#slot-{slot0['id']}")
+            # the slot's editor: the file → the link field, saved with 💾
+            card.get_by_role("button", name="עריכת המקטע: שיעור 1").click()
+            sheet = page.get_by_role("dialog", name="עריכת מקטע")
+            sheet.locator(f"[data-upload='lesson-{slot0['id']}']").set_input_files(pdf)
+            sheet.get_by_text("הועלה —").wait_for(timeout=5000)
+            f["slot_call"] = [c["body"] for c in tools()]
+            f["slot_auth"] = tools()[0]["auth"] if tools() else None
+            f["field"] = sheet.get_by_label("📎 קישור לדף מקורות").input_value()
+            f["saved_before"] = len(mock.sent("v2_save_slot"))
+            page.screenshot(path=str(shots / f"v2-upload-sheet-{w}.png"))
+            sheet.get_by_role("button", name="💾 שמירה").click()
+            sheet.wait_for(state="detached", timeout=5000)
+            f["slot_save"] = [c["p_source_url"] for c in mock.sent("v2_save_slot")]
+            # a presenter: the file → saved at once, through v2_edit_person
+            page.locator("[data-upload='presenter-502']").set_input_files(
+                {"name": "Rav Cohen.png", "mimeType": "image/png", "buffer": b"\x89PNG\r\n\x1a\n"})
+            page.wait_for_function("() => document.querySelector('[role=status]')?.textContent.includes('דף המקורות נשמר')",
+                                   timeout=5000)
+            f["presenter_call"] = [c["body"] for c in tools()][1:]
+            f["presenter_save"] = mock.sent("v2_edit_person")
+            # not a sheet / too big: said, and nothing sent
+            before = len(tools())
+            page.locator("[data-upload='presenter-502']").set_input_files(
+                {"name": "setup.exe", "mimeType": "application/octet-stream", "buffer": b"MZ"})
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('אפשר להעלות PDF')",
+                                   timeout=5000)
+            page.locator("[data-upload='presenter-502']").set_input_files(
+                {"name": "big.pdf", "mimeType": "application/pdf", "buffer": b"%" * (20 * 1024 * 1024 + 1)})
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('גדול מדי')",
+                                   timeout=5000)
+            f["kept_local"] = len(tools()) == before
+            # the function says no / fails: said, no door called
+            saves = len(mock.sent("v2_edit_person"))
+            mock.tool_refuse = "storage"
+            page.locator("[data-upload='presenter-502']").set_input_files(pdf)
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('האחסון')",
+                                   timeout=5000)
+            f["refused"] = alert.inner_text()
+            mock.tool_refuse, mock.tool_fail = None, True
+            page.locator("[data-upload='presenter-502']").set_input_files(pdf)
+            page.wait_for_function("() => document.querySelector('[role=alert]')?.textContent.includes('הקובץ לא הועלה')",
+                                   timeout=5000)
+            f["failed"] = alert.inner_text()
+            f["no_save_after"] = len(mock.sent("v2_edit_person")) == saves
+            f["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+        except Exception as e:
+            f["failed_at"] = str(e).splitlines()[0]
+            page.screenshot(path=str(shots / f"v2-upload-failed-{w}.png"), full_page=True)
+        facts[f"upload@{w}"] = f
+        checks[k + "the slot's editor: one v2-tools call (the file, lesson, its id, the evening), as the user"] = \
+            f.get("slot_call") == [{"action": "upload", "mishmar": str(mid), "target": "lesson",
+                                    "id": str(slot0["id"]), "file": {"size": len(pdf["buffer"])}}] \
+            and (f.get("slot_auth") or "").startswith("Bearer ")
+        checks[k + "…its link fills the field, and is saved by 💾 through v2_save_slot — not before"] = \
+            f.get("field") == tool_url("lesson", slot0["id"]) and f.get("saved_before") == 0 \
+            and f.get("slot_save") == [tool_url("lesson", slot0["id"])]
+        checks[k + "a presenter: one call (presenter, 502), saved at once through v2_edit_person"] = \
+            f.get("presenter_call") == [{"action": "upload", "mishmar": str(mid), "target": "presenter", "id": "502",
+                                         "file": {"size": 8}}] \
+            and f.get("presenter_save") == [{"p_person_id": 502, "p_phone": None, "p_room": None,
+                                             "p_source_url": tool_url("presenter", 502)}]
+        checks[k + "not a sheet / over 20MB → said on the phone, nothing sent"] = f.get("kept_local") is True
+        checks[k + "a refusal and a failure → said, no door called"] = "האחסון" in f.get("refused", "") \
+            and "הקובץ לא הועלה" in f.get("failed", "") and f.get("no_save_after") is True
+        checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
+        ctx.close()
+
+    # the instructor: not one upload
+    mock = UploadMock(dict(base_wf, viewer="instructor"),
+                      rpc_body={"status": "instructor", "me": {"id": 100, "name": "מדריך/ה לדוגמה"}, "trainees": []})
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("tab", name="הערב").click()
+        page.locator("section[id^=slot-]").first.wait_for(timeout=5000)
+        h = {"inputs": page.locator("input[type=file]").count(), "buttons": page.get_by_text("📤").count()}
+    except Exception as e:
+        h = {"failed_at": str(e).splitlines()[0]}
+    facts["upload instructor"] = h
+    checks["upload instructor: no file input, no upload button"] = h.get("inputs") == 0 and h.get("buttons") == 0 \
+        and not errors
+    ctx.close()
+
+    # the demo: says it uploads nowhere, and does not
+    ctx = browser.new_context(viewport={"width": 390, "height": 900}, locale="he-IL")
+    sent: list[str] = []
+    ctx.on("request", lambda r: sent.append(r.url) if "/functions/" in r.url or "/rpc/" in r.url else None)
+    page = ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    d: dict = {}
+    try:
+        page.goto(f"{demo_base}/?demo#/m/{mid}")
+        page.get_by_role("tab", name="הערב").click()
+        page.locator("section[id^=slot-]").first.get_by_role("button", name=re.compile("עריכת המקטע")).click()
+        d["before"] = page.get_by_label("📎 קישור לדף מקורות").input_value()
+        page.locator("[data-upload^='lesson-']").set_input_files(pdf)
+        page.wait_for_function("() => document.querySelector('[role=status]')?.textContent.includes('בהדגמה הקובץ')",
+                               timeout=5000)
+        d["after"] = page.get_by_label("📎 קישור לדף מקורות").input_value()
+    except Exception as e:
+        d["failed_at"] = str(e).splitlines()[0]
+    facts["upload demo"] = d
+    checks["upload demo: says the file goes nowhere; nothing sent, the field unchanged"] = \
+        "failed_at" not in d and d.get("before") == d.get("after") and not sent and not errors
+    ctx.close()
+
+
 def check_settings(browser, messy: str, badurl: str, shots: Path, checks: dict, facts: dict) -> None:
     """Hand-pasted settings: cleaned when they can be, named when they cannot —
     never a blank page."""
@@ -1112,6 +1286,7 @@ def main(argv: list[str]) -> int:
         check_auth(browser, auth_base, shots, checks, facts)
         check_workfile(browser, demo_base, auth_base, shots, checks, facts)
         check_structure(browser, demo_base, auth_base, shots, checks, facts)
+        check_upload(browser, demo_base, auth_base, shots, checks, facts)
         check_settings(browser, serve(tmp / "messy", under), serve(tmp / "badurl", under),
                        shots, checks, facts)
         browser.close()
