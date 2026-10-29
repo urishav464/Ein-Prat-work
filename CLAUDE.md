@@ -145,7 +145,9 @@ script writes, grey = computed.
   in at least one group of the stage (not blocked from all of them by `group_blocks` / `bw.APART`), and `assign`
   routes a person to a group that would otherwise be left short (`at_risk`: fewer eligible people left than open
   slots) before plan order — without both, the dining room silently under-filled. A task with fewer names than
-  «אנשים» is a `shabbat.py` warning, and shrunk tasks get their reduced «אנשים» written back to the workbook. `bw.APART` keeps the Friday dining-room cleaners (14:00 in both
+  «אנשים» is a `shabbat.py` warning; a shrunk task keeps the asked «אנשים» in the workbook (only the in-memory
+  size drops), so its flyer shows the red «חסרים N» — the gap stays visible for a manual pin (e.g. 30.10: 48 people ×
+  2 stages = 96 places for 100 slots, the Motzash dining room 15→10). `bw.APART` keeps the Friday dining-room cleaners (14:00 in both
   separate and ovens-from-11 weeks) and the בית מדרש crew (the 8:45 helpers — challot start at 7:00, so the
   slot rule alone doesn't separate them) out of every הכנות שישי group: `assign_all` adds it to `group_blocks`
   from the groups already assigned, and `shabbat.py` fails on an overlap (pins excepted);

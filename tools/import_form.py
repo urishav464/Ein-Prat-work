@@ -436,7 +436,7 @@ def main():
         iso, msg["filler"] or "—", "כן" if msg["shared"] else "לא",
         " · תנורים " + msg["ovens"] if msg["ovens"] else ""))
     print("  {} נוכחים · {} לא בשישי · {} עוזבים לפני מוצ\"ש".format(
-        len(att), sum(r["לא זמין בשלב"] == FRIDAY for r in att), sum(r["לא זמין בשלב"] == MOTZASH for r in att)))
+        len(att), sum(FRIDAY in r["לא זמין בשלב"] for r in att), sum(MOTZASH in r["לא זמין בשלב"] for r in att)))
     for p in preps:
         print("  · {:<22} {:<16} {} אנשים{}{}".format(p["הכנה"], p["כמות"] or p["משימה"][:16], p["אנשים"],
               " · אחראי: " + p["אחראי"] if p["אחראי"] else "", " · עזרה: " + p["עזרה"] if p["עזרה"] else ""))
