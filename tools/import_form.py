@@ -300,9 +300,10 @@ def build(msg, warn):
             warn("{} מעביר/ה חבורה אבל מסומן/ת «לא בשבת»".format(n))
     att = []
     for n in present:
-        blocked = FRIDAY if n in nofri else (MOTZASH if n in leave else "")
-        note = ("לא בשישי" + (" — " + nofri[n] if nofri.get(n) else "")) if n in nofri else \
-               ("עוזב/ת לפני מוצ\"ש" if n in leave else "")
+        blocked = ";".join(s for s, on in ((FRIDAY, n in nofri), (MOTZASH, n in leave)) if on)   # «רק בשבת עצמה» — שניהם
+        note = " · ".join(x for x in (
+            ("לא בשישי" + (" — " + nofri[n] if nofri.get(n) else "")) if n in nofri else "",
+            "עוזב/ת לפני מוצ\"ש" if n in leave else "") if x)
         if n in havurot:
             note = " · ".join(x for x in (note, "מעביר/ה חבורה") if x)
         groups_out = (NOFRI_BLOCK if n in nofri else ()) + (HAVURA_BLOCK if n in havurot else ())

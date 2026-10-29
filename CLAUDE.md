@@ -168,7 +168,8 @@ script writes, grey = computed.
   group's (`lead_slots`, e.g. the 14:00 dining room vs dinner prep), so they stay free to lead on Shabbat), `לא בקבוצה` (groups the ranking never puts
   this person in — the havurot presenters are kept out of גסטרונומים (11:00 oven) and both Shabbat-lunch groups
   (`import_form.HAVURA_BLOCK`) and the «לא בשישי» students out of «גסטרונומים», which starts Friday 14:00
-  (`import_form.NOFRI_BLOCK`); pins still win; automatic
+  (`import_form.NOFRI_BLOCK`; the form's «רק בשבת עצמה» state lists a person under both «לא בשישי» and «עוזבים
+  לפני מוצ"ש», and the import then blocks both the Friday stages and Motzash); pins still win; automatic
   staff leads skip blocked groups, and the group with the fewest eligible staff picks first). A pin or leader
   role in a *later* stage is a commitment: its `(day, hour)` slots are reserved and its
   points are added to the person's ranking score in earlier stages, so stage order can't
@@ -177,7 +178,7 @@ script writes, grey = computed.
 - `shrink_to_fit` reduces the largest tasks when there are not enough available people.
 - **Meal duties** (since 15.10): «גסטרונומים» (2) does every food move — Friday 14:00 unloading, into the warming
   oven before each meal (+ the urns), out at each meal; «ארוחת ערב» / «ארוחת צהריים שבת» (4) do the pre-meal salads
-  and table; «פינוי ארוחת ערב» / «פינוי ארוחת צהריים וסעודה שלישית» (5) clear, bins, sweep and wash; טיש and
+  and table; «פינוי ארוחת ערב» (7, since 30.10) / «פינוי ארוחת צהריים וסעודה שלישית» (5) clear, bins, sweep and wash; טיש and
   קידוש are 3 with one combined task. Friday lunch and the Motzash dinner stay single. Each פינוי group keeps an
   hourless whole-group washing task, so pins beyond 5 still get a task. Group names «ארוחת ערב» / «ארוחת צהריים
   שבת» are *also* menu keys / event names («ארוחת ערב», «ארוחת צהריים») — harmless (different columns), but never

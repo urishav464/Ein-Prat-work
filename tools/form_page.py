@@ -93,8 +93,9 @@ def demo_state(students, kind, shabbat, cleaners):
         att[n] = "out"
     att[names[10]] = att[names[11]] = "nofri"
     att[names[20]] = "leave"
+    att[names[21]] = "both"                    # לא בשישי וגם עוזב/ת לפני מוצ"ש
     state = {"date": shabbat["iso"], "filler": names[30], "att": att,
-             "why": {names[10]: "שמירה בליל חמישי", names[11]: "מגיע ב-12:00"},
+             "why": {names[10]: "שמירה בליל חמישי", names[11]: "מגיע ב-12:00", names[21]: "מגיע/ה מאוחר"},
              "preps": [
                  {"what": "חלות", "qty": '8 ק"ג קמח', "ppl": "4", "lead": names[31], "help": "6", "note": "",
                   "where": "המחסן ליד המטבח", "store": "", "ing": "", "steps": ""},
