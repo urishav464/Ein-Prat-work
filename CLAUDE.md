@@ -205,7 +205,8 @@ script writes, grey = computed.
   (טיש = סעודת שבת + 90; the Motzash events therefore sit on day `שבת`), resolved in definition order by
   `bw.schedule_rows`, which then sorts by `event_sort_key` (day, time; before 05:00 counts as after
   midnight). `עיגול` rounds *up* to that many minutes (formula path: `ROUNDUP(ROUND(x*1440,0)/step,0)*step/1440`,
-  never CEILING on a time); `לא לפני` is a floor (סעודת שבת ≥ 19:00; formula `IF(ref="","",MAX(TIME(…),core))`
+  never CEILING on a time); `לא לפני` is a floor (סעודת שבת had ≥ 19:00 until 30.10 — Uri dropped it, so dinner is always candle + 1:45; no
+  row uses a floor now, but the mechanism stays; formula `IF(ref="","",MAX(TIME(…),core))`
   — the MAX must stay inside the IF). Candle/havdalah come from `bw.read_zmanim()`: `zmanim.csv` (computed for
   Jerusalem) overridden by the yeshiva.org.il Kfar Adumim times in `shabbatot.csv`; `new_shabbat` writes them
   into the file's «זמנים» row so export and formulas agree.
