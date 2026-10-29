@@ -793,10 +793,23 @@ def run_tool(name: str, args: dict, ctx: dict) -> dict:
 # names with the angle they answer. The old pipeline quoted the literal topic
 # into fourteen fixed queries and mined names out of snippets with regex —
 # which is why a lesson topic made it narrower instead of wider.
+#
+# Round 3 (the trainees' verdict on a Marxism evening: «mostly old academics,
+# not really lecturers»): the map read the topic as RESEARCH FIELDS, the scan
+# looked on faculty pages, and «high confidence» meant a university page — so
+# the most established professor always won. A candidate is now someone who
+# TEACHES young people or a broad audience today, with a lecture, a class or a
+# podcast to show for it (`teaching_link`), and that evidence is what ranks.
+# The pair can type people «in the style of…» (looked up, never returned) and
+# mark a card «not a fit» with a reason; the next scan of the evening avoids
+# those names and reads the reasons.
 # --------------------------------------------------------------------------
 
-SCOUT_MAX_SEARCHES = 8      # ceiling; a run gets 2 per angle + 1 (_scout_tools)
-SCOUT_MAX_FETCHES = 4       # ceiling; a run gets 1 per angle + 1 — free beyond tokens
+SCOUT_MAX_SEARCHES = 12     # ceiling; a run gets 3 per angle + 1 per example (_scout_tools)
+SCOUT_MAX_FETCHES = 5       # ceiling; a run gets 1 per angle + 1, +1 with examples — free beyond tokens
+MAX_EXAMPLES = 3            # «מרצים בסגנון של…» — names the pair or the staff typed
+MAX_AVOID = 15              # names marked «לא מתאים» on this evening, with the reason
+MAX_ON_EVENING = 20         # names already on the evening (candidates, closed speakers)
 SCOUT_MAX_CONTINUES = 2     # pause_turn resumptions before «truncated»
 SCOUT_FETCH_TOKENS = 5000   # cap on a fetched page (an average page is ~2.5k)
 
@@ -829,31 +842,38 @@ def _is_institutional(url: str) -> bool:
     return any(k in host for k in _INSTITUTIONAL)
 
 MAP_SYSTEM = """\
-אתה עוזר לצוות של מדרשת עין פרת לתכנן משמר — ערב לימוד של לילה שלם, בנוי
-משלושה שיעורים ושעת חבורות. כל שיעור פונה לנושא הערב מזווית אחרת:
-1. **יסודות** — מה צריך לדעת כדי לדבר על הנושא בכלל: התחום שהוא שייך אליו.
+אתה עוזר לצוות של מדרשת עין פרת לתכנן משמר — ערב לימוד של לילה שלם לצעירים
+בני 18–25, בנוי משלושה שיעורים ושעת חבורות. כל שיעור פונה לנושא הערב מזווית אחרת:
+1. **יסודות** — מה צריך לדעת כדי לדבר על הנושא בכלל.
 2. **ערעור / טוויסט** — מי שהופך את השאלה ומערער על היסודות.
 3. **זווית מפתיעה** — תחום סמוך שלא היינו חושבים עליו.
 
 תקבל נושא של משמר, אולי גם נושא של שיעור בתוכו, ואולי זווית שנבחרה. תפקידך:
-**לתרגם את הנושא לתחומים** ולומר איזה סוג של אדם עוסק בהם — לא למצוא אנשים.
+**לתרגם את הנושא לזוויות** ולומר איזה סוג של אדם מלמד אותן היטב לצעירים — לא
+למצוא אנשים.
+
+מי מתאים למשמר: מי ש**מלמד/ת היום צעירים או קהל רחב** — מחנכים ומורים במכינות,
+במדרשות ובבתי מדרש, מרצים בסדרות הרצאות פתוחות, בפודקאסטים ובווידאו, רבנים,
+כותבים, אמנים ואנשי עשייה. איש/אשת אקדמיה מתאים/ה רק כשיש לו/ה גם הוראה לקהל רחב.
+מי שהמדרשה הזמינה עד היום הם ברובם מחנכים, רבנים, מורים לטקסט, אנשי קולנוע, שירה
+וניגון — לא פרופסורים.
 
 כללים:
-- `terms` הם 2–4 מונחי חיפוש **רחבים** בעברית, כפי שחוקרים בתחום מכנים אותו
-  (למשל «זיכרון קולקטיבי», «היסטוריוגרפיה», «פסיכולוגיה של הזיכרון»). **לעולם
-  לא הביטוי של הנושא עצמו** ולא משפט — הנושא הוא שאלה של ערב; מונח חיפוש הוא
-  שם של שדה מחקר.
-- `where` — 1–3 מוסדות או חוגים בישראל שבהם אנשים כאלה יושבים באמת. אל תמציא
-  חוג שאינך בטוח שקיים; מוסד כללי («האוניברסיטה העברית») עדיף על חוג מומצא.
-- `who` — סוג האדם במילה או שתיים, לא שם של אדם — **והנושא קובע אותו**, לא
-  ברירת מחדל. זה יכול להיות חוקר/ת, אבל גם מחנך/ת, רב/ה, סופר/ת, אמן/ית,
-  איש/אשת מקצוע מהשטח (מטפל/ת, שופט/ת, רופא/ה), עיתונאי/ת — מי שבאמת מדבר על
-  זה בישראל. העדף מי שמלמד/ת קהל רחב של צעירים, לא רק עמיתים.
-- `where` יכול להיות גם מקום שאינו אקדמי: מכון הרטמן, בית אבי חי, עלמא, בינה,
-  קולות, מכון הדר, בתי מדרש, או מקום של עשייה — מה שמתאים לסוג האדם.
-- `why` — משפט אחד: איך התחום הזה מדבר עם הנושא הספציפי.
-- `reading` — משפט אחד: על מה הנושא באמת, במילים של שדה מחקר. `field` — שם
-  התחום של הזווית. `key` — מספר הזווית כפי שממוספרת למעלה (1, 2 או 3).
+- `terms` הם 2–4 נושאים קצרים בעברית, כפי שהרצאה, שיעור או פרק פודקאסט לקהל רחב
+  היו נקראים (למשל «מרקס», «מהפכות במאה ה-20», «צדק חברתי»). **לעולם לא הביטוי
+  של הנושא עצמו** ולא משפט — הנושא הוא שאלה של ערב; מונח חיפוש הוא שם של נושא
+  שמלמדים, לא שם של שדה מחקר אקדמי.
+- `where` — 1–3 מקומות בישראל שבהם מלמדים את זה צעירים או קהל רחב: מכינות
+  קדם-צבאיות, מדרשות, בתי מדרש, סדרות הרצאות, פודקאסטים, או מוסדות כמו מכון הרטמן,
+  בית אבי חי, עלמא, בינה, קולות, מכון הדר. חוג אקדמי רק אם מלמדים בו גם קהל רחב.
+  אל תמציא מקום שאינך בטוח שקיים; סוג מקום כללי («מכינות קדם-צבאיות») עדיף על שם
+  מומצא.
+- `who` — סוג האדם במילה או שתיים, לא שם של אדם — **והנושא קובע אותו**: מחנך/ת,
+  מורה במכינה, רב/ה, סופר/ת, אמן/ית, עיתונאי/ת, איש/אשת מקצוע מהשטח, או מרצה
+  שמלמד/ת קהל רחב. «חוקר/ת» לבדו אינו סוג אדם למשמר.
+- `why` — משפט אחד: איך הזווית הזו מדברת עם הנושא הספציפי.
+- `reading` — משפט אחד: על מה הנושא באמת. `field` — שם הזווית בכמה מילים.
+  `key` — מספר הזווית כפי שממוספרת למעלה (1, 2 או 3).
 - אם נבחרה זווית — החזר רק אותה, עם המספר שלה. אחרת החזר את שלושתן.
 - עברית בלבד.
 """
@@ -886,43 +906,60 @@ MAP_SCHEMA = {
 }
 
 SCOUT_SYSTEM = """\
-אתה סוקר מרצים למשמר של מדרשת עין פרת — ערב לימוד של לילה שלם, שלושה שיעורים
-מזוויות שונות על נושא אחד. תקבל את הנושא ו**מפה**: לכל זווית — תחום, סוג האדם,
-מונחי חיפוש ומוסדות. תפקידך למצוא **אנשים חיים ופעילים בישראל** שעוסקים בתחומים
-האלה ומתאימים לנושא, בעזרת חיפוש ברשת.
+אתה סוקר מרצים למשמר של מדרשת עין פרת — ערב לימוד של לילה שלם לצעירים בני
+18–25, שלושה שיעורים מזוויות שונות על נושא אחד. תקבל את הנושא ו**מפה**: לכל
+זווית — סוג האדם, מונחי חיפוש ומקומות. תפקידך למצוא **אנשים חיים ופעילים בישראל
+שמלמדים היום צעירים או קהל רחב** בנושא הזה, בעזרת חיפוש ברשת.
+
+מי מתאים: מי שיש עליו/ה **עדות להוראה לקהל רחב** — הרצאה פתוחה, שיעור במכינה,
+במדרשה או בבית מדרש, סדרת הרצאות, פרק פודקאסט, סרטון של הרצאה, קורס לציבור. מי
+שכל הנוכחות שלו/ה ברשת היא דף סגל ומאמרים אינו מועמד טוב, גם אם התחום מדויק;
+גמלאים ופרופסורים אמריטוס — רק אם יש עדות שהם מלמדים קהל רחב היום. בין שני
+מתאימים, העדף את מי שהעדות שלו/ה עדכנית יותר.
 
 השיטה:
-1. חפש לפי **מונחי המפה והמוסדות** — לא לפי ניסוח הנושא. דפים שמכילים את ניסוח
-   הנושא הם מאמרים; אנשים נמצאים בדפי סגל, רשימות עמיתים, תוכניות כנסים, פרקי
-   פודקאסט, ספרים שיצאו לאחרונה, ראיונות. חפש בעברית; באנגלית רק כדי להגיע לעמוד
-   המוסדי של אדם שכבר מצאת. בערך שני חיפושים לכל זווית.
-   **סוג האדם שבמפה מחייב**: אם המפה אומרת «מחנך/ת» או «אמן/ית» — חוקר/ת אינו
-   תחליף. בין שני מתאימים, העדף את מי שיש עדות שמלמד/ת קהל רחב (הרצאות פתוחות,
-   קורסים, פודקאסט) — וכתוב את זה ב-`fit`.
-2. כשעלה שם מבטיח — פתח דף אחד עליו (עמוד מוסדי, ראיון) כדי לבסס שיוך ופעילות
-   עדכנית. אל תפתח יותר מדף אחד לאדם.
-3. החזר **1–2 שמות לכל זווית** שנשארה במפה, ולא יותר מ-{max} בסך הכל.
+1. אם יש `examples` — שמות שהזוג או הצוות הקלידו כדוגמה למרצה שמתאים — חפש קודם
+   כל אחד מהם **פעם אחת**, כדי ללמוד מה הוא/היא עושה בפועל: איפה מלמד/ת, איזה
+   קהל, באיזה סגנון. אחר כך חפש אנשים **דומים להם בזה**. **אל תחזיר את הדוגמאות
+   עצמן**, ואל תתאר אותן בפלט.
+2. חפש **הרצאות ושיעורים, לא דפי סגל**: מונחי המפה עם «הרצאה», «שיעור», «סדרת
+   שיעורים», «מכינה», «בית מדרש» או «פודקאסט», ולפי המקומות שבמפה — לא לפי ניסוח
+   הנושא. חפש בעברית; באנגלית רק כדי להגיע לעמוד של אדם שכבר מצאת. בערך שלושה
+   חיפושים לכל זווית. **סוג האדם שבמפה מחייב**: אם המפה אומרת «מחנך/ת» או
+   «אמן/ית» — חוקר/ת אינו תחליף.
+3. כשעלה שם מבטיח — פתח דף אחד עליו, **עדיף דף של הרצאה או שיעור** (או העמוד
+   שלו/ה במקום שבו הוא/היא מלמד/ת), כדי לבסס את ההוראה ואת הפעילות העדכנית. אל
+   תפתח יותר מדף אחד לאדם.
+4. החזר **1–2 שמות לכל זווית** שנשארה במפה, ולא יותר מ-{max} בסך הכל.
 
 כללים קשיחים:
-1. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד — שפינוזה,
-   לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין. ספק — לא להחזיר.
+1. **לעולם לא אדם שאינו בחיים.** הוגה היסטורי שצץ בתוצאות אינו מועמד — מרקס,
+   שפינוזה, לוינס, קפקא ועגנון הם טקסטים ללמוד, לא אנשים להזמין. ספק — לא להחזיר.
 2. **פרטי קשר לעולם לא.** אין טלפון, אין אימייל, גם אם הם מופיעים בדף. במקום זה —
-   הקישור המוסדי שבו אדם יוכל למצוא אותם.
+   הקישור שבו אדם יוכל למצוא אותם.
 3. כל שדה שאינך יכול לבסס על דף שקראת — החזר "" ריק. ניחוש הוא המצאה, ועדיף
-   שדה ריק על פרט שגוי שחניך יסתמך עליו כשהוא מתקשר.
-4. `link` ו-`evidence[].href` חייבים להיות כתובות שהופיעו **בתוצאות החיפוש שלך**.
-   כתובת שלא ראית — אל תכתוב.
-5. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
+   שדה ריק על פרט שגוי שחניך יסתמך עליו כשהוא מתקשר. **גיל — לעולם לא לנחש ולא
+   לכתוב**; שלב בקריירה רק אם הוא כתוב בדף.
+4. `link`, `teaching_link` ו-`evidence[].href` חייבים להיות כתובות שהופיעו
+   **בתוצאות החיפוש שלך**. כתובת שלא ראית — אל תכתוב.
+5. **אל תחזיר** את מי שמופיע ב-`examples`, ב-`avoid` או ב-`on_evening`. `avoid` הם
+   שמות שהזוג סימן «לא מתאים», והסיבה כתובה לידם — למד ממנה: «אקדמי מדי» אומר
+   לחפש רחוק יותר מהאקדמיה, «לא מרצה לצעירים» אומר לחפש מי שמלמד צעירים בפועל.
+   `on_evening` כבר נמצאים בערב.
+6. **אל תמלא מקומות סתם.** אם רק שניים באמת מתאימים — החזר שניים. רשימה
    מרופדת גרועה מרשימה קצרה וכנה.
-6. ב-`rejected` עד 4 שמות ששקלת ופסלת, ולמה בחצי משפט — כדי שלא יחפשו אותם שוב.
-7. עברית בלבד. טקסט בין החיפושים לא מוצג לאיש ולא נקרא — רק ה-JSON שבסוף.
-   החזר JSON בלבד, בלי הקדמה ובלי סיכום. `bio` ו-`fit` — משפט אחד כל אחד.
+7. ב-`rejected` עד 4 שמות ששקלת ופסלת, ולמה בחצי משפט — כדי שלא יחפשו אותם שוב.
+8. עברית בלבד. טקסט בין החיפושים לא מוצג לאיש ולא נקרא — רק ה-JSON שבסוף.
+   החזר JSON בלבד, בלי הקדמה ובלי סיכום. `bio`, `teaching` ו-`fit` — משפט אחד
+   כל אחד.
 
 {"candidates": [{"name": "שם בלי תואר", "title": "ד\\"ר/הרב/פרופ׳ או \\"\\"",
   "angle": "1|2|3",
-  "affiliation": "מוסד / חוג, אם עולה מהדפים",
+  "affiliation": "מוסד / מקום, אם עולה מהדפים",
   "region_hint": "עיר או אזור, אם עולה מהדפים",
   "bio": "משפט אחד — מי זה ובמה עוסק/ת",
+  "teaching": "משפט אחד — איפה ומה מלמד/ת קהל רחב, לפי הדפים; \\"\\" אם אין עדות",
+  "teaching_link": "קישור להרצאה / שיעור / פודקאסט / סרטון שלו/ה, אם נמצא; אחרת \\"\\"",
   "fit": "משפט אחד — מה בעבודה שלו/ה נוגע לנושא הזה דווקא",
   "link": "הקישור הכי רלוונטי לנושא מתוך מה שקראת",
   "evidence": [{"title": "...", "href": "..."}]}],
@@ -930,10 +967,10 @@ SCOUT_SYSTEM = """\
 
 --- חומר עזר קבוע (זהה בכל קריאה) ---
 
-המוסדות שהתוכנית מזמינה מהם, לזיהוי שיוך מוסדי: האוניברסיטה העברית, בר-אילן,
-תל אביב, בן-גוריון, חיפה, מכון שלום הרטמן, מכון ון ליר, בית אבי חי, בית מורשה,
-מכללת הרצוג, מרכז זלמן שזר, מכון פרדס, עלמא, בינה, קולות, המדרשה באורנים,
-ישיבת הקיבוץ הדתי, מכון הדר, מדרשת עין פרת עצמה.
+מקומות שהתוכנית מזמינה מהם, לזיהוי שיוך: מכינות קדם-צבאיות, מדרשות ובתי מדרש,
+מכון שלום הרטמן, בית אבי חי, בית מורשה, מכללת הרצוג, מרכז זלמן שזר, מכון פרדס,
+עלמא, בינה, קולות, המדרשה באורנים, ישיבת הקיבוץ הדתי, מכון הדר, מכון ון ליר,
+האוניברסיטאות, מדרשת עין פרת עצמה.
 
 `region_hint` — עיר או אזור רק אם הם כתובים בדף שקראת; המרחק מהמדרשה מחושב
 אצלנו מתוך השיוך והאזור.
@@ -1110,13 +1147,17 @@ def scout_map(topic: str, lesson_topic: str = "", angle: str = "") -> dict:
             "usage": _usage_of(resp)}
 
 
-def _scout_tools(n_angles: int = 3, with_fetch: bool = True) -> list[dict]:
-    """Budgets sized to the request: 2 searches per angle + 1, one page per
-    angle + 1. A single-angle scan used to be allowed the full 8 searches."""
+def _scout_tools(n_angles: int = 3, with_fetch: bool = True, n_examples: int = 0) -> list[dict]:
+    """Budgets sized to the request: 3 searches per angle — lectures are found
+    by searching for lectures, which takes a query more than a faculty page —
+    plus one per example to read who that person is; one page per angle + 1,
+    and one more when there are examples. A single-angle scan used to be
+    allowed the full ceiling."""
     n = max(1, min(3, n_angles))
+    k = max(0, min(MAX_EXAMPLES, n_examples))
     tools = [
         {"type": SCOUT_SEARCH_TOOL, "name": "web_search",
-         "max_uses": min(SCOUT_MAX_SEARCHES, 2 * n + 1),
+         "max_uses": min(SCOUT_MAX_SEARCHES, 3 * n + k),
          # direct, not dynamic filtering: every result block then comes back
          # whole, and the harvested URLs are what grounds the names (below)
          "allowed_callers": ["direct"]},
@@ -1124,7 +1165,8 @@ def _scout_tools(n_angles: int = 3, with_fetch: bool = True) -> list[dict]:
         # («Country code IL is not supported»), which failed every scan. The
         # map's Hebrew field terms and Israeli institutions localise it anyway.
         {"type": SCOUT_FETCH_TOOL, "name": "web_fetch",
-         "max_uses": min(SCOUT_MAX_FETCHES, n + 1), "max_content_tokens": SCOUT_FETCH_TOKENS},
+         "max_uses": min(SCOUT_MAX_FETCHES, n + 1 + (1 if k else 0)),
+         "max_content_tokens": SCOUT_FETCH_TOKENS},
     ]
     # web fetch can be switched off for the organization on its own; search
     # alone still grounds names, on the result URLs
@@ -1170,38 +1212,63 @@ def _harvest_sources(content, sources: dict, queries: list[str]) -> None:
                         "page_age": None})
 
 
-def _confidence(urls: list[str], sources: dict) -> str:
-    """high = an institutional page AND recent activity in the evidence;
-    medium = one of the two; low = neither. The same promotion rule the old
-    scout applied to mined snippets, applied to the pages the model read."""
+_CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _confidence(urls: list[str], sources: dict, teaching: bool = False) -> str:
+    """high = evidence that the person TEACHES a broad audience (a grounded
+    `teaching_link`) AND recent activity in the evidence; medium = the
+    teaching evidence alone, or an institutional page that is recent; low =
+    neither. Until round 3 it was «institutional AND recent» — a university
+    page — which put the most established professor first on every topic."""
     institutional = any(_is_institutional(u) for u in urls)
     years = []
     for u in urls:
         years += [int(y) for y in re.findall(r"20\d\d", str((sources.get(u) or {}).get("page_age") or ""))]
     recent = any(y >= 2024 for y in years)
-    if institutional and recent:
+    if teaching and recent:
         return "high"
-    if institutional or recent:
+    if teaching or (institutional and recent):
         return "medium"
     return "low"
 
 
-def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
+def _name_key(name: Optional[str]) -> str:
+    """One person however the name was typed — no title, no gershayim or
+    quotes, single spaces: «ד"ר אסף מלאך» and «אסף מלאך» are one key."""
+    bare = dm.split_title(dm.normalize_name(name))[1]
+    return " ".join(bare.translate(_NAME_MARKS).split())
+
+
+def _ground(candidates: list, sources: dict, rejected: list,
+            skip: Optional[dict] = None) -> list[dict]:
     """The no-invention rule, enforced in code: a candidate is kept only when
     at least one of its links is a page the model actually retrieved; a link
     outside that set is blanked; contact fields are stripped whatever came
     back; every name is «⚠️ לאמת». The old scout kept a name only if it was
     among the names WE sent — with the model doing the searching, the
-    anchor moves from names to URLs."""
+    anchor moves from names to URLs.
+
+    `skip` maps a `_name_key` to why it must not come back — an example the
+    pair typed, a name marked «לא מתאים», a person already on the evening.
+    The prompt says so too; this is the part that does not depend on the
+    model listening. The survivors are ranked by the teaching evidence
+    (`_confidence`) before the cap, so a sixth name with a lecture behind it
+    is not cut for a fifth with a faculty page only."""
+    skip = skip or {}
     out = []
     for c in candidates[:MAX_SCOUT_CANDIDATES * 2]:
         if not isinstance(c, dict) or not (c.get("name") or "").strip():
             continue
         name = " ".join(str(c["name"]).split())
+        if _name_key(name) in skip:
+            rejected.append({"name": name, "why": skip[_name_key(name)]})
+            continue
         ev = [e for e in (c.get("evidence") or []) if isinstance(e, dict) and e.get("href")]
         kept_ev = [e for e in ev if e["href"] in sources]
         link = c.get("link") if c.get("link") in sources else ""
-        urls = [e["href"] for e in kept_ev] + ([link] if link else [])
+        teaching_link = c.get("teaching_link") if c.get("teaching_link") in sources else ""
+        urls = [e["href"] for e in kept_ev] + [u for u in (link, teaching_link) if u]
         if not urls:
             rejected.append({"name": name, "why": "לא נתמך בדף שהחיפוש הביא — נזרק (ungrounded)"})
             continue
@@ -1219,17 +1286,19 @@ def _ground(candidates: list, sources: dict, rejected: list) -> list[dict]:
             "affiliation": str(c.get("affiliation") or "").strip(),
             "region_hint": str(c.get("region_hint") or "").strip(),
             "bio": str(c.get("bio") or "").strip(),
+            "teaching": str(c.get("teaching") or "").strip(),
+            "teaching_link": teaching_link,
+            "teaching_title": (sources.get(teaching_link) or {}).get("title") or "" if teaching_link else "",
             "fit": str(c.get("fit") or "").strip(),
             "rationale": str(c.get("rationale") or c.get("fit") or "").strip(),
-            "link": link or (kept_ev[0]["href"] if kept_ev else ""),
+            "link": link or (kept_ev[0]["href"] if kept_ev else teaching_link),
             "inst_link": inst,
             "evidence": [{"title": e.get("title") or "", "href": e["href"]} for e in kept_ev][:4],
             "flags": ["⚠️ לאמת"], "source": "web",
-            "confidence": _confidence(urls, sources),
+            "confidence": _confidence(urls, sources, teaching=bool(teaching_link)),
         })
-        if len(out) >= MAX_SCOUT_CANDIDATES:
-            break
-    return out
+    out.sort(key=lambda c: _CONFIDENCE_RANK[c["confidence"]])     # stable: the model's order within a level
+    return out[:MAX_SCOUT_CANDIDATES]
 
 
 def _off_for_org(exc: Exception, *names: str) -> bool:
@@ -1258,15 +1327,49 @@ def _cost(usage: dict) -> float:
     return mtok + (u.get("searches") or 0) * SEARCH_USD
 
 
+def _clean_names(names, cap: int) -> list[str]:
+    """Typed names, once each (by `_name_key`), trimmed, at most `cap`."""
+    out, seen = [], set()
+    for x in names or []:
+        x = " ".join(str(x or "").split())[:60]
+        if x and _name_key(x) and _name_key(x) not in seen:
+            seen.add(_name_key(x))
+            out.append(x)
+    return out[:cap]
+
+
+def _clean_avoid(avoid) -> list[dict]:
+    """«לא מתאים» marks as {name, why}, once per person — the newest reason."""
+    by_key: dict = {}
+    for a in avoid or []:
+        if isinstance(a, dict) and _name_key(a.get("name")):
+            by_key[_name_key(a["name"])] = {"name": " ".join(str(a["name"]).split())[:60],
+                                            "why": " ".join(str(a.get("why") or "").split())[:80]}
+    return list(by_key.values())[-MAX_AVOID:]
+
+
 def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
-                   progress=None, scout_map_result: Optional[dict] = None) -> dict:
+                   progress=None, scout_map_result: Optional[dict] = None,
+                   examples: Optional[list[str]] = None, avoid: Optional[list[dict]] = None,
+                   on_evening: Optional[list[str]] = None) -> dict:
     """The expensive call: the model searches the web along the map and comes
     back with grounded names. `progress` gets one Hebrew line per search and
     per page opened. Every failure degrades to {"fallback": True, "reason":…}
     with the map and the queries kept, so the screen can still hand the pair
     one manual link per term. `lesson` is kept for the saved-search columns.
-    `usage["cost_usd"]` is the whole search in money: this call plus the map."""
-    res = _scout_run(topic, lesson, lesson_topic, progress, scout_map_result)
+    `usage["cost_usd"]` is the whole search in money: this call plus the map.
+
+    `examples` — people the pair or the staff typed «בסגנון של…»: looked up
+    to learn what they do, never returned. `avoid` — names marked «לא מתאים»
+    on this evening, with the reason ({name, why}). `on_evening` — the
+    evening's own candidates and speakers. None of the three comes back as a
+    candidate (`_ground`); the first two are kept with the saved search."""
+    examples = _clean_names(examples, MAX_EXAMPLES)
+    avoid = _clean_avoid(avoid)
+    on_evening = _clean_names(on_evening, MAX_ON_EVENING)
+    res = _scout_run(topic, lesson, lesson_topic, progress, scout_map_result,
+                     examples, avoid, on_evening)
+    res["examples"], res["avoid"] = examples, avoid
     usage = dict(res.get("usage") or {})
     # the map is billed with the FIRST scan made from it — the caller drops
     # its usage from the held map afterwards, so a re-scan does not bill it again
@@ -1276,8 +1379,11 @@ def scout_speakers(topic: str, lesson: str = "", lesson_topic: str = "",
 
 
 def _scout_run(topic: str, lesson: str, lesson_topic: str,
-               progress, scout_map_result: Optional[dict]) -> dict:
+               progress, scout_map_result: Optional[dict],
+               examples: Optional[list[str]] = None, avoid: Optional[list[dict]] = None,
+               on_evening: Optional[list[str]] = None) -> dict:
     smap = scout_map_result or {}
+    examples, avoid, on_evening = examples or [], avoid or [], on_evening or []
     angles = [a for a in (smap.get("angles") or []) if a.get("on", True)]
     if not angles:
         return {"fallback": True, "reason": "no_map", "map": smap, "queries": [],
@@ -1288,7 +1394,17 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
         "angles": [{k: a[k] for k in ("key", "label", "field", "who", "terms", "where", "why")}
                    for a in angles],
         "max_candidates": min(MAX_SCOUT_CANDIDATES, 2 * len(angles)),
+        "examples": examples,
+        "avoid": avoid,
+        "on_evening": on_evening,
     }, ensure_ascii=False)
+    # who must not come back, and the line `rejected` says about each — later
+    # entries win, so a person both typed and marked reads as the typed example
+    skip = {_name_key(n): "כבר בערב" for n in on_evening}
+    skip.update({_name_key(a["name"]): f"סומן קודם כלא מתאים — {a['why']}".rstrip(" —")
+                 for a in avoid})
+    skip.update({_name_key(n): "אחת הדוגמאות שהוקלדו — אפשר להוסיף אותה ישר בתיק"
+                 for n in examples})
 
     sources: dict = {}
     queries: list[str] = []
@@ -1309,7 +1425,7 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
                              # inside one scan's server-side loop hit it either way
                              "cache_control": {"type": "ephemeral"}}],
                     output_config={"effort": "medium"},
-                    tools=_scout_tools(len(angles), with_fetch),
+                    tools=_scout_tools(len(angles), with_fetch, len(examples)),
                     messages=messages,
                 ) as stream:
                     seen_blocks = 0
@@ -1382,7 +1498,7 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
                 "queries": queries, "rejected": [], "usage": usage}
 
     rejected = [r for r in (data.get("rejected") or []) if isinstance(r, dict)][:8]
-    vetted = _ground(data.get("candidates") or [], sources, rejected)
+    vetted = _ground(data.get("candidates") or [], sources, rejected, skip)
     for c in vetted:
         c["region_flag"], c["region_place"] = dm.region_match(c.get("region_hint"),
                                                               c.get("affiliation"))
@@ -1402,8 +1518,10 @@ def _scout_run(topic: str, lesson: str, lesson_topic: str,
 
 def slim_for_storage(result: dict) -> dict:
     """What a search leaves behind: the map, the queries, the names with the
-    fields that describe a person, the rejections, the outcome and the cost.
-    Never evidence snippets or raw pages. A few KB, so every run is kept."""
+    fields that describe a person, the rejections, the outcome and the cost —
+    and what the pair steered it with (the examples typed, the names marked
+    «לא מתאים» before it). Never evidence snippets or raw pages. A few KB, so
+    every run is kept. `added` and `dismissed` grow afterwards, on the row."""
     smap = result.get("map") or {}
     return {
         "fallback": bool(result.get("fallback")),
@@ -1415,14 +1533,18 @@ def slim_for_storage(result: dict) -> dict:
         "queries": list(result.get("queries") or [])[:20],
         "candidates": [{k: c.get(k) for k in
                         ("name", "title", "angle", "affiliation", "region_hint", "region_flag",
-                         "region_place", "bio", "fit", "rationale", "link", "inst_link",
+                         "region_place", "bio", "teaching", "teaching_link", "teaching_title",
+                         "fit", "rationale", "link", "inst_link",
                          "evidence", "flags", "confidence",
                          "memory", "already_approached")}
                        for c in (result.get("candidates") or [])],
         "rejected": list(result.get("rejected") or [])[:8],
         "strong": result.get("strong", 0), "target": result.get("target", ss.MIN_STRONG_CANDIDATES),
         "usage": result.get("usage") or {},
+        "examples": list(result.get("examples") or []),
+        "avoid": list(result.get("avoid") or []),
         "added": list(result.get("added") or []),
+        "dismissed": list(result.get("dismissed") or []),
     }
 
 

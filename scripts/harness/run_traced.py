@@ -49,6 +49,9 @@ if _mode and not getattr(tracer, "_scout_patched", False):
                 progress("מחפש: " + q.lstrip("🔎📄 "))
         res = json.loads(json.dumps(_canned))
         res["map"] = m
+        # what the real wrapper hands back besides the scan: the steering, as given
+        res["examples"] = list(k.get("examples") or [])
+        res["avoid"] = list(k.get("avoid") or [])
         if not res.get("fallback"):
             res["candidates"] = [c for c in res["candidates"] if c.get("angle") in on]
             res["strong"] = sum(1 for c in res["candidates"] if c["confidence"] == "high")

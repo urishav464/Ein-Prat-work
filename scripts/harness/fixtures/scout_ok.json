@@ -104,7 +104,10 @@
    "memory": null,
    "already_approached": false,
    "inst_link": "https://huji.example.ac.il/staff/a",
-   "region_place": "ירושלים"
+   "region_place": "ירושלים",
+   "teaching": "מלמד/ת סדרת הרצאות פתוחה לצעירים על זיכרון והיסטוריה",
+   "teaching_link": "https://example.org/fixture/lecture-video",
+   "teaching_title": "הרצאה מצולמת"
   },
   {
    "name": "מרצה בדיקה ב",
@@ -132,7 +135,10 @@
    "memory": "‼️ במאגר · לימד/ה אצלנו: תשובה בראי הפסיכולוגיה (18.9.25) · חנוכה והאל — ניתי? (11.12.25) · סטטוס במאגר: ✅ לימד פעמיים",
    "already_approached": false,
    "region_place": "בר-אילן",
-   "inst_link": "https://biu.example.ac.il/staff/b"
+   "inst_link": "https://biu.example.ac.il/staff/b",
+   "teaching": "",
+   "teaching_link": "",
+   "teaching_title": ""
   },
   {
    "name": "מרצה בדיקה ג",
@@ -159,7 +165,10 @@
    "memory": null,
    "already_approached": false,
    "region_place": "",
-   "inst_link": ""
+   "inst_link": "",
+   "teaching": "",
+   "teaching_link": "",
+   "teaching_title": ""
   }
  ],
  "rejected": [
@@ -167,5 +176,7 @@
    "name": "ברוך שפינוזה",
    "why": "הוגה היסטורי — טקסט ללמוד, לא אדם להזמין"
   }
- ]
+ ],
+ "examples": [],
+ "avoid": []
 }

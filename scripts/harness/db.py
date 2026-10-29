@@ -20,6 +20,7 @@ stored as the database comment).
 Test-only. Nothing here touches Supabase or reads Streamlit secrets."""
 import hashlib, json, os, subprocess, sys
 from pathlib import Path
+from datetime import date
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -88,6 +89,10 @@ def fingerprint() -> str:
     h = hashlib.sha256()
     for f in ("supabase_schema.sql", "students_tasks.md", "scripts/harness/db.py"):
         h.update((ROOT / f).read_bytes())
+    # and the day: the build closes every evening already past (below), so a
+    # fixture built before an evening's date would close it on the sweep's
+    # first login instead — and fail the home's query count on a date
+    h.update(date.today().isoformat().encode())
     return h.hexdigest()[:16]
 
 

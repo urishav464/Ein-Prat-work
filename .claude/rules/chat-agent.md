@@ -40,10 +40,11 @@ Now:
    (terms as a text line, a checkbox per angle) before anything expensive runs.
 2. **`scout_speakers(topic, lesson, lesson_topic, progress, scout_map_result)`** — the model
    searches the web itself (`max_tokens` 16000, streamed — thinking counts toward it, and one real
-   scan used 5.3k output): `web_search_20260318` (`max_uses` = 2 per angle + 1, ceiling
-   `SCOUT_MAX_SEARCHES = 8` — a single-angle scan used to be allowed all 8,
+   scan used 5.3k output): `web_search_20260318` (`max_uses` = 3 per angle + 1 per example,
+   ceiling `SCOUT_MAX_SEARCHES = 12` — it was 2 per angle + 1, ceiling 8, until round 3 below;
+   a single-angle scan used to be allowed the whole ceiling,
    `allowed_callers: ["direct"]`, no `user_location` — the API rejects `country: "IL"` with a 400 «Country code IL is not supported», which failed every scan until the «פרטים טכניים» text named it) + `web_fetch_20260318`
-   (`max_uses` = angles + 1, ceiling 4; `max_content_tokens = 5000` — an average page is ~2.5k;
+   (`max_uses` = angles + 1, +1 with examples, ceiling 5; `max_content_tokens = 5000` — an average page is ~2.5k;
    free beyond tokens, can only open URLs its own
    searches returned). Streamed, so every `server_tool_use` becomes a progress line («מחפש: …» /
    «קורא: …»). `pause_turn` is resumed at most `SCOUT_MAX_CONTINUES = 2` times by sending the
@@ -70,13 +71,42 @@ card opens as «🏛️ עמוד המוסד» (the old «אמת» re-ran a 5-sec
 model had just read). Nothing here could be tested against the API from the sandbox; the
 comparison is the instructor's re-run of the same topic against the $0.22 baseline.
 
+**Round 3 of the method (the trainees' verdict, 2026-10: «mostly old academics, not really
+lecturers», on a Marxism evening — the staff had suggested educators instead).** The cause was
+in the method, not the model: the map read the topic as RESEARCH FIELDS («as researchers name
+it», `where` = departments), the scan looked on faculty pages first, and «high confidence» was
+an institutional page + a recent one — so the most established professor won every topic, and
+«teaches a broad audience» was only a tie-breaker. Now: (1) **the target is someone who teaches
+18–25s or a broad audience TODAY** — mechina / midrasha / beit-midrash teachers, open lecture
+series, podcasts, video, rabbis, writers, artists; an academic only with public teaching; the
+map's `terms` are subjects a lecture would be titled by, `where` the places that teach young
+people, and «חוקר/ת» alone is not a kind of person for a Mishmar. (2) The scan searches for
+LECTURES, opens a lecture page when it can, and returns `teaching` (one sentence) and
+`teaching_link` (a lecture / class / podcast / video URL from its own results — `_ground`
+blanks one it never retrieved). (3) **`_confidence` ranks the teaching evidence**: `high` =
+a grounded `teaching_link` AND a page from 2024+; `medium` = the teaching link alone, or a
+recent institutional page; `low` = neither; `_ground` sorts by it BEFORE the cap. Age is never
+guessed (rule 3). (4) **«מרצים בסגנון של…»** (`examples`, ≤ 3, typed by the pair — by the
+instructor's decision ONLY typed names; the speaker index is never sent to the model): one
+search each to learn what the person does, then people like them; an example never comes
+back. (5) **«👎 לא מתאים?»** on a card (`DISMISS_REASONS`) writes `{name, why}` to the saved
+search (`dm.mark_search_dismissed`); the next scan of that evening sends them as `avoid`
+(`dm.search_avoid`, newest reason per person) and the evening's own people as `on_evening`
+(`dm.evening_people`). The prompt says not to return them and to read a reason as a
+correction («אקדמי מדי» → further from academia); `_ground` enforces it by `_name_key` (no
+title, no gershayim) and files each in `rejected` with the reason. The saved search keeps
+`examples`, `avoid`, `dismissed` and the teaching fields. `scripts/harness/test_scout.py`
+proves all of it on recorded messages (a stand-in client — payload, budgets, grounding,
+steering, ranking, pause_turn, the marks on the fixture); six planted bugs, each caught.
+What the model makes of the prompts is the pair's re-run of the same topic, against the
+round-2 cost of ≈₪0.8 (round 3's extra searches: ≈₪1–1.3, estimated, not yet measured).
+
 **Why `allowed_callers: ["direct"]` and not dynamic filtering.** Direct calls return every
 `web_search_tool_result` block whole; `_harvest_sources` collects every URL the model actually
 retrieved (search results, fetched pages, citations) and **that set is the no-invention rule
 now**: `_ground` keeps a candidate only if one of its links is in it, blanks a foreign `link`,
 drops the rest into `rejected` as `ungrounded`, strips contact fields, force-flags «⚠️ לאמת»,
-and derives confidence from the pages (institutional domain AND a page_age ≥ 2024 → `high`; one →
-`medium`). The old rule — a name is kept only if WE sent it — cannot exist when the model does
+and derives confidence from the pages — since round 3, from the TEACHING evidence (above). The old rule — a name is kept only if WE sent it — cannot exist when the model does
 the searching; the anchor moved from names to URLs. Dynamic filtering is the later cost
 optimisation, once we know what the runs really cost.
 

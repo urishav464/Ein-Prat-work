@@ -1876,10 +1876,13 @@ def _student_body(student_id: int, student_name: str = "") -> None:
 
 
 CONFIDENCE_CHIP = {
-    "high": ("🟢 ודאות גבוהה", "green"),
-    "medium": ("🟡 ודאות בינונית", "yellow"),
-    "low": ("🟠 ודאות נמוכה", "gold"),
+    "high": ("🟢 מלמד/ת קהל רחב · עדות עדכנית", "green"),
+    "medium": ("🟡 עדות חלקית", "yellow"),
+    "low": ("🟠 בלי עדות להוראה", "gold"),
 }
+# «👎 לא מתאים?» — the reasons a pair gives; the next scan of the evening
+# reads them back as corrections (chat_agent.SCOUT_SYSTEM rule 5)
+DISMISS_REASONS = ["אקדמי מדי", "לא מרצה לצעירים", "לא בנושא", "כבר מכירים"]
 REGION_HELP = {
     "🟢": "עד ~40 דקות מהמדרשה",
     "🟡": "כשעה–שעה וחצי",
@@ -1939,7 +1942,8 @@ def _default_slot(slots: list[dict], lesson_topic: str) -> int:
 
 
 def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
-                search_id: Optional[int] = None, lesson_topic: str = "") -> None:
+                search_id: Optional[int] = None, lesson_topic: str = "",
+                dismissed: Optional[list[dict]] = None) -> None:
     """One researched candidate: who they are, where they are, why they fit,
     and the evidence. Everything here is grounded in what the search returned —
     a field the scout could not support comes back empty, and contact details
@@ -1961,6 +1965,9 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
         for f in c.get("flags", []):
             if f != "⚠️ לאמת":              # said once, above the list
                 chips.append(_chip(f, "yellow"))
+        why_not = next((d.get("why") for d in dismissed or [] if d.get("name") == name), None)
+        if why_not is not None:
+            chips.append(_chip(f"👎 {why_not or 'לא מתאים'}", "gray"))
         st.markdown(
             f"<div class='task-desc'>{_clean(display)}</div><div>{''.join(chips)}</div>",
             unsafe_allow_html=True,
@@ -1970,6 +1977,9 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
             if c.get("promoted") else ""))
         if c.get("affiliation"):
             st.markdown(f"🏛️ {_clean(c['affiliation'])}")
+        # what they teach and to whom — the reason a name is here at all
+        if c.get("teaching"):
+            st.markdown(f"🎤 {_clean(c['teaching'])}")
         if c.get("bio"):
             st.markdown(_clean(c["bio"]))
         if c.get("fit") or c.get("rationale"):
@@ -1981,10 +1991,14 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
         if c.get("memory"):
             st.warning(_clean(c["memory"]))
         titles = {e.get("href"): e.get("title") for e in c.get("evidence") or []}
-        if c.get("link"):
+        # a lecture to listen to for two minutes before calling — first
+        teach = c.get("teaching_link")
+        if teach:
+            st.markdown(f"🎤 [{_link_label(teach, c.get('teaching_title') or titles.get(teach))}]({teach})")
+        if c.get("link") and c["link"] != teach:
             st.markdown(f"📄 [{_link_label(c['link'], titles.get(c['link']))}]({c['link']})")
         for ev in (c.get("evidence") or [])[:3]:
-            if ev.get("href") and ev["href"] != c.get("link"):
+            if ev.get("href") and ev["href"] not in (c.get("link"), teach):
                 st.caption(f"[{_link_label(ev['href'], ev.get('title'))}]({ev['href']})")
         st.caption("☎️ פרטי קשר לא נשלפים מהרשת — מצאו אותם דרך העמוד המוסדי.")
 
@@ -2018,6 +2032,26 @@ def _scout_card(c: dict, mid: Optional[int], lesson: str, idx: int,
         page = c.get("inst_link") or c.get("link")
         if page:
             ac3.link_button("🏛️ עמוד המוסד" if c.get("inst_link") else "🔗 הדף", page)
+        if search_id:
+            dkey = f"dismiss-{search_id}-{idx}-{name}"     # per search: a mark never leaks to another
+            st.selectbox("לא מתאים?", DISMISS_REASONS, key=dkey, label_visibility="collapsed",
+                         index=DISMISS_REASONS.index(why_not) if why_not in DISMISS_REASONS else None,
+                         placeholder="👎 לא מתאים?", width=220,
+                         on_change=_dismiss_changed, args=(search_id, name, dkey))
+
+
+def _dismiss_changed(search_id: int, name: str, key: str) -> None:
+    """on_change: «לא מתאים» with its reason, on the saved search — and on the
+    result on screen, so the card says it in the fragment run that follows."""
+    why = st.session_state.get(key)
+    if not why:
+        return
+    dm.mark_search_dismissed(search_id, name, why)
+    shown = st.session_state.get("scout_result") or {}
+    if shown.get("search_id") == search_id:
+        shown["dismissed"] = [d for d in shown.get("dismissed") or [] if d.get("name") != name] \
+            + [{"name": name, "why": why}]
+    st.toast(f"«{name}» סומן כלא מתאים — החיפוש הבא לערב לא יחזיר אותו/ה")
 
 
 def _add_candidate(c: dict, display: str, name: str, lesson: str,
@@ -2080,7 +2114,8 @@ def _prior_search(held: dict) -> Optional[dict]:
     a partner's scan included. Read from the SAME cached call the history
     above makes, so asking costs no query."""
     rows = dm.get_searches_for([m["id"] for m in _my_mishmarim()])
-    want = (held.get("mid"), _norm_topic(held.get("topic")), _norm_topic(held.get("lesson_topic")))
+    want = (held.get("mid"), _norm_topic(held.get("topic")), _norm_topic(held.get("lesson_topic")),
+            sorted(ca._name_key(x) for x in held.get("examples") or []))
     showing = (st.session_state.get("scout_result") or {}).get("search_id")
     for row in rows:
         if row["id"] == showing:            # the result already on screen
@@ -2088,8 +2123,8 @@ def _prior_search(held: dict) -> Optional[dict]:
         r = row.get("results_json") or {}
         if r.get("fallback") or not r.get("candidates"):
             continue
-        if (row.get("mishmar_id"), _norm_topic(row.get("topic")),
-                _norm_topic(row.get("lesson_topic"))) == want:
+        if (row.get("mishmar_id"), _norm_topic(row.get("topic")), _norm_topic(row.get("lesson_topic")),
+                sorted(ca._name_key(x) for x in r.get("examples") or [])) == want:
             return row
     return None
 
@@ -2112,6 +2147,7 @@ def _search_history(mine: list[dict]) -> None:
         outcome = (_he_count(n, "מועמד אחד", "מועמדים") if not r.get("fallback") else
                    "בלי תוצאות — " + SCOUT_FALLBACK_TEXT.get(r.get("reason") or "error", "")[:60])
         added = r.get("added") or []
+        nots = [d.get("name") for d in r.get("dismissed") or [] if d.get("name")]
         fields = " · ".join(a.get("field") or a.get("label") or ""
                             for a in (r.get("map") or {}).get("angles") or [] if a.get("on", True))
         c1, c2 = st.columns([5, 1])
@@ -2120,7 +2156,10 @@ def _search_history(mine: list[dict]) -> None:
             + (f" → {_clean(row['lesson_topic'])}" if row.get("lesson_topic") else "")
             + f" <span class='card-meta'>{str(row.get('created_at') or '')[:10]} · {outcome}"
             + (f" · נוספו: {_clean(' · '.join(added))}" if added else "")
-            + (f"<br>🗺️ {_clean(fields)}" if fields else "") + "</span>",
+            + (f" · 👎 {_clean(' · '.join(nots))}" if nots else "")
+            + (f"<br>🗺️ {_clean(fields)}" if fields else "")
+            + (f"<br>בסגנון של: {_clean(' · '.join(r['examples']))}" if r.get("examples") else "")
+            + "</span>",
             unsafe_allow_html=True)
         c2.button("פתח", key=f"reopen-{row['id']}", on_click=_set_state,
                   args=("scout_result", _reopened(row)))
@@ -2136,8 +2175,9 @@ def _search_history(mine: list[dict]) -> None:
 def show_speaker_search() -> None:
     st.title("חיפוש מרצים")
     st.caption(
-        "המודל קורא את הנושא כ**תחומים** — אתם מאשרים או מתקנים את המפה — ואז הוא סורק "
-        "את הרשת לפי התחומים ומחזיר שמות עם הזווית שכל אחד עונה עליה. "
+        "המודל קורא את הנושא כ**זוויות** — אתם מאשרים או מתקנים את המפה — ואז מחפש ברשת "
+        "מי שמלמד/ת את זה **היום, צעירים וקהל רחב**: הרצאות, שיעורים במכינות ובבתי מדרש, "
+        "פודקאסטים — ומחזיר שמות עם הזווית שכל אחד עונה עליה. "
         "כל שם הוא ⚠️ לאמת עד שבדקתם, ופרטי קשר לעולם לא נשלפים אוטומטית."
     )
     mine = _my_mishmarim()
@@ -2158,6 +2198,10 @@ def show_speaker_search() -> None:
         topic = f1.text_input("נושא המשמר", value=default_topic,
                               placeholder="למשל: תשובה")
         lesson_topic = f2.text_input("נושא השיעור", placeholder="למשל: חרטה ואחריות")
+        examples_raw = st.text_input(
+            "מרצים בסגנון של… (רשות)", placeholder="שמות שהצוות הציע, מופרדים בפסיק",
+            help="החיפוש קורא מה האנשים האלה עושים — איפה מלמדים, איזה קהל — ומחפש "
+                 "אנשים דומים. אותם עצמם הוא לא מחזיר.")
         g1, g2 = st.columns([1.4, 1.2])
         angle = g1.segmented_control(
             "המלצה: איזו זווית? (רשות)", options=list(LESSON_ANGLES),
@@ -2172,16 +2216,19 @@ def show_speaker_search() -> None:
         ) if mine else None
         go_map = st.form_submit_button("🗺️ בנה מפה", type="primary")
     st.caption("המפה היא קריאה אחת קטנה של המודל — כמה שניות. הסריקה עצמה, אחרי שאישרתם "
-               "את המפה, היא דקה או שתיים ועד שבעה חיפושים ברשת (שניים לכל זווית ועוד אחד); התוצאה נשמרת.")
+               "את המפה, היא דקה–שלוש ועד תשעה חיפושים ברשת (שלושה לכל זווית), ועוד אחד לכל "
+               "שם «בסגנון של»; היא מחפשת מי שמלמד/ת צעירים וקהל רחב, והתוצאה נשמרת.")
 
     topic, lesson_topic = topic.strip(), lesson_topic.strip()
+    examples = ca._clean_names((examples_raw or "").replace("،", ",").replace("\n", ",").split(","),
+                               ca.MAX_EXAMPLES)
     if go_map and (topic or lesson_topic):
-        with st.spinner("קורא את הנושא כתחומים…"):
+        with st.spinner("קורא את הנושא כזוויות…"):
             m = ca.scout_map(topic or lesson_topic, lesson_topic, lesson)
         st.session_state["scout_map"] = {
             "nonce": st.session_state.get("scout_map_nonce", 0) + 1,
             "map": m, "topic": topic or lesson_topic, "lesson_topic": lesson_topic,
-            "angle": lesson, "mid": mid,
+            "angle": lesson, "mid": mid, "examples": examples,
         }
         st.session_state["scout_map_nonce"] = st.session_state["scout_map"]["nonce"]
         st.session_state.pop("scout_result", None)
@@ -2312,8 +2359,12 @@ def _run_scan(held: dict) -> None:
             box.update(label=line)
             log.markdown("\n".join(f"- {_clean(x)}" for x in stages[-12:]))
 
+        # what the pair already said about this evening: names marked «לא
+        # מתאים» on its earlier scans, and the people already on it — two
+        # cached reads, the history above made the first one already
         res = ca.scout_speakers(topic, lesson, lesson_topic, progress=_stage,
-                                scout_map_result=smap)
+                                scout_map_result=smap, examples=held.get("examples"),
+                                avoid=dm.search_avoid(mid), on_evening=dm.evening_people(mid))
         # the map's cost now sits in this scan's cost_usd — a re-scan from the
         # same map (an angle unticked) must not bill it a second time
         (held.get("map") or {}).pop("usage", None)
@@ -2341,8 +2392,13 @@ def _scout_results(result: dict) -> None:
     mid, lesson = result.get("mid"), (st.session_state.get("scout_map") or {}).get("angle", "")
     st.markdown(f"#### המועמדים שנמצאו ({len(cands)})")
     # one line for the whole list — «⚠️ לאמת» on every card was noise
-    st.caption("⚠️ כל השמות נמצאו ברשת על ידי המודל — לאמת בעמוד המוסד לפני פנייה. "
-               "ודאות: 🟢 עמוד מוסדי וגם פעילות מ-2024 ואילך · 🟡 אחד מהשניים · 🟠 אף אחד.")
+    st.caption("⚠️ כל השמות נמצאו ברשת על ידי המודל — לאמת לפני פנייה. "
+               "🟢 יש הרצאה, שיעור או פודקאסט שלו/ה, ודף מ-2024 ואילך · 🟡 אחד מהשניים "
+               "(או עמוד מוסדי עדכני) · 🟠 בלי עדות שמלמד/ת קהל רחב. "
+               "«👎 לא מתאים?» על כרטיס — והחיפוש הבא לערב לא יחזיר את השם.")
+    if result.get("examples"):
+        st.caption("חיפש אנשים בסגנון של: " + _clean(" · ".join(result["examples"]))
+                   + " — את השמות האלה עצמם מוסיפים ישר בתיק המשמר.")
     groups = [(k, [c for c in cands if c.get("angle") == k]) for k in ("1", "2", "3")]
     groups.append(("", [c for c in cands if c.get("angle") not in ("1", "2", "3")]))
     idx = 0
@@ -2359,7 +2415,7 @@ def _scout_results(result: dict) -> None:
             for col, c in zip(cols, group[i:i + 2]):
                 with col:
                     _scout_card(c, mid, lesson, idx, result.get("search_id"),
-                                result.get("lesson_topic") or "")
+                                result.get("lesson_topic") or "", result.get("dismissed"))
                 idx += 1
     u = result.get("usage") or {}
     if u.get("input") is not None or u.get("searches") is not None:

@@ -29,6 +29,7 @@ python3 scripts/assign_trainees.py                    # regenerate migrations/20
 python3 scripts/harness/db.py up && python3 scripts/harness/harness.py serve   # local PG16 fixture + the app, traced
 python3 scripts/harness/harness.py sweep              # every screen + one click per kind vs the click contract
 python3 scripts/harness/harness.py stop && python3 scripts/harness/db.py down
+python3 scripts/harness/test_scout.py                 # the speaker scout around the model, on recorded answers: budgets, grounding, «בסגנון של» / «לא מתאים», the teaching-first ranking
 cd web && npm install && npm run build                # v2: tsc --noEmit + vite build (no env vars → demo mode)
 python3 web/supabase/test_v2.py                       # v2's database doors vs Supabase's default grants (after db.py up)
 python3 web/supabase/test_v2.py --on 5 --export web/src/demo.json --export-workfile web/src/demo_workfile.json   # regenerate the demo data

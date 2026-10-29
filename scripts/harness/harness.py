@@ -340,7 +340,14 @@ def _act(page, step: dict) -> str:
         spec = step["select"]
         box = page.locator(f'[aria-label*="{spec["label"]}"]').nth(spec.get("nth", 0))
         box.click(timeout=15000)
-        page.locator('[role="option"]').filter(has_text=spec["option"]).first.click(timeout=15000)
+        option = page.locator('[role="option"]').filter(has_text=spec["option"]).first
+        try:
+            option.wait_for(timeout=3000)
+        except Exception:
+            # the first click on a react-aria select after a long page run can
+            # be swallowed (measured: the same click opens it a moment later)
+            box.click(timeout=15000)
+        option.click(timeout=15000)
         return f"select «{spec['option']}»"
     if "reload" in step:
         page.reload()

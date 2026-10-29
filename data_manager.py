@@ -2412,6 +2412,58 @@ def mark_search_added(search_id: Optional[int], name: str) -> None:
         .eq("id", int(search_id)).execute()
 
 
+def mark_search_dismissed(search_id: Optional[int], name: str, why: str) -> None:
+    """«👎 לא מתאים» on a card: the name and the reason, on the row's own JSON
+    beside `added`. Marking the same name again replaces its reason. The next
+    scan of the same evening reads these back (`search_avoid`), never returns
+    the name, and reads the reason as a correction («אקדמי מדי»)."""
+    name, why = (name or "").strip(), (why or "").strip()
+    if not search_id or not name:
+        return
+    row = _one(_t("speaker_searches").select("id,results_json")
+               .eq("id", int(search_id)).execute())
+    if not row:
+        return
+    data = row.get("results_json") or {}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            data = {}
+    marks = [d for d in (data.get("dismissed") or [])
+             if isinstance(d, dict) and d.get("name") != name]
+    marks.append({"name": name, "why": why})
+    _t("speaker_searches").update({"results_json": {**data, "dismissed": marks}}) \
+        .eq("id", int(search_id)).execute()
+
+
+def search_avoid(mishmar_id: Optional[int]) -> list[dict]:
+    """Every «לא מתאים» on this evening's saved searches, oldest first — the
+    scout keeps the newest reason per person. Read from the same cached call
+    the screen's history makes, so asking costs no query."""
+    if not mishmar_id:
+        return []
+    marks: list[dict] = []
+    for row in reversed(get_searches_for([mishmar_id])):          # newest first → oldest first
+        marks += [d for d in ((row.get("results_json") or {}).get("dismissed") or [])
+                  if isinstance(d, dict) and d.get("name")]
+    return marks
+
+
+def evening_people(mishmar_id: Optional[int]) -> list[str]:
+    """The names already on the evening — every candidate, presenter and
+    panelist row, and each closed speaker (a panel's line split back into its
+    people) — so a scan does not spend a place on someone the pair has."""
+    if not mishmar_id:
+        return []
+    lessons = get_lessons(mishmar_id)
+    names = [n.strip() for l in lessons
+             for n in (l.get("speaker_name") or "").split(PANEL_SEP.strip()) if n.strip()]
+    for rows in get_lesson_speakers(mishmar_id, lessons).values():
+        names += [(r.get("name") or "").strip() for r in rows if (r.get("name") or "").strip()]
+    return list(dict.fromkeys(names))
+
+
 def delete_search(search_id: int) -> None:
     """The instructor's «🗑» — there is no retention rule, only a human's call."""
     _t("speaker_searches").delete().eq("id", int(search_id)).execute()
@@ -2841,6 +2893,7 @@ _WRITES = {
     "set_invitation": ("mishmarim",),
     "save_search": ("speaker_searches",),
     "mark_search_added": ("speaker_searches",), "delete_search": ("speaker_searches",),
+    "mark_search_dismissed": ("speaker_searches",),
     "cache_put": ("search_cache",),
     "backfill_speaker_domains": ("speakers",),
     "reseed_mishmar_tasks": ("tasks",),

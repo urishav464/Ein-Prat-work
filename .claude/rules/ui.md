@@ -169,6 +169,17 @@ More probe traps that produced false test results here: **input placeholders nev
   is saved and listed ABOVE the form, unfolded, for all of the pair's Mishmarim (`_search_history`);
   the instructor's dashboard has the season's table with «פתח» (`_goto(NAV_SEARCH)`) and «🗑».
   Probe trap: a Streamlit checkbox's `<input>` sits behind the styled box — click its `label`.
+  **Round 3 adds two controls.** The form's «מרצים בסגנון של… (רשות)» (comma-separated, ≤ 3,
+  `ca._clean_names`) rides in `held["examples"]` and is part of `_prior_search`'s key — other
+  examples are another search. Each card in `_results_panel` carries «👎 לא מתאים?» — a
+  `width=220` selectbox, `index=None` + placeholder, `on_change=_dismiss_changed` →
+  `dm.mark_search_dismissed` and the shown result's `dismissed` list, so the card's «👎 <reason>»
+  chip appears in the same fragment run (measured: 0 app runs, 1 fragment run, 2 queries). No
+  `help=` on it: a collapsed-label widget's help icon carries `aria-label="Help for <label>"`
+  and catches every `[aria-label*=…]` locator first. The card leads with what the person
+  teaches («🎤 …») and a lecture link before the other pages. Harness trap: the FIRST click on a
+  react-aria select after a long page run can be swallowed (the next one opens it) — the
+  harness's `select` step clicks once more when no option shows within 3 s.
 - **The angle picker is `st.segmented_control`** with short labels (`LESSON_ANGLES`) and the
   explanations in `help` (`ANGLE_HINTS`). Probe: `[data-testid=stButtonGroup]`; it returns `None`
   when nothing is selected, so the code falls back to «בלי המלצה».
