@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Assign the season's trainees to the 19 Mishmarim they build, and write the
-result everywhere it is recorded. Deterministic (seeded), so re-running gives
-the same answer and produces no diff.
+"""Assign the season's trainees to the Mishmarim they build, and write the
+result everywhere it is recorded. Deterministic (an exact search in a fixed
+order), so re-running gives the same answer and produces no diff.
 
 Writes:
   migrations/2026-09-assign-trainees.sql   — run in the Supabase SQL Editor
@@ -11,8 +11,10 @@ Writes:
 
 Rules, asserted below, not assumed:
   1. #01–#02 stay צוות — the staff build them.
-  2. 19 Mishmarim × 2 = 38 slots over 8 trainees → six get 5, two get 4.
-  3. Two different trainees per Mishmar, and all 19 pairs distinct.
+  2. The evenings × 2 slots spread as evenly as they go over the trainees
+     (17 × 2 = 34 over 8 since #08 and #11 were cancelled → six get 4, two
+     get 5; it was 19 × 2 = 38 → six 5, two 4).
+  3. Two different trainees per Mishmar, and all the season's pairs distinct.
   4. **MIN_BUILD_DAYS between a trainee's own evenings**, measured on the real
      calendar read from schedule.md — not "no two consecutive Mishmarim". The
      evenings are not evenly spaced (#03→#04 and #15→#16 are a fortnight
@@ -23,8 +25,11 @@ Rules, asserted below, not assumed:
      week of this one. 21 days is what makes that stop.
   5. AWAY and TOGETHER — the season's two human facts, declared here so the
      draw honours them and the assertions prove it.
+  6. CANCELLED evenings are out of the draw, and FIXED evenings keep their
+     pair: the ones that happened, the one being built, and a pair the
+     instructor placed by hand. The draw fills the rest around them.
 """
-import random, re, sys
+import itertools, re, sys
 from pathlib import Path
 from datetime import date
 
@@ -59,11 +64,17 @@ RETIRED_ROWS = {4: ("איתי בן יהודה", "חניך 4"), 8: ("יעל שם 
                 10: ("חניך 10",)}
 
 STAFF = (1, 2)
-MISHMARIM = list(range(3, 22))          # #03–#21
-SEED = 5787
-RESTARTS = 150_000
+# Evenings cancelled after the draw (the instructor, 2.11.2026): no Mishmar on
+# 5.11 or on 26.11. Their rows stay in schedule.md marked «בוטל». The
+# migration moves what an evening already holds to the evening named here
+# (#08's speaker searches → #10: אלה + כליל had started building it), then
+# deletes the row — and refuses to, rather than lose work, if the evening
+# holds slots, a budget, logistics, feedback or a task someone worked on.
+CANCELLED = {8: ("5.11.2026", 10), 11: ("26.11.2026", None)}
+MISHMARIM = [m for m in range(3, 22) if m not in CANCELLED]     # #03–#21 less the cancelled
 MIN_BUILD_DAYS = 21                     # = the app's topic deadline
-LOADS = [4, 4, 5, 5, 5, 5, 5, 5]
+_BASE, _EXTRA = divmod(2 * len(MISHMARIM), len(NAMES))
+LOADS = sorted([_BASE] * (len(NAMES) - _EXTRA) + [_BASE + 1] * _EXTRA)
 ROOT = Path(__file__).resolve().parent.parent
 SCHEDULE_MD = ROOT / "Mishmer-section/2026-27/schedule.md"
 
@@ -71,21 +82,33 @@ SCHEDULE_MD = ROOT / "Mishmer-section/2026-27/schedule.md"
 AWAY = {"אלה מאיר": {3, 4}}             # abroad until the day before 8.10
 # Trainees who must share exactly one evening.
 TOGETHER = ("אלה מאיר", "זואה כהן")
+# Evenings whose pair is no longer the draw's to change (2.11.2026): #03–#07
+# happened, #09 is being built, and #10 goes to אלה + כליל — the instructor's
+# call when #08, which they had started, was cancelled. #10's former pair
+# (רוני + רותם) had not started it.
+FIXED = {
+    3: ("יותם ספיר", "רותם דרור"),      4: ("זואה כהן", "כליל בלאוקופף"),
+    5: ("אלה מאיר", "טליה קור"),        6: ("איתי בן מנחם", "רותם דרור"),
+    7: ("יותם ספיר", "רוני פרנקל"),     9: ("איתי בן מנחם", "זואה כהן"),
+    10: ("אלה מאיר", "כליל בלאוקופף"),
+}
 
-# The pairs the trainees have been told (round F, with טליה קור in יעל שם
-# טוב's place). Not a constraint — the draw's preference, so that whatever
-# the rules allow stays where the pairs expect it; `kept` prints how many of
-# the 38 slots survived, and 38/38 is the proof that a change moved nobody.
+# The pairs the trainees have been told (round G, 2.11.2026: #08 and #11
+# cancelled, #10 to אלה + כליל, and the two moves that rebalanced the loads —
+# טליה into #12, רוני into #16). Not a constraint — the search's preference,
+# so that whatever the rules allow stays where the pairs expect it; `kept`
+# prints how many slots survived, and all of them is the proof that a change
+# moved nobody.
 # Frozen here rather than read back out of schedule.md, so this script stays
 # a pure function of its constants and a second run cannot drift.
 PREFERRED = {
     3:  ("יותם ספיר", "רותם דרור"),      4:  ("זואה כהן", "כליל בלאוקופף"),
     5:  ("אלה מאיר", "טליה קור"),        6:  ("איתי בן מנחם", "רותם דרור"),
-    7:  ("יותם ספיר", "רוני פרנקל"),     8:  ("אלה מאיר", "כליל בלאוקופף"),
-    9:  ("איתי בן מנחם", "זואה כהן"),    10: ("רוני פרנקל", "רותם דרור"),
-    11: ("טליה קור", "כליל בלאוקופף"),   12: ("איתי בן מנחם", "יותם ספיר"),
+    7:  ("יותם ספיר", "רוני פרנקל"),
+    9:  ("איתי בן מנחם", "זואה כהן"),    10: ("אלה מאיר", "כליל בלאוקופף"),
+    12: ("טליה קור", "יותם ספיר"),
     13: ("אלה מאיר", "זואה כהן"),        14: ("כליל בלאוקופף", "רוני פרנקל"),
-    15: ("איתי בן מנחם", "טליה קור"),    16: ("אלה מאיר", "יותם ספיר"),
+    15: ("איתי בן מנחם", "טליה קור"),    16: ("אלה מאיר", "רוני פרנקל"),
     17: ("זואה כהן", "רותם דרור"),       18: ("איתי בן מנחם", "כליל בלאוקופף"),
     19: ("טליה קור", "רוני פרנקל"),      20: ("אלה מאיר", "רותם דרור"),
     21: ("זואה כהן", "יותם ספיר"),
@@ -109,63 +132,85 @@ def read_dates() -> dict[int, date]:
     return out
 
 
-def draw(rng: random.Random, dates: dict[int, date]):
-    """One attempt: fill the evenings in order, each from the trainees who are
-    free, not away, and far enough from their own previous evening. Among
-    those, whoever already holds this evening comes first — that is what keeps
-    the diff small — then whoever has the most left to do."""
-    quota = {n: 5 for n in NAMES}
-    for n in rng.sample(NAMES, 2):
-        quota[n] = 4
+def search(dates: dict[int, date]):
+    """The assignment that keeps the most slots where the pairs expect them,
+    found exactly rather than drawn. The evenings are filled in date order,
+    each from the trainees who are free, not away, under their load and far
+    enough from their own previous evening; the pair the trainees were told
+    is tried first, and a branch is dropped the moment it can no longer beat
+    the best one found or still reach every load. Exact, because a draw can
+    miss: once the early evenings were fixed (2.11.2026) the seeded greedy
+    draw dead-ended at #19–#21 in all of 150,000 tries, while complete
+    assignments existed. Deterministic: the order tried is fixed, and the
+    first assignment with the best score wins."""
+    top = _BASE + 1
+    load = {n: 0 for n in NAMES}
     last: dict[str, date | None] = {n: None for n in NAMES}
-    pairs, used = {}, set()
+    pairs: dict[int, tuple] = {}
+    used: set = set()
     for mid in MISHMARIM:
-        pool = [n for n in NAMES
-                if quota[n] > 0 and mid not in AWAY.get(n, ())
-                and (last[n] is None
-                     or (dates[mid] - last[n]).days >= MIN_BUILD_DAYS)]
-        rng.shuffle(pool)
-        pool.sort(key=lambda n: (-(n in PREFERRED[mid]) * 3, -quota[n]))
-        chosen = None
-        for a in range(len(pool)):
-            for b in range(a + 1, len(pool)):
-                pr = tuple(sorted((pool[a], pool[b])))
-                if pr not in used:
-                    chosen = pr
-                    break
-            if chosen:
-                break
-        if not chosen:
-            return None
-        used.add(chosen)
-        pairs[mid] = chosen
-        for n in chosen:
-            quota[n] -= 1
-            last[n] = dates[mid]
-    if any(q != 0 for q in quota.values()):
-        return None
-    if not any(set(p) == set(TOGETHER) for p in pairs.values()):
-        return None
-    return pairs
+        if mid in FIXED:                     # a fact, not a choice
+            pr = tuple(sorted(FIXED[mid]))
+            assert pr not in used, f"#{mid}: a fixed pair repeats"
+            used.add(pr)
+            pairs[mid] = pr
+            for n in pr:
+                load[n] += 1
+                last[n] = dates[mid]
+    rest = [m for m in MISHMARIM if m not in FIXED]
+    best: dict = {"score": -1, "pairs": None}
+
+    def feasible(i: int) -> bool:
+        slots = 2 * (len(rest) - i)
+        short = sum(max(0, _BASE - load[n]) for n in NAMES)
+        over = sum(1 for n in NAMES if load[n] == top)
+        return short <= slots and over <= _EXTRA and all(v <= top for v in load.values())
+
+    def go(i: int, score: int) -> None:
+        if score + 2 * (len(rest) - i) <= best["score"] or not feasible(i):
+            return
+        if i == len(rest):
+            if sorted(load.values()) == LOADS and any(set(p) == set(TOGETHER) for p in pairs.values()):
+                best["score"], best["pairs"] = score, dict(pairs)
+            return
+        mid = rest[i]
+        # who may have this evening, the evening's previous holders first
+        free = [n for n in NAMES
+                if load[n] < top and mid not in AWAY.get(n, ())
+                and (last[n] is None or (dates[mid] - last[n]).days >= MIN_BUILD_DAYS)]
+        options = [tuple(sorted(pr)) for pr in itertools.combinations(free, 2)]
+        options = [pr for pr in options if pr not in used]
+        options.sort(key=lambda pr: -len(set(pr) & set(PREFERRED[mid])))
+        for pr in options:
+            prev = {n: last[n] for n in pr}
+            used.add(pr)
+            pairs[mid] = pr
+            for n in pr:
+                load[n] += 1
+                last[n] = dates[mid]
+            go(i + 1, score + len(set(pr) & set(PREFERRED[mid])))
+            for n in pr:
+                load[n] -= 1
+                last[n] = prev[n]
+            del pairs[mid]
+            used.discard(pr)
+
+    fixed_score = sum(len(set(pairs[m]) & set(PREFERRED[m])) for m in FIXED)
+    go(0, fixed_score)
+    return best["pairs"]
 
 
 def kept(pairs) -> int:
-    """How many of the 38 slots a candidate leaves where the pairs expect them."""
+    """How many of the slots a candidate leaves where the pairs expect them."""
     return sum(len(set(pairs[m]) & set(PREFERRED[m])) for m in MISHMARIM)
 
 
 def main():
     dates = read_dates()
-    rng = random.Random(SEED)
-    # Best of a fixed number of seeded restarts: every candidate already obeys
-    # every rule, so «best» only means «moves the fewest pairs».
-    best = None
-    for _ in range(RESTARTS):
-        cand = draw(rng, dates)
-        if cand and (best is None or kept(cand) > kept(best)):
-            best = cand
-    assert best, "no assignment satisfied the rules"
-    pairs = best
+    # every assignment the search returns obeys every rule, so «best» only
+    # means «moves the fewest pairs»
+    pairs = search(dates)
+    assert pairs, "no assignment satisfied the rules"
     # ---- assertions: the rules, checked, not assumed ----
     load = {n: 0 for n in NAMES}
     seen = set()
@@ -178,7 +223,10 @@ def main():
         for n in (a, b):
             load[n] += 1
             when[n].append(dates[mid])
-            assert mid not in AWAY.get(n, ()), f"{n} is away for #{mid}"
+            assert mid in FIXED or mid not in AWAY.get(n, ()), f"{n} is away for #{mid}"
+        if mid in FIXED:
+            assert set(pairs[mid]) == set(FIXED[mid]), f"#{mid} is fixed to {FIXED[mid]}"
+    assert not set(CANCELLED) & set(pairs), "a cancelled evening was drawn"
     assert sorted(load.values()) == LOADS, load
     for n, days in when.items():
         gaps = [(y - x).days for x, y in zip(days, days[1:])]
@@ -190,7 +238,7 @@ def main():
         "a retired row carries a current name"
     # ---- SQL ----
     sql = [f"-- The season's {len(NAMES)} trainees and the evenings they build.",
-           "-- Generated by scripts/assign_trainees.py (seed %d). Idempotent: run as often as needed." % SEED,
+           "-- Generated by scripts/assign_trainees.py (an exact search). Idempotent: run as often as needed.",
            "BEGIN;"]
     for n in NAMES:
         if n in STUDENT_IDS:
@@ -208,6 +256,29 @@ def main():
         names_in = ", ".join(f"'{w}'" for w in who)
         sql.append(f"DELETE FROM students WHERE id = {dead} AND name IN ({names_in});"
                    "   -- assignments cascade; other student_id refs go NULL")
+    # The cancelled evenings: refuse if one holds work that a delete would
+    # lose, move what moves (the topic if the target has none, the speaker
+    # searches and the outreach journal's rows), then delete — each DELETE
+    # guarded by the date, so it can only ever take out the evening meant.
+    gone = ", ".join(str(m) for m in sorted(CANCELLED))
+    sql.append("-- The cancelled evenings (2.11.2026): nothing a delete would lose, or stop here.")
+    sql.append("DO $$ BEGIN IF EXISTS (SELECT 1 FROM lessons WHERE mishmar_id IN (%s))"
+               " OR EXISTS (SELECT 1 FROM budget WHERE mishmar_id IN (%s))"
+               " OR EXISTS (SELECT 1 FROM logistics_items WHERE mishmar_id IN (%s))"
+               " OR EXISTS (SELECT 1 FROM feedback WHERE mishmar_id IN (%s))"
+               " OR EXISTS (SELECT 1 FROM tasks WHERE mishmar_id IN (%s) AND status <> 'TO DO')"
+               " THEN RAISE EXCEPTION 'a cancelled evening (%s) holds slots, budget, logistics, feedback"
+               " or a task in progress — move it by hand first'; END IF; END $$;"
+               % (gone, gone, gone, gone, gone, gone))
+    for mid, (when_, into) in sorted(CANCELLED.items()):
+        if into:
+            sql.append(f"UPDATE mishmarim SET topic = (SELECT topic FROM mishmarim WHERE id = {mid}) "
+                       f"WHERE id = {into} AND coalesce(topic, '') = '' "
+                       f"AND (SELECT coalesce(topic, '') FROM mishmarim WHERE id = {mid}) <> '';")
+            sql.append(f"UPDATE speaker_searches SET mishmar_id = {into} WHERE mishmar_id = {mid};")
+            sql.append(f"UPDATE speaker_outreach SET mishmar_id = {into} WHERE mishmar_id = {mid};")
+        sql.append(f"DELETE FROM mishmarim WHERE id = {mid} AND gregorian_date = '{when_}';"
+                   "   -- its template tasks and assignments cascade")
     sql.append(f"DELETE FROM assignments WHERE mishmar_id BETWEEN {MISHMARIM[0]} AND {MISHMARIM[-1]};")
     for mid in MISHMARIM:
         for n in pairs[mid]:
@@ -241,6 +312,11 @@ def main():
     # real names, or a fresh database gets placeholders and no pairs.
     seed = ROOT / "students_tasks.md"
     t = seed.read_text(encoding="utf-8")
+    # a cancelled evening leaves the seed whole — anchor, heading and tasks —
+    # or a fresh database would create it, and the roster check would see an
+    # evening the database no longer has
+    for mid in CANCELLED:
+        t = re.sub(rf'<a id="משמר-{mid:02d}"></a>\n.*?(?=<a id="משמר-|\Z)', "", t, flags=re.S)
     cur = None
     out = []
     in_index = False
@@ -284,25 +360,29 @@ def main():
         rows.append(f"| {n} | {', '.join(f'{mid:02d}' for mid in mine)} | "
                     f"{len(mine)} | {min(gaps)} ימים |")
     total = sum(len(p) for p in pairs.values())
-    five = sum(1 for n in NAMES if load[n] == 5)
+    more = sum(1 for n in NAMES if load[n] == _BASE + 1)
+    cancelled = " ו-".join(f"#{m:02d} ({w[:-5]})" for m, (w, _) in sorted(CANCELLED.items()))
     students = ROOT / "Mishmer-section/2026-27/students.md"
     students.write_text(
         "# חניכים — תשפ״ז / 2026-27\n\n"
-        f"> {HEB_NUM[len(NAMES)]} חניכים. השיבוץ מכסה **משמרים #03–21 בלבד** — #01 (משמר בוגרים) ו-#02 נבנים על ידי הצוות.\n"
-        "> נוצר על ידי `scripts/assign_trainees.py` (זרע קבוע, ולכן ניתן לשחזור), ומוחל במסד דרך\n"
+        f"> {HEB_NUM[len(NAMES)]} חניכים. השיבוץ מכסה **משמרים #03–21 בלבד** — #01 (משמר בוגרים) ו-#02 נבנים על ידי הצוות,\n"
+        f"> ו-{cancelled} בוטלו (2.11.2026).\n"
+        "> נוצר על ידי `scripts/assign_trainees.py` (חיפוש מלא בסדר קבוע, ולכן ניתן לשחזור), ומוחל במסד דרך\n"
         "> `migrations/2026-09-assign-trainees.sql`. המסד הוא האמת; הקבצים כאן מתעדים אותו.\n\n"
         f"## השיבוץ\n\nסך הכל {total} שיבוצים ({len(MISHMARIM)} משמרים × 2) על {len(NAMES)} חניכים: "
-        f"{HEB_NUM[five]} עם 5 משמרים ו{HEB_NUM[len(NAMES) - five]} עם 4.\n\n"
+        f"{HEB_NUM[more]} עם {_BASE + 1} משמרים ו{HEB_NUM[len(NAMES) - more]} עם {_BASE}.\n\n"
         "| חניך/ה | משמרים | סה״כ | מרווח מינימלי |\n|---|---|---|---|\n" + "\n".join(rows) + "\n\n"
         "## כללי השיבוץ\n\n1. **שני אחראים לכל משמר** — לא ל-#01–02.\n"
         f"2. **עומס מאוזן** — {total} שיבוצים על {len(NAMES)} = {total / len(NAMES):.2f} בממוצע; "
-        f"{five}×5 + {len(NAMES) - five}×4.\n"
+        f"{more}×{_BASE + 1} + {len(NAMES) - more}×{_BASE}.\n"
         f"3. **בלי זוגות חוזרים** — {len(MISHMARIM)} הזוגות שונים זה מזה "
         f"(מתוך {len(NAMES) * (len(NAMES) - 1) // 2} האפשריים).\n"
         f"4. **חלון בנייה מלא** — לפחות {MIN_BUILD_DAYS} ימים בין שני משמרים של אותו אדם, בלוח השנה\n"
         "   האמיתי ולא בספירת משבצות. זה בדיוק התאריך המומלץ לסגירת נושא שהאפליקציה מחשבת\n"
         "   (‎21 יום לפני הערב), ולכן אף זוג לא בונה משמר מתוך השבוע האחרון של המשמר הקודם שלו.\n"
-        "5. **אילוצים אישיים** — נרשמים ב-`AWAY` וב-`TOGETHER` בראש הסקריפט, ונבדקים בהרצה.\n",
+        "5. **אילוצים אישיים** — נרשמים ב-`AWAY` וב-`TOGETHER` בראש הסקריפט, ונבדקים בהרצה.\n"
+        f"6. **מה שכבר נקבע לא זז** — משמרים שהתקיימו, המשמר שנבנה עכשיו, ו-#10 של אלה וכליל (`FIXED`);\n"
+        f"   {cancelled} בוטלו (`CANCELLED`), והשיבוץ אחריהם נבנה מחדש סביבם.\n",
         encoding="utf-8")
     print("student ids:", {n: STUDENT_IDS.get(n, "MAX+1") for n in NAMES})
     print(f"kept {kept(pairs)}/{total} slots from the previous pairing")

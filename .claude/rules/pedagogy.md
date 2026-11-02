@@ -8,7 +8,7 @@ paths:
 
 # The Mishmar — pedagogy, content rules, and their traps
 
-A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:00–02:00 (`EVENING_START`; the generator prompt's 20:30 arc is the pedagogical ideal, not the clock). This repo is scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim, 8 trainees building them in pairs. `system_rules.md` is the operating layer — read it when acting as the programme's assistant rather than as a repo developer.
+A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:00–02:00 (`EVENING_START`; the generator prompt's 20:30 arc is the pedagogical ideal, not the clock). This repo is scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 19 Mishmarim (21 on the calendar; #08 and #11 cancelled on 2.11.2026), 8 trainees building them in pairs. `system_rules.md` is the operating layer — read it when acting as the programme's assistant rather than as a repo developer.
 
 ## Ideal vs. reality
 
@@ -27,7 +27,7 @@ A **Mishmar** is Midreshet Ein Prat's Thursday-night study seminar, 20:00–02:0
 
 - **Language:** file and folder names in English, all content in Hebrew.
 - **Dates:** always Hebrew + Gregorian together (`כ״א אלול תשפ״ו | 3.9.2026`).
-- `Mishmer-section/2026-27/schedule.md` is the source of truth for the 21 dates, types and responsible pairs.
+- `Mishmer-section/2026-27/schedule.md` is the source of truth for the dates, types and responsible pairs — the two cancelled evenings stay in its table, marked «בוטל».
 
 ## The archive (`Mishmer-section/2025-26/`)
 

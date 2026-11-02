@@ -14,7 +14,7 @@ This system is built for **one cohort only**:
 
 > **שנה ב' · תשפ"ז · 5787 · 2026-2027 · מדרשת עין פרת**
 
-- **21 Mishmarim**, all Thursdays, 3.9.2026 → 11.2.2027. The authoritative list is `Mishmer-section/2026-27/schedule.md`.
+- **19 Mishmarim**, all Thursdays, 3.9.2026 → 11.2.2027 (21 on the calendar; #08 on 5.11 and #11 on 26.11 were cancelled). The authoritative list is `Mishmer-section/2026-27/schedule.md`.
 - **8 trainees**, named in `students_tasks.md` (the roster's source), assigned in pairs to Mishmarim #03–21. **#01 and #02 are staff-built.**
 - Do **not** build "current year" abstractions, year-switchers, or multi-programme support. Hardcode תשפ"ז.
 
@@ -38,7 +38,7 @@ This system is built for **one cohort only**:
 
 ### Instructor Mode — **Uri** (Admin)
 Note the spelling: **Uri**. The final authority. Gets a **macro dashboard**:
-- All 21 Mishmarim at a glance — topic, speakers, status, what is due.
+- All the Mishmarim at a glance — topic, speakers, status, what is due.
 - **Budget** — season-wide (see §5).
 - **Student progress** — who is on track, who is behind.
 

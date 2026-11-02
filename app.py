@@ -911,7 +911,7 @@ def _needs_attention(mishmarim: list[dict], upcoming: list[dict],
 
 def show_admin_dashboard() -> None:
     st.title("לוח הבקרה")
-    st.caption('כל 21 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
+    st.caption('כל 19 המשמרים · שנה ב׳ תשפ״ז · מבט מדריך')
     _dashboard_body()
 
 

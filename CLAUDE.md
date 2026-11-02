@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 21 Mishmarim built by pairs of trainees. Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout — two model calls per search: `chat_agent.scout_map` reads the topic as fields, then `scout_speakers` searches the web itself with Anthropic's server web-search tool ($10 per 1,000 searches, capped at 8 per run).
+The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 19 Mishmarim built by pairs of trainees (21 on the calendar — #08 on 5.11 and #11 on 26.11 were cancelled on 2.11.2026; the other numbers did not move). Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout — two model calls per search: `chat_agent.scout_map` reads the topic as fields, then `scout_speakers` searches the web itself with Anthropic's server web-search tool ($10 per 1,000 searches, capped at 8 per run).
 
 **`web/` is v2**: the trainee home rebuilt as a static React app (Vite · TypeScript · Tailwind, installable PWA), published on GitHub Pages at `https://urishav464.github.io/mishmar/` by a separate deploy-only repo, `urishav464/mishmar` (its `deploy.yml` builds this repo's `web/` — hourly when `web/` changed, or on dispatch; **after changing `web/`, dispatch it**), with Supabase Auth (Google), on the same Supabase — the trainee home and the workfile (`src/Workfile.tsx`, hash route `#/m/N`: the task board to work on — ✓, add, edit, delete — the evening's structure to build in `src/Evening.tsx` — topic, slots, candidates, panel, חבורות, a source sheet as a link or an uploaded file — and logistics to read; the demo makes structure changes on the screen only, `src/demoEdits.ts`). Cloudflare was tried first (`web/wrangler.jsonc` still describes it): the build deployed, but the new `workers.dev` address stayed NXDOMAIN. All `urishav464.github.io` sites (the Shabbat pages too) share one origin and its `localStorage`, where the v2 session lives — never put a third-party script on any of them. **Stage 1** (the real trainee home) is set up and was tried by trainees, who asked for the whole system there; **stage 2** moves it part by part, each with its own plan and the instructor's preview first: **2א the workfile (done)** → **2ב editing the evening's structure (done)** → 2ג logistics, uploads (the source-sheet upload is done), feedback, budget → 2ד the speaker index and search → 2ה the instructor's dashboard. Until a part moves, it is edited in the Streamlit app, which keeps working on the same data.
 
@@ -25,7 +25,7 @@ python3 -m py_compile app.py data_manager.py chat_agent.py speaker_search.py cha
 MISHMAR_NO_CACHE=1 streamlit run app.py               # read cache off, for scripts that write around the seam
 python3 scripts/rerun_audit.py app.py                 # what every click costs; exit 1 on a write+st.rerun() double run
 python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules/streamlit-dom.md after a Streamlit upgrade
-python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (seed 5787)
+python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (an exact search; cancelled and fixed evenings at its top)
 python3 scripts/harness/db.py up && python3 scripts/harness/harness.py serve   # local PG16 fixture + the app, traced
 python3 scripts/harness/harness.py sweep              # every screen + one click per kind vs the click contract
 python3 scripts/harness/harness.py stop && python3 scripts/harness/db.py down
@@ -93,7 +93,7 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
   whole-app run, so the task editor is a popover), and the three evening panels are wrapped in
   `_safe()` so one broken panel cannot blank a column.
 - **The season's data starts as Markdown.** `students_tasks.md` seeds a first run against an empty
-  Supabase — the trainees from its index table, the 21 evenings, their tasks — and
+  Supabase — the trainees from its index table, the 19 evenings, their tasks — and
   `app_meta.seeded` guards it forever after. **The file stays the source of the roster after
   that too**: `dm.roster_drift()` diffs it against the live tables by name, and the dashboard's
   always-present «👥 חניכים ושיבוץ» panel applies the difference (`dm.apply_trainee_roster`,

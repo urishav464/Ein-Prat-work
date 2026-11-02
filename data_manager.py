@@ -2,7 +2,8 @@
 data_manager.py — the single data seam for the Mishmar management app.
 
 SCOPE IS HARDCODED: שנה ב' · תשפ"ז · 5787 · 2026-2027 · מדרשת עין פרת.
-21 Mishmarim, 10 trainees. There is no year-switcher and there must not be one.
+19 Mishmarim (21 on the calendar; #08 and #11 cancelled), 8 trainees. There is
+no year-switcher and there must not be one.
 
 STORAGE IS SUPABASE. Nothing else in the codebase talks to it. Credentials come
 from Streamlit Secrets (SUPABASE_URL, SUPABASE_KEY) — there is no .env file and
@@ -35,8 +36,8 @@ GREGORIAN_SPAN = "2026-2027"
 PROGRAMME = "שנה ב'"
 INSTITUTION = "מדרשת עין פרת"
 
-TOTAL_MISHMARIM = 21
-TOTAL_STUDENTS = 10
+TOTAL_MISHMARIM = 19          # 21 on the calendar, #08 and #11 cancelled (2.11.2026)
+TOTAL_STUDENTS = 8
 STAFF_BUILT_MISHMARIM = (1, 2)
 
 # ₪500 per Mishmar is an *average indication* covering speakers and refreshments
