@@ -2582,6 +2582,45 @@ def _is_chavurot(lesson: dict) -> bool:
 is_chavurot = _is_chavurot
 
 
+def slot_names(lessons: list[dict]) -> dict[int, str]:
+    """Every slot of the evening by name — ONE naming, shared by the structure
+    panel, the feedback form and the rooms panel, in this app and on the site.
+
+    Two rules the screens used to get wrong on their own:
+    · a round of חבורות is recognised by `is_chavurot` (role OR format OR
+      title). The feedback form asked `lesson_role == "חבורות"`, so a round the
+      pair marked in the FORMAT field was listed as «שיעור 2».
+    · names must be UNIQUE. `feedback.lesson_title` is the key for «one
+      submission per slot per trainee», so when #01's two rounds both read
+      «חבורות», feedback on the first silently blocked the second. A round in
+      an evening that holds several says which one it is.
+
+    The lesson numbering counts every non-break slot, exactly as
+    `_slot_tasks` numbers «סגירת מרצה — שיעור N» — the two must agree.
+    Pure. Its twin is `v2_private.slot_names` in web/supabase/v2.sql — the
+    site's feedback door names a slot with it, so a trainee rating on the
+    site and on this app is locked by the same key; test_v2_structure.py
+    compares the two. Change one, change the other."""
+    slots = [l for l in lessons if not l.get("is_break")]
+    rounds = [l["id"] for l in slots if is_chavurot(l)]
+    names: dict[int, str] = {}
+    for i, l in enumerate(slots, 1):
+        title = (l.get("title") or "").strip()
+        if is_chavurot(l):
+            names[l["id"]] = (title or "חבורות") + round_suffix(
+                rounds.index(l["id"]) + 1, len(rounds))
+        else:
+            names[l["id"]] = title or f"שיעור {i}"
+    # two slots the pair gave the same title: the time tells them apart
+    seen: dict[str, int] = {}
+    for name in names.values():
+        seen[name] = seen.get(name, 0) + 1
+    for l in slots:
+        if seen.get(names[l["id"]], 0) > 1 and l.get("start_time"):
+            names[l["id"]] += f" ({l['start_time']})"
+    return names
+
+
 def is_panel(lesson: dict) -> bool:
     """Several speakers at once on one stage — format, role or title says
     «פאנל», the way is_chavurot reads «חבורות». A חבורות slot is never a panel:

@@ -153,6 +153,23 @@ panel instead of on a slot.
   seeded random walks — comparing the evening, the index and the journal after every step, and
   proving it saw every refusal of every door. `--sql FILE` runs it against a copy of `v2.sql`:
   twelve planted bugs, each caught. Change a rule here → change its twin in the same commit.
+- **Stage 2ג: logistics, the invitation, feedback and the budget have doors too**
+  (`v2_add_logistics` / `v2_set_logistics_done` / `v2_delete_logistics` / `v2_set_invitation` /
+  `v2_add_feedback` / `v2_add_budget` / `v2_delete_budget`), each writing what the Streamlit
+  callback writes and touching no slot, so none runs the reconciler. **`dm.slot_names` (moved out
+  of `app.py`, where it was `_slot_names`) has a twin, `v2_private.slot_names`**: the name of a
+  slot is `feedback.lesson_title`, the key of «one rating per slot per trainee», so a trainee who
+  rated on the site must find the slot locked in this app and the other way round. The feedback
+  door computes the name itself (never from the browser), skips an unrated slot and one the
+  caller already rated, writes the words as typed («or None», unstripped, as the app does),
+  refuses before the evening's day (`v2_private.evening_date` = `parse_gregorian`, against
+  `current_date`) and closes every open feedback task of the evening (`v2_private.is_feedback_task`).
+  The budget door writes a speaker's line at any sum (0 = came free) and «כיבוד» / «אחר» only
+  above 0, under their own word. **`v2_delete_budget` has no Streamlit original**: this app only
+  inserts, so a second «שמור סיכום תקציב» counts every speaker twice; the site lists the lines
+  and lets the pair take one back. `test_v2_structure.py` runs all seven against `dm` on the same
+  two copies, checks the slot names after every step of the whole run (two lessons of one title
+  among them), and caught seven planted bugs.
 - **Ownership is PROVENANCE, not wording: `tasks.generated` (schema 7).** `sync_lesson_tasks` is the
   only writer of `generated = true` (`add_task(..., generated=True)`), and `_is_generated(task)` is
   the only ownership test — every rename, retire, adopt and slot-delete goes through it. Before

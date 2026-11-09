@@ -1,8 +1,12 @@
-// The demo's stand-in for the structure doors: the same change, made on the
-// screen only. Nothing is sent and nothing is saved. On the site the database
-// also reconciles the slots' tasks (v2_private.sync_lesson_tasks); the demo
-// leaves the tasks as they were, and says so.
-import { CLOSED, PANEL_SEP, isChavurot, isPanel, recomputeTimes, type Lesson, type Person, type Workfile } from "./model";
+// The demo's stand-in for the workfile's write doors: the same change, made on
+// the screen only. Nothing is sent and nothing is saved. On the site the
+// database also reconciles the slots' tasks (v2_private.sync_lesson_tasks); the
+// demo leaves them as they were, and says so — but a feedback sent closes the
+// evening's feedback task, which is the change a trainee looks for.
+import {
+  CLOSED, PANEL_SEP, isChavurot, isFeedbackTask, isPanel, parseDate, recomputeTimes, slotNames,
+  type Lesson, type Person, type Workfile,
+} from "./model";
 import type { StructureAnswer, StructureCall, StructureResult } from "./structure";
 
 let nextId = -1;
@@ -151,7 +155,67 @@ export function demoApply(before: Workfile, call: StructureCall): StructureAnswe
       result = { removed: at.p.name };
       break;
     }
+    // ---- stage 2ג, the same rules as the doors
+    case "v2_add_logistics": {
+      const label = call.args.p_label.trim();
+      if (!label || label.length > 300) return { status: "invalid_text" };
+      const id = nextId--;
+      wf.logistics.push({ id, kind: "כיבוד", label, detail: null, done: false });
+      result = { id };
+      break;
+    }
+    case "v2_set_logistics_done": {
+      const it = wf.logistics.find((i) => i.id === call.args.p_item_id);
+      if (!it) return { status: "forbidden" };
+      it.done = call.args.p_done;
+      break;
+    }
+    case "v2_delete_logistics":
+      wf.logistics = wf.logistics.filter((i) => i.id !== call.args.p_item_id);
+      break;
+    case "v2_set_invitation":
+      wf.mishmar.invitation_url = call.args.p_url.trim() || null;
+      break;
+    case "v2_add_feedback": {
+      const evening = parseDate(wf.mishmar.gregorian_date);
+      const today = parseDate(wf.as_of);
+      if (evening && today && evening > today) return { status: "too_early" };
+      const names = slotNames(wf.lessons);
+      const mine = new Set(wf.feedback.filter((f) => f.mine).map((f) => f.lesson_title));
+      let saved = 0;
+      for (const e of call.args.p_entries) {
+        const l = lesson(e.lesson_id);
+        const name = names.get(e.lesson_id);
+        if (!l || l.is_break || !name) return { status: "invalid_slot" };
+        if (e.rating === null || mine.has(name)) continue;
+        wf.feedback.push({ id: nextId--, lesson_id: l.id, lesson_title: name, speaker_name: l.speaker_name,
+                           rating: e.rating, what_worked: e.what_worked || null, what_didnt: null, mine: true });
+        mine.add(name);
+        saved += 1;
+      }
+      if (!saved) return { status: "nothing" };
+      for (const t of wf.tasks) if (isFeedbackTask(t) && t.status !== "DONE") t.status = "DONE";
+      result = { saved };
+      break;
+    }
+    case "v2_add_budget": {
+      let saved = 0;
+      for (const ln of call.args.p_lines) {
+        if (ln.expense_type !== "מרצה" && !(ln.actual_cost > 0)) continue;
+        const description = ln.expense_type === "מרצה" ? ln.description.trim() : ln.expense_type;
+        if (!description) return { status: "invalid_text" };
+        wf.budget.push({ id: nextId--, expense_type: ln.expense_type, description, actual_cost: ln.actual_cost });
+        saved += 1;
+      }
+      if (!saved) return { status: "nothing" };
+      result = { saved };
+      break;
+    }
+    case "v2_delete_budget":
+      wf.budget = wf.budget.filter((b) => b.id !== call.args.p_line_id);
+      break;
   }
+  wf.mishmar.budget_used = wf.budget.reduce((s, b) => s + Number(b.actual_cost || 0), 0);
   wf.lessons = recomputeTimes(wf.lessons, wf.mishmar.start_time);
   return { status: "ok", workfile: wf, result: { ...result, sync: ZERO } };
 }

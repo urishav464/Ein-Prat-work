@@ -3,7 +3,7 @@
   "id": 2,
   "name": "חניך/ה לדוגמה"
  },
- "as_of": "2026-10-19",
+ "as_of": "2026-11-09",
  "tasks": [
   {
    "id": 39,
@@ -62,7 +62,7 @@
    "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
   },
   {
-   "id": 183,
+   "id": 167,
    "status": "DONE",
    "category": "מרצים",
    "due_date": "2026-10-01",
@@ -70,7 +70,7 @@
    "task_description": "סגירת מרצה — שיעור 1"
   },
   {
-   "id": 184,
+   "id": 168,
    "status": "DONE",
    "category": "תוכן",
    "due_date": "2026-10-08",
@@ -78,7 +78,7 @@
    "task_description": "דף מקורות — שיעור 1"
   },
   {
-   "id": 185,
+   "id": 169,
    "status": "DONE",
    "category": "מרצים",
    "due_date": "2026-10-01",
@@ -86,7 +86,7 @@
    "task_description": "סגירת מרצה — שיעור 2"
   },
   {
-   "id": 186,
+   "id": 170,
    "status": "DONE",
    "category": "תוכן",
    "due_date": "2026-10-08",
@@ -94,7 +94,7 @@
    "task_description": "דף מקורות — שיעור 2"
   },
   {
-   "id": 187,
+   "id": 171,
    "status": "DONE",
    "category": "מרצים",
    "due_date": "2026-10-01",
@@ -102,7 +102,7 @@
    "task_description": "סגירת מרצה — שיעור 3"
   },
   {
-   "id": 188,
+   "id": 172,
    "status": "DONE",
    "category": "תוכן",
    "due_date": "2026-10-08",
@@ -110,7 +110,7 @@
    "task_description": "דף מקורות — שיעור 3"
   },
   {
-   "id": 189,
+   "id": 173,
    "status": "DONE",
    "category": "תוכן",
    "due_date": "2026-10-08",
@@ -118,7 +118,7 @@
    "task_description": "מי מעביר את התוכן — חבורות"
   },
   {
-   "id": 190,
+   "id": 174,
    "status": "DONE",
    "category": "תוכן",
    "due_date": "2026-10-08",
@@ -126,7 +126,7 @@
    "task_description": "דפי מקורות למעבירי החבורות"
   },
   {
-   "id": 191,
+   "id": 175,
    "status": "DONE",
    "category": "לוגיסטיקה",
    "due_date": "2026-10-15",
@@ -134,71 +134,71 @@
    "task_description": "חלוקת חללים למעבירי החבורות"
   },
   {
-   "id": 62,
+   "id": 70,
    "status": "TO DO",
    "category": "נושא",
-   "due_date": "2026-10-15",
-   "mishmar_id": 8,
+   "due_date": "2026-10-29",
+   "mishmar_id": 10,
    "task_description": "סגירת נושא"
   },
   {
-   "id": 63,
+   "id": 71,
    "status": "TO DO",
    "category": "קישוט",
-   "due_date": "2026-10-29",
-   "mishmar_id": 8,
+   "due_date": "2026-11-12",
+   "mishmar_id": 10,
    "task_description": "תכנון קישוט וחלוקת משימות"
   },
   {
-   "id": 64,
+   "id": 72,
    "status": "TO DO",
    "category": "הזמנה",
-   "due_date": "2026-10-29",
-   "mishmar_id": 8,
+   "due_date": "2026-11-12",
+   "mishmar_id": 10,
    "task_description": "עיצוב הזמנה (קנבה)"
   },
   {
-   "id": 65,
+   "id": 73,
    "status": "TO DO",
    "category": "כיבוד",
-   "due_date": "2026-10-29",
-   "mishmar_id": 8,
+   "due_date": "2026-11-12",
+   "mishmar_id": 10,
    "task_description": "רשימת קניות"
   },
   {
-   "id": 66,
+   "id": 74,
    "status": "TO DO",
    "category": "הזמנה",
-   "due_date": "2026-10-29",
-   "mishmar_id": 8,
+   "due_date": "2026-11-12",
+   "mishmar_id": 10,
    "task_description": "הדפסה/רכישה"
   },
   {
-   "id": 67,
+   "id": 75,
    "status": "TO DO",
    "category": null,
    "due_date": null,
-   "mishmar_id": 8,
+   "mishmar_id": 10,
    "task_description": "סידור הבית מדרש"
   },
   {
-   "id": 68,
+   "id": 76,
    "status": "TO DO",
    "category": "אחרי",
-   "due_date": "2026-11-12",
-   "mishmar_id": 8,
+   "due_date": "2026-11-26",
+   "mishmar_id": 10,
    "task_description": "עדכון מאגר המרצים באפליקציה — סטטוסים, אזור, פרטי קשר"
   },
   {
-   "id": 69,
+   "id": 77,
    "status": "TO DO",
    "category": "אחרי",
-   "due_date": "2026-11-12",
-   "mishmar_id": 8,
+   "due_date": "2026-11-26",
+   "mishmar_id": 10,
    "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
   },
   {
-   "id": 102,
+   "id": 86,
    "status": "TO DO",
    "category": "נושא",
    "due_date": "2026-11-19",
@@ -206,7 +206,7 @@
    "task_description": "סגירת נושא"
   },
   {
-   "id": 103,
+   "id": 87,
    "status": "TO DO",
    "category": "קישוט",
    "due_date": "2026-12-03",
@@ -214,7 +214,7 @@
    "task_description": "תכנון קישוט וחלוקת משימות"
   },
   {
-   "id": 104,
+   "id": 88,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2026-12-03",
@@ -222,7 +222,7 @@
    "task_description": "עיצוב הזמנה (קנבה)"
   },
   {
-   "id": 105,
+   "id": 89,
    "status": "TO DO",
    "category": "כיבוד",
    "due_date": "2026-12-03",
@@ -230,7 +230,7 @@
    "task_description": "רשימת קניות"
   },
   {
-   "id": 106,
+   "id": 90,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2026-12-03",
@@ -238,7 +238,7 @@
    "task_description": "הדפסה/רכישה"
   },
   {
-   "id": 107,
+   "id": 91,
    "status": "TO DO",
    "category": null,
    "due_date": null,
@@ -246,7 +246,7 @@
    "task_description": "סידור הבית מדרש"
   },
   {
-   "id": 108,
+   "id": 92,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2026-12-17",
@@ -254,7 +254,7 @@
    "task_description": "עדכון מאגר המרצים באפליקציה — סטטוסים, אזור, פרטי קשר"
   },
   {
-   "id": 109,
+   "id": 93,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2026-12-17",
@@ -262,7 +262,7 @@
    "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
   },
   {
-   "id": 126,
+   "id": 110,
    "status": "TO DO",
    "category": "נושא",
    "due_date": "2026-12-17",
@@ -270,7 +270,7 @@
    "task_description": "סגירת נושא"
   },
   {
-   "id": 127,
+   "id": 111,
    "status": "TO DO",
    "category": "קישוט",
    "due_date": "2026-12-31",
@@ -278,7 +278,7 @@
    "task_description": "תכנון קישוט וחלוקת משימות"
   },
   {
-   "id": 128,
+   "id": 112,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2026-12-31",
@@ -286,7 +286,7 @@
    "task_description": "עיצוב הזמנה (קנבה)"
   },
   {
-   "id": 129,
+   "id": 113,
    "status": "TO DO",
    "category": "כיבוד",
    "due_date": "2026-12-31",
@@ -294,7 +294,7 @@
    "task_description": "רשימת קניות"
   },
   {
-   "id": 130,
+   "id": 114,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2026-12-31",
@@ -302,7 +302,7 @@
    "task_description": "הדפסה/רכישה"
   },
   {
-   "id": 131,
+   "id": 115,
    "status": "TO DO",
    "category": null,
    "due_date": null,
@@ -310,7 +310,7 @@
    "task_description": "סידור הבית מדרש"
   },
   {
-   "id": 132,
+   "id": 116,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2027-01-14",
@@ -318,7 +318,7 @@
    "task_description": "עדכון מאגר המרצים באפליקציה — סטטוסים, אזור, פרטי קשר"
   },
   {
-   "id": 133,
+   "id": 117,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2027-01-14",
@@ -326,7 +326,7 @@
    "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
   },
   {
-   "id": 158,
+   "id": 142,
    "status": "TO DO",
    "category": "נושא",
    "due_date": "2027-01-14",
@@ -334,7 +334,7 @@
    "task_description": "סגירת נושא"
   },
   {
-   "id": 159,
+   "id": 143,
    "status": "TO DO",
    "category": "קישוט",
    "due_date": "2027-01-28",
@@ -342,7 +342,7 @@
    "task_description": "תכנון קישוט וחלוקת משימות"
   },
   {
-   "id": 160,
+   "id": 144,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2027-01-28",
@@ -350,7 +350,7 @@
    "task_description": "עיצוב הזמנה (קנבה)"
   },
   {
-   "id": 161,
+   "id": 145,
    "status": "TO DO",
    "category": "כיבוד",
    "due_date": "2027-01-28",
@@ -358,7 +358,7 @@
    "task_description": "רשימת קניות"
   },
   {
-   "id": 162,
+   "id": 146,
    "status": "TO DO",
    "category": "הזמנה",
    "due_date": "2027-01-28",
@@ -366,7 +366,7 @@
    "task_description": "הדפסה/רכישה"
   },
   {
-   "id": 163,
+   "id": 147,
    "status": "TO DO",
    "category": null,
    "due_date": null,
@@ -374,7 +374,7 @@
    "task_description": "סידור הבית מדרש"
   },
   {
-   "id": 164,
+   "id": 148,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2027-02-11",
@@ -382,7 +382,7 @@
    "task_description": "עדכון מאגר המרצים באפליקציה — סטטוסים, אזור, פרטי קשר"
   },
   {
-   "id": 165,
+   "id": 149,
    "status": "TO DO",
    "category": "אחרי",
    "due_date": "2027-02-11",
@@ -405,15 +405,15 @@
    "is_staff_built": false
   },
   {
-   "id": 8,
+   "id": 10,
    "topic": null,
    "owners": [
     "חניך/ה לדוגמה",
     "שותף/ה 2"
    ],
-   "hebrew_date": "כ״ה חשון תשפ״ז",
+   "hebrew_date": "ט׳ כסלו תשפ״ז",
    "mishmar_type": "פנימי",
-   "gregorian_date": "5.11.2026",
+   "gregorian_date": "19.11.2026",
    "is_staff_built": false
   },
   {

@@ -90,9 +90,9 @@ never by eye.
   `st.columns(3)` dealt round-robin — on a phone the columns STACK, so column 0 (#07, #21) rendered
   before column 1 (#09): February before November. A flex row keeps DOM order at any width.
 
-## One naming for the evening's slots (`_slot_names`)
+## One naming for the evening's slots (`dm.slot_names`)
 
-- Three screens used to name the slots themselves, and each got it wrong differently. `_slot_names(lessons)` is now the only namer: the structure panel's head, the feedback form and the rooms panel all read it.
+- Three screens used to name the slots themselves, and each got it wrong differently. `dm.slot_names(lessons)` is now the only namer (`app._slot_names` is an alias of it): the structure panel's head, the feedback form and the rooms panel all read it. It lives in `data_manager` because the v2 site's feedback door names slots with its SQL twin (`v2_private.slot_names`) — the name is the feedback's key in both apps.
 - **`dm.is_chavurot` — role OR format OR title.** The feedback form asked `lesson_role == "חבורות"`, so a round the pair marked in the FORMAT field was listed as «שיעור 2» (`#01`, reported live).
 - **Names must be UNIQUE.** `feedback.lesson_title` is the key behind «one submission per slot per trainee», so when #01's two rounds both read «חבורות», rating the first silently locked the second. A round says which round it is when the evening holds several (`dm.round_suffix`), and two slots the pair gave the same title get their start time appended.
 - **The lesson numbering counts every non-break slot**, exactly as `dm._slot_tasks` numbers «סגירת מרצה — שיעור N». If one of them ever changes, both must.

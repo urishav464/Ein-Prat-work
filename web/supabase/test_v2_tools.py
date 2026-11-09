@@ -10,13 +10,17 @@ the types, and with --deno under Deno, the runtime Supabase runs it on:
     safeFilename   = dm._safe_filename   (Hebrew, spaces, dots, emoji, empty …)
     a slot's key   = the key dm.upload_source_sheet stores the same file under
                      (mishmar-NN/lesson-<id>-<sha1[:8]>-<safe name>)
+    the invitation = dm.upload_invitation's key and type
+                     (mishmar-NN/invitation-<sha1[:8]>-<safe name>, an image);
+                     a pdf, an svg, no extension refused by both
   the handler — handler.ts on real Requests, with the database and Storage
     stood in (test_v2_tools.mjs): CORS for the site only; no token, an
     expired one, the anon role → signed_out; v2_workfile's refusals passed
     through; the instructor refused; a break, another evening's slot or
     person → forbidden; malformed fields → invalid before the database is
     asked; empty / over 20MB / not a sheet → refused; and a sheet → stored
-    once at the twin key, with its type, answered with its public link.
+    once at the twin key, with its type, answered with its public link. The
+    invitation: the evening's own only, images only, the instructor refused.
   the wiring (--deno) — index.ts served by Deno against a local stand-in of
     Supabase's REST and Storage APIs: the evening is read with the CALLER'S
     token and the public key, never the service key; the file is stored with
@@ -129,12 +133,18 @@ def deno_stage(deno: str, checks: dict, facts: dict, want_key: str, sheet: bytes
     supa = ThreadingHTTPServer(("127.0.0.1", free_port()), StandIn)
     threading.Thread(target=supa.serve_forever, daemon=True).start()
     port = free_port()
+    # the stand-in is local: Deno must not send it through a proxy, and it
+    # reads a NO_PROXY with CIDR or wildcard entries as none at all
     env = dict(os.environ, SUPABASE_URL=f"http://127.0.0.1:{supa.server_port}",
                SUPABASE_PUBLISHABLE_KEYS=json.dumps({"default": PUBLIC}),
                SUPABASE_SECRET_KEYS=json.dumps({"default": SECRET}),
-               DENO_SERVE_ADDRESS=f"tcp:127.0.0.1:{port}", NO_COLOR="1")
+               DENO_SERVE_ADDRESS=f"tcp:127.0.0.1:{port}", NO_COLOR="1",
+               NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+    # its own process group: npm's `.bin/deno` is a wrapper, and stopping the
+    # wrapper alone left the real binary holding the pipe — the run never ended
     proc = subprocess.Popen([deno, "run", "--allow-net", "--allow-env", "index.ts"], cwd=FUNCTION, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True)
 
     def post(token: str | None, fields: dict, name: str, data: bytes) -> dict:
         body, ctype = multipart(fields, name, data)
@@ -185,12 +195,13 @@ def deno_stage(deno: str, checks: dict, facts: dict, want_key: str, sheet: bytes
         checks["deno: served and answered"] = False
         facts["deno_error"] = f"{type(e).__name__}: {e}"
     finally:
-        proc.terminate()
+        import signal
+        os.killpg(proc.pid, signal.SIGTERM)
         try:
             out = proc.communicate(timeout=5)[0]
         except subprocess.TimeoutExpired:
-            proc.kill()
-            out = proc.communicate()[0]
+            os.killpg(proc.pid, signal.SIGKILL)
+            out = proc.communicate(timeout=5)[0]
         facts["deno_log"] = (out or "")[-1500:]
         supa.shutdown()
 
@@ -220,6 +231,29 @@ def main(argv: list[str]) -> int:
                                                 for m, i, n, d in files]})["paths"]
     facts["keys"] = stored
     checks["twin: a slot's key = dm.upload_source_sheet's, byte for byte"] = stored == tsp and len(stored) == len(files)
+
+    # the invitation: what dm.upload_invitation stores the same poster under,
+    # and as — or that it refuses it. The site takes what the Streamlit
+    # uploader offers (png / jpg / jpeg / webp); dm alone would also take a gif.
+    inv_stored: list[tuple] = []
+    dm._storage_upload = lambda path, data, content_type="application/octet-stream": (
+        inv_stored.append((path, content_type)), ("https://x/" + path, None))[1]
+    posters = [(5, "הזמנה.PNG", b"\x89PNG poster"), (12, "Poster Final.jpeg", bytes(range(200))),
+               (3, "", b"\xff\xd8\xff jpg"), (21, "a.webp", b"RIFF webp"), (9, "דף.pdf", b"%PDF"),
+               (9, "noext", b"x"), (9, "x.svg", b"<svg/>")]
+    py_inv = []
+    for mid, name, data in posters:
+        before = len(inv_stored)
+        url, err = dm.upload_invitation(mid, name, data)
+        py_inv.append({"path": inv_stored[-1][0], "type": inv_stored[-1][1]} if len(inv_stored) > before
+                      else {"refused": "bad_type"})
+    ts_out = node("twins", {"names": [], "files": [], "invitations": [
+        {"mid": m, "name": n, "b64": base64.b64encode(d).decode()} for m, n, d in posters]})
+    facts["invitations"] = {"python": py_inv, "ts": ts_out["invitations"]}
+    checks["twin: the invitation's key and type = dm.upload_invitation's; a pdf / no extension / svg refused by both"] = \
+        py_inv == ts_out["invitations"] and len(py_inv) == len(posters)
+    checks["twin: the site's image types are dm._IMAGE_TYPES' (all but gif, which the uploader never offered)"] = \
+        ts_out["imageTypes"] == {k: v for k, v in dm._IMAGE_TYPES.items() if k != "gif"}
 
     out = node("handler")
     checks.update({f"handler: {k}": v for k, v in out["checks"].items()})

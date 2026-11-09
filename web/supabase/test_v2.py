@@ -120,9 +120,14 @@ SELECT 'schema', 'v2_private', r.role
  WHERE has_schema_privilege(r.role, 'v2_private', 'USAGE')
  ORDER BY 1, 2, 3
 """
-EXPECTED_LEAKS = [["function", "public.v2_add_person", "authenticated"],
+EXPECTED_LEAKS = [["function", "public.v2_add_budget", "authenticated"],
+                  ["function", "public.v2_add_feedback", "authenticated"],
+                  ["function", "public.v2_add_logistics", "authenticated"],
+                  ["function", "public.v2_add_person", "authenticated"],
                   ["function", "public.v2_add_slot", "authenticated"],
                   ["function", "public.v2_add_task", "authenticated"],
+                  ["function", "public.v2_delete_budget", "authenticated"],
+                  ["function", "public.v2_delete_logistics", "authenticated"],
                   ["function", "public.v2_delete_slot", "authenticated"],
                   ["function", "public.v2_delete_task", "authenticated"],
                   ["function", "public.v2_edit_person", "authenticated"],
@@ -132,6 +137,8 @@ EXPECTED_LEAKS = [["function", "public.v2_add_person", "authenticated"],
                   ["function", "public.v2_remove_person", "authenticated"],
                   ["function", "public.v2_reopen_slot", "authenticated"],
                   ["function", "public.v2_save_slot", "authenticated"],
+                  ["function", "public.v2_set_invitation", "authenticated"],
+                  ["function", "public.v2_set_logistics_done", "authenticated"],
                   ["function", "public.v2_set_person_status", "authenticated"],
                   ["function", "public.v2_set_task_status", "authenticated"],
                   ["function", "public.v2_set_topic", "authenticated"],
@@ -585,6 +592,183 @@ def main(argv: list[str]) -> int:
     checks["structure: the person removed → ok, gone"] = (res or {}).get("status") == "ok" \
         and cur.fetchone()[0] == 0
 
+    # ---- logistics, the invitation, feedback and the budget (stage 2ג): who may
+    # write, the refusals by name, what each door leaves. What they write next
+    # to data_manager's own writes, step by step, is test_v2_structure.py's.
+    cur.execute("RESET ROLE")
+
+    def one(sql: str, args=()):
+        cur.execute("RESET ROLE")
+        cur.execute(sql, args)
+        return cur.fetchone()
+
+    my_item = one("INSERT INTO logistics_items (mishmar_id, kind, label) VALUES (%s, 'כיבוד', 'שתייה') "
+                  "RETURNING id", (wf_mid,))[0]
+    other_item = one("INSERT INTO logistics_items (mishmar_id, kind, label) VALUES (%s, 'כיבוד', 'זר') "
+                     "RETURNING id", (other_mid,))[0]
+    my_line = one("INSERT INTO budget (mishmar_id, expense_type, description, actual_cost) "
+                  "VALUES (%s, 'מרצה', 'מרצה בדיקה', 100) RETURNING id", (wf_mid,))[0]
+    other_line = one("INSERT INTO budget (mishmar_id, expense_type, description, actual_cost) "
+                     "VALUES (%s, 'מרצה', 'זר', 100) RETURNING id", (other_mid,))[0]
+    # the feedback form opens on the evening's day: the pair's evening goes
+    # into the past for this section, one of their later evenings stays ahead
+    wf_date = one("SELECT gregorian_date FROM mishmarim WHERE id = %s", (wf_mid,))[0]
+    one("UPDATE mishmarim SET gregorian_date = '1.1.2026' WHERE id = %s RETURNING id", (wf_mid,))
+    future_mid = one("SELECT id FROM mishmarim WHERE id = ANY(%s) AND id <> %s "
+                     "AND to_date(gregorian_date, 'DD.MM.YYYY') > current_date ORDER BY id LIMIT 1",
+                     (my_mids, wf_mid))
+    a_break = one("SELECT id FROM lessons WHERE mishmar_id = %s AND is_break ORDER BY id LIMIT 1", (wf_mid,))
+    fb_task = one("INSERT INTO tasks (mishmar_id, task_description, status, category) "
+                  "VALUES (%s, 'משוב על המשמר — בדיקה', 'TO DO', 'אחרי') RETURNING id", (wf_mid,))[0]
+    entries = json.dumps([{"lesson_id": slot, "rating": 4, "what_worked": "עבד טוב"}])
+    lines = json.dumps([{"expense_type": "מרצה", "description": "  מרצה בדיקה ג  ", "actual_cost": 0},
+                        {"expense_type": "כיבוד", "description": "", "actual_cost": 120},
+                        {"expense_type": "אחר", "description": "", "actual_cost": 0}])
+
+    def state_after() -> str:
+        """Everything a 2ג door may touch, as one value."""
+        return one("""SELECT md5(concat_ws('|',
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM logistics_items x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM budget x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM feedback x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM tasks x),
+                         (SELECT string_agg(to_jsonb(x)::text, ',' ORDER BY x.id) FROM mishmarim x)))""")[0]
+
+    after_doors = {
+        "v2_add_logistics": ("SELECT public.v2_add_logistics(%s, %s)", (wf_mid, "עוגות"), (other_mid, "עוגות")),
+        "v2_set_logistics_done": ("SELECT public.v2_set_logistics_done(%s, %s)", (my_item, True), (other_item, True)),
+        "v2_delete_logistics": ("SELECT public.v2_delete_logistics(%s)", (my_item,), (other_item,)),
+        "v2_set_invitation": ("SELECT public.v2_set_invitation(%s, %s)",
+                              (wf_mid, "https://example.org/i.png"), (other_mid, "https://example.org/i.png")),
+        "v2_add_feedback": ("SELECT public.v2_add_feedback(%s, %s::jsonb)", (wf_mid, entries), (other_mid, entries)),
+        "v2_add_budget": ("SELECT public.v2_add_budget(%s, %s::jsonb)", (wf_mid, lines), (other_mid, lines)),
+        "v2_delete_budget": ("SELECT public.v2_delete_budget(%s)", (my_line,), (other_line,)),
+    }
+    by_evening = {"v2_add_logistics", "v2_set_invitation", "v2_add_feedback", "v2_add_budget"}
+    before = state_after()
+    refused_after = {}
+    for name, (q, mine_args, other_args) in after_doors.items():
+        gone_args = ((2_000_000,) if name in by_evening else (2_000_000_000,)) + mine_args[1:]
+        refused_after[name] = {
+            "anon": call("anon", trainee, q, mine_args) == "denied",
+            "signed out": (call("authenticated", None, q, mine_args) or {}).get("status") == "signed_out",
+            "e-mail sign-up": (call("authenticated", {"email": EMAIL, "app_metadata": {"provider": "email"}},
+                                    q, mine_args) or {}).get("status") == "wrong_provider",
+            "unknown address": (call("authenticated", {"email": "someone@example.org", **GOOGLE}, q, mine_args)
+                                or {}).get("status") == "not_linked",
+            "another evening": (call("authenticated", trainee, q, other_args) or {}).get("status") == "forbidden",
+            "missing": (call("authenticated", trainee, q, gone_args) or {}).get("status") == "forbidden",
+            "the instructor": (call("authenticated", boss, q, mine_args) or {}).get("status") == "instructor",
+        }
+    bad = {name: [k for k, v in r.items() if not v] for name, r in refused_after.items()
+           if not all(r.values())}
+    checks["after: anon / signed out / e-mail / unknown / another evening / missing / instructor "
+           "refused, at every one of the seven doors"] = not bad
+    if bad:
+        checks[f"after refusals that failed: {bad}"] = False
+    fb_q, bud_q = after_doors["v2_add_feedback"][0], after_doors["v2_add_budget"][0]
+    invalid_after = {
+        "an empty label": (after_doors["v2_add_logistics"][0], (wf_mid, "   "), "invalid_text"),
+        "a javascript: invitation": (after_doors["v2_set_invitation"][0], (wf_mid, "javascript:alert(1)"),
+                                     "invalid_url"),
+        "no done/undone": (after_doors["v2_set_logistics_done"][0], (my_item, None), "invalid"),
+        "six stars": (fb_q, (wf_mid, json.dumps([{"lesson_id": slot, "rating": 6}])), "invalid_rating"),
+        "stars as text": (fb_q, (wf_mid, json.dumps([{"lesson_id": slot, "rating": "4"}])), "invalid"),
+        "a slot of another evening": (fb_q, (wf_mid, json.dumps([{"lesson_id": other_slot, "rating": 4}])),
+                                      "invalid_slot"),
+        "not a list": (fb_q, (wf_mid, json.dumps({"lesson_id": slot, "rating": 4})), "invalid"),
+        "no stars at all": (fb_q, (wf_mid, json.dumps([{"lesson_id": slot, "rating": None}])), "nothing"),
+        "a negative sum": (bud_q, (wf_mid, json.dumps([{"expense_type": "כיבוד", "actual_cost": -5}])),
+                           "invalid_amount"),
+        "a kind of expense": (bud_q, (wf_mid, json.dumps([{"expense_type": "מתנה", "actual_cost": 5}])),
+                              "invalid_type"),
+        "a speaker with no name": (bud_q, (wf_mid, json.dumps([{"expense_type": "מרצה", "description": " ",
+                                                               "actual_cost": 5}])), "invalid_text"),
+        "refreshments at 0 only": (bud_q, (wf_mid, json.dumps([{"expense_type": "כיבוד", "actual_cost": 0}])),
+                                   "nothing"),
+    }
+    if a_break:
+        invalid_after["a break"] = (fb_q, (wf_mid, json.dumps([{"lesson_id": a_break[0], "rating": 4}])),
+                                    "invalid_slot")
+    if future_mid:
+        invalid_after["before the evening"] = (fb_q, (future_mid[0], entries), "too_early")
+    wrong_after = {k: (call("authenticated", trainee, q, args) or {}).get("status")
+                   for k, (q, args, want) in invalid_after.items()
+                   if (call("authenticated", trainee, q, args) or {}).get("status") != want}
+    checks["after: an empty label / javascript: / six stars / text stars / a foreign slot / a break / no stars / "
+           "before the evening / a negative sum / an unknown kind / a nameless speaker → refused by name"] = \
+        not wrong_after and bool(future_mid)
+    if wrong_after:
+        checks[f"after: wrong answers {wrong_after}"] = False
+    checks["after: no refused call changed anything"] = state_after() == before
+
+    # each door once, all the way
+    res = call("authenticated", trainee, after_doors["v2_add_logistics"][0], (wf_mid, "  עוגות  "))
+    new_item = ((res or {}).get("result") or {}).get("id")
+    row_item = one("SELECT kind, label, detail, done FROM logistics_items WHERE id = %s", (new_item or 0,))
+    checks["after: a refreshments row → ok, «כיבוד», stripped, no detail, open; in the answer"] = \
+        (res or {}).get("status") == "ok" and row_item == ("כיבוד", "עוגות", None, False) \
+        and any(i["id"] == new_item for i in res["workfile"]["logistics"]) \
+        and res["workfile"] == wf(trainee, wf_mid)
+    res = call("authenticated", trainee, after_doors["v2_set_logistics_done"][0], (new_item, True))
+    checks["after: ✓ on it → done"] = (res or {}).get("status") == "ok" \
+        and one("SELECT done FROM logistics_items WHERE id = %s", (new_item,))[0] is True
+    res = call("authenticated", trainee, after_doors["v2_delete_logistics"][0], (new_item,))
+    checks["after: 🗑 on it → gone"] = (res or {}).get("status") == "ok" \
+        and one("SELECT count(*) FROM logistics_items WHERE id = %s", (new_item,))[0] == 0
+    res = call("authenticated", trainee, after_doors["v2_set_invitation"][0], (wf_mid, " https://example.org/i.png "))
+    set_ok = (res or {}).get("status") == "ok" and res["workfile"]["mishmar"]["invitation_url"] == "https://example.org/i.png"
+    res = call("authenticated", trainee, after_doors["v2_set_invitation"][0], (wf_mid, ""))
+    checks["after: the invitation's link set (stripped), then cleared to none"] = set_ok \
+        and (res or {}).get("status") == "ok" \
+        and one("SELECT invitation_url FROM mishmarim WHERE id = %s", (wf_mid,))[0] is None
+
+    res = call("authenticated", trainee, fb_q, (wf_mid, entries))
+    lessons_now = [dict(zip(("id", "slot_order", "is_break", "title", "lesson_role", "format", "start_time"), r))
+                   for r in (cur.execute("RESET ROLE") or cur.execute(
+                       "SELECT id, slot_order, is_break, title, lesson_role, format, start_time FROM lessons "
+                       "WHERE mishmar_id = %s ORDER BY slot_order, id", (wf_mid,)) or cur.fetchall())]
+    want_title = dm.slot_names(lessons_now).get(slot)
+    fb_row = one("SELECT student_id, lesson_id, lesson_title, speaker_name, rating, what_worked, what_didnt "
+                 "FROM feedback WHERE mishmar_id = %s ORDER BY id DESC LIMIT 1", (wf_mid,))
+    spk = one("SELECT speaker_name FROM lessons WHERE id = %s", (slot,))[0]
+    checks["after: feedback → one row in the trainee's name, the slot by dm.slot_names, its speaker, the words"] = \
+        (res or {}).get("status") == "ok" and res["result"]["saved"] == 1 \
+        and fb_row == (me_id, slot, want_title, spk, 4, "עבד טוב", None)
+    checks["after: … and the evening's open feedback task closed"] = \
+        one("SELECT status FROM tasks WHERE id = %s", (fb_task,))[0] == "DONE"
+    fb_seen = (res or {}).get("workfile", {}).get("feedback", [])
+    checks["after: the answer's feedback — `mine` for the writer, no student id; the instructor sees mine=false"] = \
+        bool(fb_seen) and all(set(f) == {"id", "lesson_id", "lesson_title", "speaker_name", "rating",
+                                         "what_worked", "what_didnt", "mine"} for f in fb_seen) \
+        and any(f["mine"] and f["lesson_id"] == slot for f in fb_seen) \
+        and not any(f["mine"] for f in (wf(boss, wf_mid) or {}).get("feedback", []))
+    n_fb = one("SELECT count(*) FROM feedback WHERE mishmar_id = %s", (wf_mid,))[0]
+    res = call("authenticated", trainee, fb_q, (wf_mid, entries))
+    checks["after: the same slot again → nothing, no second row"] = (res or {}).get("status") == "nothing" \
+        and one("SELECT count(*) FROM feedback WHERE mishmar_id = %s", (wf_mid,))[0] == n_fb
+
+    res = call("authenticated", trainee, bud_q, (wf_mid, lines))
+    rows_bud = cur.execute("RESET ROLE") or cur.execute(
+        "SELECT expense_type, description, amount::float, actual_cost::float FROM budget "
+        "WHERE mishmar_id = %s AND id > %s ORDER BY id", (wf_mid, my_line)) or cur.fetchall()
+    checks["after: budget → the speaker at 0 (came free), refreshments at 120, «אחר» at 0 skipped"] = \
+        (res or {}).get("status") == "ok" and res["result"]["saved"] == 2 \
+        and rows_bud == [("מרצה", "מרצה בדיקה ג", 0.0, 0.0), ("כיבוד", "כיבוד", 0.0, 120.0)] \
+        and float(res["workfile"]["mishmar"]["budget_used"]) == 220.0 \
+        and len(res["workfile"]["budget"]) == 3
+    res = call("authenticated", trainee, after_doors["v2_delete_budget"][0], (my_line,))
+    checks["after: 🗑 on a budget line → gone, the sum follows"] = (res or {}).get("status") == "ok" \
+        and one("SELECT count(*) FROM budget WHERE id = %s", (my_line,))[0] == 0 \
+        and float(res["workfile"]["mishmar"]["budget_used"]) == 120.0
+
+    # leave the evening as it was, for the exports below
+    one("UPDATE mishmarim SET gregorian_date = %s WHERE id = %s RETURNING id", (wf_date, wf_mid))
+    one("DELETE FROM feedback WHERE mishmar_id = %s RETURNING 1", (wf_mid,))
+    cur.execute("DELETE FROM budget WHERE mishmar_id IN (%s, %s)", (wf_mid, other_mid))
+    cur.execute("DELETE FROM logistics_items WHERE id IN (%s, %s)", (my_item, other_item))
+    cur.execute("DELETE FROM tasks WHERE id = %s", (fb_task,))
+
     # ---- the twins: the SQL copies of dm's rules must give the same answers
     cur.execute("RESET ROLE")
     texts = [n for _, needles in dm._CATEGORY_RULES for n in needles]
@@ -594,6 +778,18 @@ def main(argv: list[str]) -> int:
     sql_cls = dict(cur.fetchall())
     wrong_cls = [t for t in texts if sql_cls.get(t) != dm.classify_task(t)]
     checks[f"twin: classify_task agrees on {len(set(texts))} texts (every needle, every task)"] = not wrong_cls
+    cur.execute("SELECT t, v2_private.is_feedback_task(t) FROM unnest(%s::text[]) AS t",
+                (texts + ["משוב וסיכום", "משובים", "סיכום ולקחים", None],))
+    wrong_fb = [t for t, got in cur.fetchall() if got != dm.is_feedback_task({"task_description": t})]
+    checks["twin: is_feedback_task agrees on every task text"] = not wrong_fb
+    wrong_dates = []
+    for d in ("15.10.2026", " 5.11.2026 ", "31.2.2027", "", "2026-10-15", "1.1.27", None):
+        cur.execute("SELECT v2_private.evening_date(%s)::text", (d,))
+        got = cur.fetchone()[0]
+        want = dm.parse_gregorian(d)
+        if got != (want.isoformat() if want else None):
+            wrong_dates.append(d)
+    checks["twin: evening_date agrees with dm.parse_gregorian (incl. bad dates)"] = not wrong_dates
     wrong_due = []
     for d in ("15.10.2026", "1.1.2027", " 5.11.2026 ", "31.2.2027", "", "2026-10-15"):
         for c in [*dm.DEADLINE_OFFSETS_DAYS, None, "אחר"]:
@@ -626,7 +822,7 @@ def main(argv: list[str]) -> int:
             cur.execute("RESET ROLE")
     cur.execute(LEAKS)
     leaks = [list(r) for r in cur.fetchall()]
-    checks["catalog: only the sixteen doors, only for authenticated"] = leaks == EXPECTED_LEAKS
+    checks["catalog: only the twenty-three doors, only for authenticated"] = leaks == EXPECTED_LEAKS
 
     if export and checks.get("linked address → ok (case-insensitive)"):
         # placeholders for people: the demo must not carry real names

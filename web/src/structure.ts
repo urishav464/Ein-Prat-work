@@ -1,7 +1,8 @@
-// The evening's structure doors (stage 2ב, web/supabase/v2.sql): their calls,
-// their answers, and what the screen says about each — the Streamlit app's
-// toasts, in its own words where it has them. Every door answers with the
-// whole evening as v2_workfile shows it, already reconciled with its tasks.
+// The workfile's write doors (web/supabase/v2.sql) — the evening's structure
+// (stage 2ב), its logistics and after-work (2ג): their calls, their answers,
+// and what the screen says about each — the Streamlit app's toasts, in its
+// own words where it has them. Every door answers with the whole evening as
+// v2_workfile shows it, already reconciled with its tasks.
 import { CLOSED, isChavurot, isPanel, type Lesson, type Workfile } from "./model";
 
 export type SlotKind = "lesson" | "chavurot" | "break" | "skeleton";
@@ -22,7 +23,19 @@ export type StructureCall =
       p_person_id: number; p_phone: string | null; p_room: string | null; p_source_url: string | null;
     } }
   | { door: "v2_set_person_status"; args: { p_person_id: number; p_status: string } }
-  | { door: "v2_remove_person"; args: { p_person_id: number } };
+  | { door: "v2_remove_person"; args: { p_person_id: number } }
+  // stage 2ג: the evening's logistics and its after-work — they answer the
+  // same way, the whole evening; none of them touches the slots
+  | { door: "v2_add_logistics"; args: { p_mishmar_id: number; p_label: string } }
+  | { door: "v2_set_logistics_done"; args: { p_item_id: number; p_done: boolean } }
+  | { door: "v2_delete_logistics"; args: { p_item_id: number } }
+  | { door: "v2_set_invitation"; args: { p_mishmar_id: number; p_url: string } }
+  | { door: "v2_add_feedback"; args: { p_mishmar_id: number; p_entries: FeedbackEntry[] } }
+  | { door: "v2_add_budget"; args: { p_mishmar_id: number; p_lines: BudgetEntry[] } }
+  | { door: "v2_delete_budget"; args: { p_line_id: number } };
+
+export interface FeedbackEntry { lesson_id: number; rating: number | null; what_worked: string | null }
+export interface BudgetEntry { expense_type: "מרצה" | "כיבוד" | "אחר"; description: string; actual_cost: number }
 
 export interface SyncCounts { created: number; removed: number; adopted: number; completed: number; renamed: number }
 
@@ -34,6 +47,8 @@ export interface StructureResult {
   tasks?: number;
   person?: number;
   sync?: SyncCounts;
+  saved?: number;                     // feedback / budget rows written
+  id?: number;                        // a logistics row added
 }
 
 export interface StructureAnswer { status: string; workfile?: Workfile; result?: StructureResult }
@@ -56,11 +71,28 @@ const REFUSED: Record<string, string> = {
   signed_out: "החיבור פג. צריך להיכנס מחדש.",
   wrong_provider: "החיבור פג. צריך להיכנס מחדש.",
   not_linked: "החשבון הזה לא משויך לחניך.",
+  too_early: "המשוב נפתח ביום הערב.",
+  invalid_rating: "דירוג הוא בין כוכב אחד לחמישה.",
+  invalid_slot: "המקטע הזה כבר לא בערב. כדאי לרענן את הדף.",
+  invalid_amount: "סכום צריך להיות 0 ₪ או יותר.",
+  invalid_type: "סוג ההוצאה לא מוכר.",
+  invalid: "השינוי לא נשמר. כדאי לרענן את הדף ולנסות שוב.",
 };
 
-export function refusal(status: string | undefined): string {
+// «nothing» is a different sentence at each door — the Streamlit app's toasts
+const NOTHING: Partial<Record<StructureCall["door"], string>> = {
+  v2_add_feedback: "לא סומנו כוכבים — לא נשמר משוב",
+  v2_add_budget: "אין מה לשמור: מרצה צריך שם, וכיבוד או הוצאה אחרת — סכום מעל 0.",
+};
+
+export function refusal(status: string | undefined, door?: StructureCall["door"]): string {
+  if (status === "nothing" && door && NOTHING[door]) return NOTHING[door]!;
+  if (status === "invalid_url" && door === "v2_set_invitation") return "קישור להזמנה צריך להתחיל ב-https://";
   return (status && REFUSED[status]) || "השינוי לא אפשרי כאן.";
 }
+
+// app._he_count's two phrasings, for the toasts below
+const count = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
 
 export const NOT_SAVED = "השינוי לא נשמר. בדקו את החיבור ונסו שוב.";
 
@@ -144,6 +176,37 @@ export function describe(call: StructureCall, before: Workfile, res: StructureRe
       who = personOf(before, call.args.p_person_id)?.name ?? "";
       notice = `«${who}» הוסר`;
       break;
+    case "v2_add_logistics":
+      notice = `«${call.args.p_label.trim()}» נוסף לרשימת הכיבוד`;
+      break;
+    case "v2_set_logistics_done":
+      notice = "";                    // the row itself shows it — no toast for a ✓
+      break;
+    case "v2_delete_logistics": {
+      const label = before.logistics.find((i) => i.id === call.args.p_item_id)?.label ?? "";
+      notice = `«${label}» הוסר מהרשימה`;
+      break;
+    }
+    case "v2_set_invitation":
+      notice = call.args.p_url.trim() ? "ההזמנה הועלתה" : "ההזמנה הוסרה";
+      break;
+    case "v2_add_feedback": {
+      // app._save_feedback_clicked's toast
+      const n = res.saved ?? 0;
+      notice = `${n === 1 ? "נשמר" : "נשמרו"} ${count(n, "משוב אחד", "משובים")} · משימת המשוב נסגרה`;
+      break;
+    }
+    case "v2_add_budget": {
+      // app._save_budget_clicked's toast
+      const n = res.saved ?? 0;
+      notice = `${n === 1 ? "נשמרה" : "נשמרו"} ${count(n, "שורת תקציב אחת", "שורות תקציב")}`;
+      break;
+    }
+    case "v2_delete_budget": {
+      const line = before.budget.find((b) => b.id === call.args.p_line_id);
+      notice = `השורה «${line?.description ?? ""}» נמחקה מהתקציב`;
+      break;
+    }
   }
   return { notice, warning: res.logged === false ? ambiguous(typeof res.closed === "string" ? res.closed : who) : null };
 }

@@ -3,18 +3,22 @@
 // it under Node with the database and Storage stood in.
 //
 // One action today, «upload»: a source sheet for a slot or for one presenter
-// of חבורות. Who may upload is decided where every other rule of v2 is — in
-// the database: the function asks v2_workfile for the evening WITH THE
-// CALLER'S OWN TOKEN, and goes on only if it answers as the pair of that
-// evening (viewer «trainee») and the slot or the person is in that answer. The
-// file is then stored with the service key, under the key the Streamlit app
-// gives a slot's sheet. The link is saved by the site afterwards, through the
-// doors (v2_save_slot / v2_edit_person) — this function writes no row.
-import { MAX_BYTES, checkFile, contentTag, objectPath, type Target } from "./upload.ts";
+// of חבורות, or the evening's invitation (one image). Who may upload is
+// decided where every other rule of v2 is — in the database: the function asks
+// v2_workfile for the evening WITH THE CALLER'S OWN TOKEN, and goes on only if
+// it answers as the pair of that evening (viewer «trainee») and the slot or
+// the person is in that answer (the invitation: the evening itself, whose id
+// is sent as the id). The file is then stored with the service key, under the
+// key the Streamlit app gives it. The link is saved by the site afterwards,
+// through the doors (v2_save_slot / v2_edit_person / v2_set_invitation) —
+// this function writes no row.
+import { MAX_BYTES, checkFile, contentTag, invitationPath, objectPath, type Target } from "./upload.ts";
 
 interface Person { id: number }
 interface Lesson { id: number; is_break: boolean; people?: Person[] }
-interface Workfile { status: string; viewer?: string; lessons?: Lesson[] }
+interface Workfile { status: string; viewer?: string; mishmar?: { id: number }; lessons?: Lesson[] }
+
+const TARGETS: readonly string[] = ["lesson", "presenter", "invitation"];
 
 export interface Deps {
   // rpc('v2_workfile') as the caller: supabase-js's { data, error, status }
@@ -67,7 +71,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
   const id = String(form.get("id") ?? "");
   const file = form.get("file");
   if (form.get("action") !== "upload" || !ID.test(mid) || !ID.test(id)
-      || (target !== "lesson" && target !== "presenter") || !(file instanceof File)) {
+      || typeof target !== "string" || !TARGETS.includes(target) || !(file instanceof File)) {
     return answer({ status: "invalid" });
   }
 
@@ -81,15 +85,20 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
   if (wf.status !== "ok") return answer({ status: wf.status });
   if (wf.viewer !== "trainee") return answer({ status: "instructor" });
   const slots = (wf.lessons ?? []).filter((l) => !l.is_break);
-  const found = target === "lesson"
-    ? slots.some((l) => l.id === Number(id))
-    : slots.some((l) => (l.people ?? []).some((p) => p.id === Number(id)));
+  const found = target === "invitation"
+    ? Number(id) === Number(mid) && wf.mishmar?.id === Number(mid)
+    : target === "lesson"
+      ? slots.some((l) => l.id === Number(id))
+      : slots.some((l) => (l.people ?? []).some((p) => p.id === Number(id)));
   if (!found) return answer({ status: "forbidden" });
 
-  const checked = checkFile(file.name, file.size);
+  const checked = checkFile(file.name, file.size, target as Target);
   if (!checked.ok) return answer({ status: checked.status });
   const bytes = await file.arrayBuffer();
-  const path = objectPath(Number(mid), target as Target, Number(id), await contentTag(bytes), checked.safe);
+  const tag = await contentTag(bytes);
+  const path = target === "invitation"
+    ? invitationPath(Number(mid), tag, checked.safe)
+    : objectPath(Number(mid), target as Target, Number(id), tag, checked.safe);
 
   // dm._storage_upload: the bucket is made on first use
   let put = await deps.upload(path, bytes, checked.contentType);

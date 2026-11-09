@@ -40,6 +40,14 @@
 --   v2_remove_person                 reconciling the evening's task board
 --                                    (sync_lesson_tasks) and answering with
 --                                    the evening as v2_workfile shows it.
+--   v2_add_logistics /               the evening's logistics and after-work
+--   v2_set_logistics_done /          (stage 2ג): the refreshments list, the
+--   v2_delete_logistics /            invitation's link, each trainee's
+--   v2_set_invitation /              feedback per slot (it closes the
+--   v2_add_feedback /                evening's feedback task) and the budget
+--   v2_add_budget /                  lines — what the Streamlit «לוגיסטיקה»
+--   v2_delete_budget                 and «משוב וסיכום» panels write. Each
+--                                    answers with the evening, as above.
 --
 -- The instructor reads everything and writes nothing here: every write door
 -- answers them «instructor». Phones and task details reach only the pair of
@@ -483,6 +491,88 @@ SET search_path = public, pg_temp
 AS $$
     SELECT CASE WHEN p_total < 2 OR p_index < 1 OR p_index > 4 THEN ''
                 ELSE ' — סבב ' || (ARRAY['א׳', 'ב׳', 'ג׳', 'ד׳'])[p_index] END
+$$;
+
+-- TWIN of dm.slot_names: every non-break slot of the evening by ONE name —
+-- «שיעור N» counting every slot, «חבורות» with its round when there are 2+,
+-- the pair's title when it has one, and the start time appended when two
+-- slots would read the same. feedback.lesson_title is this name, and it is
+-- the key both apps lock «one rating per slot per trainee» on.
+CREATE OR REPLACE FUNCTION v2_private.slot_names(p_mishmar_id integer)
+RETURNS TABLE (lesson_id bigint, name text)
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    ids    bigint[] := '{}';
+    names  text[]   := '{}';
+    starts text[]   := '{}';
+    l      record;
+    i      integer := 0;
+    r      integer := 0;
+    total  integer;
+    t      text;
+    k      integer;
+BEGIN
+    SELECT count(*) INTO total FROM lessons x
+     WHERE x.mishmar_id = p_mishmar_id AND NOT coalesce(x.is_break, false)
+       AND v2_private.is_chavurot(x.lesson_role, x.format, x.title);
+    FOR l IN SELECT x.id, x.title, x.lesson_role, x.format, x.start_time FROM lessons x
+              WHERE x.mishmar_id = p_mishmar_id AND NOT coalesce(x.is_break, false)
+              ORDER BY x.slot_order, x.id LOOP
+        i := i + 1;
+        t := v2_private.pystrip(l.title);
+        IF v2_private.is_chavurot(l.lesson_role, l.format, l.title) THEN
+            r := r + 1;
+            t := coalesce(nullif(t, ''), 'חבורות') || v2_private.round_suffix(r, total);
+        ELSE
+            t := coalesce(nullif(t, ''), 'שיעור ' || i);
+        END IF;
+        ids := ids || l.id;
+        names := names || t;
+        starts := starts || l.start_time::text;
+    END LOOP;
+    FOR k IN 1 .. coalesce(array_length(ids, 1), 0) LOOP
+        lesson_id := ids[k];
+        name := names[k];
+        IF (SELECT count(*) FROM unnest(names) AS n(v) WHERE n.v = names[k]) > 1
+           AND coalesce(starts[k], '') <> '' THEN
+            name := name || ' (' || starts[k] || ')';
+        END IF;
+        RETURN NEXT;
+    END LOOP;
+END
+$$;
+
+-- TWIN of dm.is_feedback_task: «משוב» in the text — the one task a past
+-- evening keeps open, and the one a sent feedback closes
+CREATE OR REPLACE FUNCTION v2_private.is_feedback_task(p_text text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT strpos(coalesce(p_text, ''), 'משוב') > 0
+$$;
+
+-- TWIN of dm.parse_gregorian: «12.11.2026» → a date; anything else → NULL
+CREATE OR REPLACE FUNCTION v2_private.evening_date(p_gregorian text)
+RETURNS date
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    parts text[] := regexp_match(coalesce(p_gregorian, ''), '^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$');
+BEGIN
+    IF parts IS NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN make_date(parts[3]::int, parts[2]::int, parts[1]::int);
+EXCEPTION WHEN others THEN
+    RETURN NULL;
+END
 $$;
 
 -- TWIN of dm._base_slot_text: the wording without its round
@@ -933,7 +1023,10 @@ AS $$
                        'start_time', m.start_time, 'invitation_url', m.invitation_url,
                        'owners', (SELECT coalesce(jsonb_agg(s.name ORDER BY s.name), '[]'::jsonb)
                                     FROM assignments a JOIN students s ON s.id = a.student_id
-                                   WHERE a.mishmar_id = m.id))
+                                   WHERE a.mishmar_id = m.id),
+                       -- v_mishmar_budget's budget_used, for this evening
+                       'budget_used', (SELECT coalesce(sum(b.actual_cost), 0)
+                                         FROM budget b WHERE b.mishmar_id = m.id))
               FROM mishmarim m WHERE m.id = p_mishmar_id),
         'lessons', (
             SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -956,6 +1049,23 @@ AS $$
                        'detail', i.detail, 'done', i.done)
                      ORDER BY i.kind, i.sort_order NULLS LAST, i.id), '[]'::jsonb)
               FROM logistics_items i WHERE i.mishmar_id = p_mishmar_id),
+        -- the feedback given on the evening, as the Streamlit «משוב שנרשם»
+        -- shows it: never who wrote it — only whether the caller did
+        'feedback', (
+            SELECT coalesce(jsonb_agg(jsonb_build_object(
+                       'id', f.id, 'lesson_id', f.lesson_id, 'lesson_title', f.lesson_title,
+                       'speaker_name', f.speaker_name, 'rating', f.rating,
+                       'what_worked', f.what_worked, 'what_didnt', f.what_didnt,
+                       'mine', p_viewer = 'trainee' AND f.student_id IS NOT NULL
+                               AND f.student_id = (SELECT c.student_id FROM v2_private.caller() c))
+                     ORDER BY f.id), '[]'::jsonb)
+              FROM feedback f WHERE f.mishmar_id = p_mishmar_id),
+        'budget', (
+            SELECT coalesce(jsonb_agg(jsonb_build_object(
+                       'id', b.id, 'expense_type', b.expense_type, 'description', b.description,
+                       'actual_cost', b.actual_cost)
+                     ORDER BY b.id), '[]'::jsonb)
+              FROM budget b WHERE b.mishmar_id = p_mishmar_id),
         'tasks', (
             SELECT coalesce(jsonb_agg(v2_private.task_json(t) ORDER BY t.id), '[]'::jsonb)
               FROM tasks t WHERE t.mishmar_id = p_mishmar_id)
@@ -1712,6 +1822,298 @@ END
 $$;
 
 
+-- ---- logistics, the invitation, feedback and the budget (stage 2ג). Each
+-- door: what the Streamlit callback writes, then the evening as it is now.
+-- None of these touches the slots, so none needs the reconciler: the rooms
+-- of חבורות live on the presenters (v2_edit_person), not here.
+
+-- «🍎 רשימת הכיבוד» → «➕ הוסף» — app._add_logistics_clicked →
+-- dm.add_logistics_item(mid, "כיבוד", label): the label stripped, no detail.
+CREATE OR REPLACE FUNCTION public.v2_add_logistics(p_mishmar_id integer, p_label text)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    w      record;
+    txt    text := v2_private.pystrip(p_label);
+    new_id bigint;
+BEGIN
+    SELECT * INTO w FROM v2_private.may_write(p_mishmar_id);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    IF txt = '' OR length(txt) > 300 THEN
+        RETURN jsonb_build_object('status', 'invalid_text');
+    END IF;
+    INSERT INTO logistics_items (mishmar_id, kind, label, detail)
+    VALUES (p_mishmar_id, 'כיבוד', txt, NULL)
+    RETURNING id INTO new_id;
+    RETURN v2_private.answer(p_mishmar_id, jsonb_build_object('id', new_id));
+END
+$$;
+
+
+-- ✓ on a logistics row — dm.toggle_logistics_item
+CREATE OR REPLACE FUNCTION public.v2_set_logistics_done(p_item_id bigint, p_done boolean)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    mid integer;
+    w   record;
+BEGIN
+    SELECT i.mishmar_id INTO mid FROM logistics_items i WHERE i.id = p_item_id;
+    SELECT * INTO w FROM v2_private.may_write(mid);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    IF p_done IS NULL THEN
+        RETURN jsonb_build_object('status', 'invalid');
+    END IF;
+    UPDATE logistics_items SET done = p_done WHERE id = p_item_id;
+    RETURN v2_private.answer(mid, jsonb_build_object('id', p_item_id, 'done', p_done));
+END
+$$;
+
+
+-- 🗑 on a logistics row, the old free-text room rows included —
+-- dm.delete_logistics_item
+CREATE OR REPLACE FUNCTION public.v2_delete_logistics(p_item_id bigint)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    mid integer;
+    w   record;
+    lbl text;
+BEGIN
+    SELECT i.mishmar_id INTO mid FROM logistics_items i WHERE i.id = p_item_id;
+    SELECT * INTO w FROM v2_private.may_write(mid);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    DELETE FROM logistics_items WHERE id = p_item_id RETURNING label INTO lbl;
+    RETURN v2_private.answer(mid, jsonb_build_object('removed', lbl));
+END
+$$;
+
+
+-- «✉️ ההזמנה למשמר» — app._upload_invitation_clicked stores the uploaded
+-- image's link, its 🗑 clears it: dm.set_invitation(mid, url=…), the link
+-- stripped, '' → none. A web link and nothing else.
+CREATE OR REPLACE FUNCTION public.v2_set_invitation(p_mishmar_id integer, p_url text)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    w      record;
+    v_link text := v2_private.pystrip(p_url);
+BEGIN
+    SELECT * INTO w FROM v2_private.may_write(p_mishmar_id);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    IF v_link <> '' AND NOT v2_private.is_http_url(v_link) THEN
+        RETURN jsonb_build_object('status', 'invalid_url');
+    END IF;
+    UPDATE mishmarim SET invitation_url = nullif(v_link, '') WHERE id = p_mishmar_id;
+    RETURN v2_private.answer(p_mishmar_id, jsonb_build_object('url', nullif(v_link, '')));
+END
+$$;
+
+
+-- «💾 שמור משוב על הערב» — app._save_feedback_clicked. Entries are
+-- [{lesson_id, rating 1–5, what_worked}], one per slot of the evening. A slot
+-- with no stars is skipped (unrated is not a 4), and so is a slot the caller
+-- has already rated — by its NAME (dm.slot_names), as in the app: the name is
+-- computed here, never taken from the browser. Something saved → every open
+-- feedback task of the evening closes (dm.is_feedback_task), as the app's
+-- callback closes them. The form opens on the evening's own day.
+CREATE OR REPLACE FUNCTION public.v2_add_feedback(p_mishmar_id integer, p_entries jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    w       record;
+    evening date;
+    e       jsonb;
+    lid     bigint;
+    stars   integer;
+    nm      text;
+    spk     text;
+    mine    text[];
+    n       integer := 0;
+    closed  integer := 0;
+BEGIN
+    SELECT * INTO w FROM v2_private.may_write(p_mishmar_id);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    SELECT v2_private.evening_date(m.gregorian_date) INTO evening FROM mishmarim m WHERE m.id = p_mishmar_id;
+    IF evening IS NOT NULL AND evening > current_date THEN
+        RETURN jsonb_build_object('status', 'too_early');
+    END IF;
+    IF p_entries IS NULL OR jsonb_typeof(p_entries) <> 'array' OR jsonb_array_length(p_entries) > 30 THEN
+        RETURN jsonb_build_object('status', 'invalid');
+    END IF;
+    -- every entry checked before anything is written: all of it or none
+    FOR e IN SELECT x FROM jsonb_array_elements(p_entries) AS a(x) LOOP
+        IF jsonb_typeof(e) <> 'object' OR jsonb_typeof(e -> 'lesson_id') IS DISTINCT FROM 'number'
+           OR (e ? 'rating' AND jsonb_typeof(e -> 'rating') NOT IN ('number', 'null'))
+           OR (e ? 'what_worked' AND jsonb_typeof(e -> 'what_worked') NOT IN ('string', 'null')) THEN
+            RETURN jsonb_build_object('status', 'invalid');
+        END IF;
+        IF (e ->> 'rating') IS NOT NULL
+           AND ((e ->> 'rating') !~ '^[1-5]$') THEN
+            RETURN jsonb_build_object('status', 'invalid_rating');
+        END IF;
+        IF length(coalesce(e ->> 'what_worked', '')) > 2000 THEN
+            RETURN jsonb_build_object('status', 'invalid_text');
+        END IF;
+        IF (e ->> 'lesson_id') !~ '^\d{1,18}$' OR NOT EXISTS (
+               SELECT 1 FROM lessons x WHERE x.id = (e ->> 'lesson_id')::bigint
+                  AND x.mishmar_id = p_mishmar_id AND NOT coalesce(x.is_break, false)) THEN
+            RETURN jsonb_build_object('status', 'invalid_slot');
+        END IF;
+    END LOOP;
+    SELECT coalesce(array_agg(f.lesson_title), '{}') INTO mine
+      FROM feedback f WHERE f.mishmar_id = p_mishmar_id AND f.student_id = w.student_id;
+    FOR e IN SELECT x FROM jsonb_array_elements(p_entries) AS a(x) LOOP
+        lid := (e ->> 'lesson_id')::bigint;
+        stars := (e ->> 'rating')::integer;
+        IF stars IS NULL THEN
+            CONTINUE;                      -- unrated = skipped
+        END IF;
+        SELECT s.name INTO nm FROM v2_private.slot_names(p_mishmar_id) s WHERE s.lesson_id = lid;
+        IF nm = ANY (mine) THEN
+            CONTINUE;                      -- one submission per slot per trainee
+        END IF;
+        SELECT x.speaker_name INTO spk FROM lessons x WHERE x.id = lid;
+        -- exactly dm.add_feedback's row: «or None» on the words, unstripped
+        INSERT INTO feedback (mishmar_id, student_id, lesson_id, lesson_title, speaker_name,
+                              rating, what_worked, what_didnt)
+        VALUES (p_mishmar_id, w.student_id, lid, nm, spk, stars, nullif(e ->> 'what_worked', ''), NULL);
+        mine := mine || nm;
+        n := n + 1;
+    END LOOP;
+    IF n = 0 THEN
+        RETURN jsonb_build_object('status', 'nothing');
+    END IF;
+    UPDATE tasks SET status = 'DONE', updated_at = now()
+     WHERE mishmar_id = p_mishmar_id AND status <> 'DONE'
+       AND v2_private.is_feedback_task(task_description);
+    GET DIAGNOSTICS closed = ROW_COUNT;
+    RETURN v2_private.answer(p_mishmar_id, jsonb_build_object('saved', n, 'closed', closed));
+END
+$$;
+
+
+-- «שמור סיכום תקציב» — app._save_budget_clicked. Lines are
+-- [{expense_type, description, actual_cost}]: a speaker's line is written
+-- whatever the sum (0 = came free) and must name the speaker; «כיבוד» and
+-- «אחר» are written only above 0, under their own word, as the app writes
+-- them. `amount` stays 0 (dm.add_budget_entry's default).
+CREATE OR REPLACE FUNCTION public.v2_add_budget(p_mishmar_id integer, p_lines jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    w    record;
+    e    jsonb;
+    kind text;
+    what text;
+    cost numeric;
+    n    integer := 0;
+BEGIN
+    SELECT * INTO w FROM v2_private.may_write(p_mishmar_id);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) > 30 THEN
+        RETURN jsonb_build_object('status', 'invalid');
+    END IF;
+    FOR e IN SELECT x FROM jsonb_array_elements(p_lines) AS a(x) LOOP
+        IF jsonb_typeof(e) <> 'object' OR jsonb_typeof(e -> 'actual_cost') IS DISTINCT FROM 'number'
+           OR (e ? 'description' AND jsonb_typeof(e -> 'description') NOT IN ('string', 'null')) THEN
+            RETURN jsonb_build_object('status', 'invalid');
+        END IF;
+        IF (e ->> 'expense_type') IS NULL OR (e ->> 'expense_type') NOT IN ('מרצה', 'כיבוד', 'אחר') THEN
+            RETURN jsonb_build_object('status', 'invalid_type');
+        END IF;
+        IF (e ->> 'actual_cost')::numeric < 0 OR (e ->> 'actual_cost')::numeric > 100000 THEN
+            RETURN jsonb_build_object('status', 'invalid_amount');
+        END IF;
+        IF (e ->> 'expense_type') = 'מרצה' AND (v2_private.pystrip(e ->> 'description') = ''
+                                              OR length(v2_private.pystrip(e ->> 'description')) > 120) THEN
+            RETURN jsonb_build_object('status', 'invalid_text');
+        END IF;
+    END LOOP;
+    FOR e IN SELECT x FROM jsonb_array_elements(p_lines) AS a(x) LOOP
+        kind := e ->> 'expense_type';
+        cost := (e ->> 'actual_cost')::numeric;
+        IF kind = 'מרצה' THEN
+            what := v2_private.pystrip(e ->> 'description');
+        ELSIF cost > 0 THEN
+            what := kind;                  -- «כיבוד» / «אחר», as the app names them
+        ELSE
+            CONTINUE;                      -- the app writes neither at 0
+        END IF;
+        INSERT INTO budget (mishmar_id, expense_type, description, amount, actual_cost)
+        VALUES (p_mishmar_id, kind, what, 0, cost);
+        n := n + 1;
+    END LOOP;
+    IF n = 0 THEN
+        RETURN jsonb_build_object('status', 'nothing');
+    END IF;
+    RETURN v2_private.answer(p_mishmar_id, jsonb_build_object('saved', n));
+END
+$$;
+
+
+-- 🗑 on a budget line. NOT in the Streamlit app, which only ever adds: a
+-- second «שמור» there counts every speaker twice and nothing undoes it. The
+-- site lists the lines it saved and lets the pair take one back.
+CREATE OR REPLACE FUNCTION public.v2_delete_budget(p_line_id bigint)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    mid integer;
+    w   record;
+    what text;
+BEGIN
+    SELECT b.mishmar_id INTO mid FROM budget b WHERE b.id = p_line_id;
+    SELECT * INTO w FROM v2_private.may_write(mid);
+    IF w.status <> 'ok' THEN
+        RETURN jsonb_build_object('status', w.status);
+    END IF;
+    DELETE FROM budget WHERE id = p_line_id RETURNING description INTO what;
+    RETURN v2_private.answer(mid, jsonb_build_object('removed', what));
+END
+$$;
+
+
 -- Postgres grants EXECUTE on a new function to PUBLIC, and Supabase's default
 -- privileges hand it to anon and authenticated as well: take it back from all
 -- of them, then give each door to the signed-in role only. THE list of doors —
@@ -1736,7 +2138,14 @@ BEGIN
         'public.v2_add_person(bigint, text, text, text, boolean)',
         'public.v2_edit_person(bigint, text, text, text)',
         'public.v2_set_person_status(bigint, text)',
-        'public.v2_remove_person(bigint)'
+        'public.v2_remove_person(bigint)',
+        'public.v2_add_logistics(integer, text)',
+        'public.v2_set_logistics_done(bigint, boolean)',
+        'public.v2_delete_logistics(bigint)',
+        'public.v2_set_invitation(integer, text)',
+        'public.v2_add_feedback(integer, jsonb)',
+        'public.v2_add_budget(integer, jsonb)',
+        'public.v2_delete_budget(bigint)'
     ] LOOP
         EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', door);
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role', door);

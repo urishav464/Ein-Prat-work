@@ -31,6 +31,17 @@ generated, details, owner) — and the same index and journal.
                        on a break
   the random walks     seeded; targets by position; the door's refusals are
                        predicted from the same rules and compared
+  stage 2ג             the refreshments (add, ✓, 🗑), the invitation's link,
+                       feedback (before the evening, out of range, unrated,
+                       a slot rated twice, the words unstripped, the feedback
+                       task closed) and the budget (a speaker at 0, the
+                       refreshments only above 0, a line taken back) — each
+                       door against what app._save_feedback_clicked /
+                       _save_budget_clicked / the logistics panel write
+
+After every step the slots' names agree too (dm.slot_names vs
+v2_private.slot_names — the feedback's key), two lessons of one title among
+them. Seven planted bugs in the 2ג doors and names, each caught (--sql).
 
 Prints one JSON line; exit 1 on the first step where the two differ."""
 import json
@@ -481,8 +492,23 @@ def main(argv: list[str]) -> int:
         if a != b:
             fail.update(entry, why="the databases differ", diff=diff(a, b))
             return False
+        bad_names = names_differ()
+        if bad_names:
+            fail.update(entry, why="dm.slot_names and v2_private.slot_names differ", names=bad_names)
+            return False
         log.append(entry)
         return True
+
+    def names_differ() -> dict:
+        """The feedback's key: every slot's name, by position, in both."""
+        out = {}
+        for mid in mids:
+            want = list(dm.slot_names(dm.get_lessons(mid)).values())
+            sc.execute("SELECT name FROM v2_private.slot_names(%s)", (mid,))
+            got = [r[0] for r in sc.fetchall()]
+            if want != got:
+                out[mid] = {"python": want, "sql": got}
+        return out
 
     def legacy(statement: str, label: str) -> bool:
         """An old state written into both copies, then both reconcilers."""
@@ -727,6 +753,246 @@ def main(argv: list[str]) -> int:
     seen = {(e["op"]["op"], e["got"]) for e in log if "op" in e}
     unseen = sorted(COVERAGE - seen)
     checks["coverage: every answer of every door was given at least once"] = not unseen
+
+    # ---- stage 2ג: the refreshments, the invitation, feedback and the budget.
+    # The same two copies, the evenings as the walks left them. #05 is put in
+    # the past (the feedback form opens on the evening's day), E in the future.
+    after_log: list[dict] = []
+    PAST, FUTURE = 5, E
+    both("UPDATE mishmarim SET gregorian_date = '1.1.2026' WHERE id = %s", (PAST,))
+    both("UPDATE mishmarim SET gregorian_date = '1.1.2099' WHERE id = %s", (FUTURE,))
+    both("INSERT INTO tasks (mishmar_id, task_description, status, category) "
+         "VALUES (%s, 'משוב וסיכום — בדיקה', 'TO DO', 'אחרי')", (PAST,))
+    # two lessons of #05 (not rounds of חבורות, whose names carry their round)
+    # sharing a title, so only the time tells them apart
+    for n in range(2):
+        if not fail and len([l for l in dm.get_lessons(PAST)
+                             if not l["is_break"] and not dm.is_chavurot(l)]) < 2:
+            step({"op": "add_slot", "mid": PAST, "kind": "lesson"}, f"after: a lesson to share a title #{n}")
+    same = [i for i, l in enumerate(dm.get_lessons(PAST)) if not l["is_break"] and not dm.is_chavurot(l)][:2]
+    for cur in (pc, sc):
+        ids = slot_ids(cur, PAST)
+        for i in same:
+            cur.execute("UPDATE lessons SET title = 'אותה כותרת' WHERE id = %s", (ids[i],))
+    plain5 = [i for i, l in enumerate(dm.get_lessons(PAST)) if not l["is_break"]]
+
+    def rows_of(cur, table: str, mid: int) -> list[int]:
+        cur.execute(f"SELECT id FROM {table} WHERE mishmar_id = %s ORDER BY id", (mid,))
+        return [r[0] for r in cur.fetchall()]
+
+    def plain_ids(cur, mid: int) -> list[int]:
+        cur.execute("SELECT id FROM lessons WHERE mishmar_id = %s AND NOT coalesce(is_break, false) "
+                    "ORDER BY slot_order, id", (mid,))
+        return [r[0] for r in cur.fetchall()]
+
+    def after_snapshot(cur) -> dict:
+        def s(v):
+            return "∅" if v is None else str(v)
+        snap = snapshot(cur, mids)
+        for mid in mids:
+            pos = {lid: i for i, lid in enumerate(slot_ids(cur, mid))}
+            cur.execute("SELECT invitation_url FROM mishmarim WHERE id = %s", (mid,))
+            inv = cur.fetchone()[0]
+            cur.execute("SELECT kind, label, detail, done FROM logistics_items WHERE mishmar_id = %s ORDER BY id",
+                        (mid,))
+            lg = [tuple(map(s, r)) for r in cur.fetchall()]
+            cur.execute("SELECT expense_type, description, amount::float, actual_cost::float FROM budget "
+                        "WHERE mishmar_id = %s ORDER BY id", (mid,))
+            bud = [tuple(map(s, r)) for r in cur.fetchall()]
+            cur.execute("SELECT lesson_id, student_id, lesson_title, speaker_name, rating, what_worked, what_didnt "
+                        "FROM feedback WHERE mishmar_id = %s ORDER BY id", (mid,))
+            fb = [tuple(map(s, (pos.get(r[0], "?"),) + r[1:])) for r in cur.fetchall()]
+            snap[f"after-{mid}"] = {"invitation": s(inv), "logistics": lg, "budget": bud, "feedback": fb}
+        return snap
+
+    def after_predict(op: dict) -> str:
+        kind, mid = op["op"], op.get("mid")
+        if kind == "add_logistics":
+            label = op["label"].strip()
+            return "invalid_text" if not label or len(label) > 300 else "ok"
+        if kind in ("set_done", "delete_logistics", "delete_budget"):
+            return "invalid" if kind == "set_done" and op["done"] is None else "ok"
+        if kind == "set_invitation":
+            link = op["url"].strip()
+            return "invalid_url" if link and not http_url(link) else "ok"
+        if kind == "add_feedback":
+            when = dm.parse_gregorian((dm.get_mishmar(mid) or {}).get("gregorian_date"))
+            if when and when > __import__("datetime").date.today():
+                return "too_early"
+            for e in op["entries"]:
+                r = e.get("rating")
+                if r is not None and (not isinstance(r, int) or not 1 <= r <= 5):
+                    return "invalid_rating"
+            names = dm.slot_names(dm.get_lessons(mid))
+            mine = {f.get("lesson_title") for f in dm.get_feedback_for_mishmar(mid) if f.get("student_id") == me}
+            plain = [l for l in dm.get_lessons(mid) if not l.get("is_break")]
+            fresh = [e for e in op["entries"] if e.get("rating") is not None
+                     and names[plain[e["pos"]]["id"]] not in mine]
+            return "ok" if fresh else "nothing"
+        if kind == "add_budget":
+            for ln in op["lines"]:
+                if ln["expense_type"] not in ("מרצה", "כיבוד", "אחר"):
+                    return "invalid_type"
+                if not 0 <= ln["actual_cost"] <= 100000:
+                    return "invalid_amount"
+                if ln["expense_type"] == "מרצה" and not 0 < len((ln.get("description") or "").strip()) <= 120:
+                    return "invalid_text"
+            written = [ln for ln in op["lines"] if ln["expense_type"] == "מרצה" or ln["actual_cost"] > 0]
+            return "ok" if written else "nothing"
+        raise ValueError(kind)
+
+    def after_reference(op: dict, ids: dict) -> None:
+        """What the Streamlit callbacks write for this step."""
+        kind, mid = op["op"], op.get("mid")
+        if kind == "add_logistics":                                    # app._add_logistics_clicked
+            dm.add_logistics_item(mid, "כיבוד", op["label"].strip(), "")
+        elif kind == "set_done":                                       # the row's checkbox
+            dm.toggle_logistics_item(ids["item"], op["done"])
+        elif kind == "delete_logistics":                               # its 🗑
+            dm.delete_logistics_item(ids["item"])
+        elif kind == "set_invitation":                                 # _upload_invitation_clicked / 🗑
+            dm.set_invitation(mid, url=op["url"])
+        elif kind == "add_feedback":                                   # app._save_feedback_clicked
+            lessons_ = [l for l in dm.get_lessons(mid) if not l.get("is_break")]
+            names = dm.slot_names(lessons_)
+            mine = {f.get("lesson_title") for f in dm.get_feedback_for_mishmar(mid) if f.get("student_id") == me}
+            open_fb = [t["id"] for t in dm.get_tasks_for_mishmar(mid)
+                       if dm.is_feedback_task(t) and t["status"] != "DONE"]
+            n = 0
+            for e in op["entries"]:
+                l = lessons_[e["pos"]]
+                name = names[l["id"]]
+                if name in mine or e.get("rating") is None:
+                    continue
+                dm.add_feedback(mid, rating=e["rating"], lesson_id=l["id"], lesson_title=name,
+                                speaker_name=l.get("speaker_name"), student_id=me,
+                                what_worked=(e.get("what_worked") or None))
+                n += 1
+            if n:
+                for tid in open_fb:
+                    dm.update_task_status(tid, "DONE")
+        elif kind == "add_budget":                                     # app._save_budget_clicked
+            for ln in op["lines"]:
+                if ln["expense_type"] == "מרצה":
+                    dm.add_budget_entry(mid, "מרצה", actual_cost=ln["actual_cost"],
+                                        description=ln["description"].strip())
+                elif ln["actual_cost"]:
+                    dm.add_budget_entry(mid, ln["expense_type"], actual_cost=ln["actual_cost"],
+                                        description=ln["expense_type"])
+        elif kind == "delete_budget":                                  # the site's 🗑 (not in the app)
+            dm._t("budget").delete().eq("id", ids["line"]).execute()
+        else:
+            raise ValueError(kind)
+
+    def after_door(op: dict, ids: dict):
+        kind, mid = op["op"], op.get("mid")
+        if kind == "add_logistics":
+            return door("v2_add_logistics", mid, op["label"])
+        if kind == "set_done":
+            return door("v2_set_logistics_done", ids["item"], op["done"])
+        if kind == "delete_logistics":
+            return door("v2_delete_logistics", ids["item"])
+        if kind == "set_invitation":
+            return door("v2_set_invitation", mid, op["url"])
+        if kind == "add_feedback":
+            plain = plain_ids(sc, mid)
+            entries = [{"lesson_id": plain[e["pos"]], "rating": e.get("rating"),
+                        "what_worked": e.get("what_worked")} for e in op["entries"]]
+            return door("v2_add_feedback", mid, json.dumps(entries, ensure_ascii=False))
+        if kind == "add_budget":
+            return door("v2_add_budget", mid, json.dumps(op["lines"], ensure_ascii=False))
+        if kind == "delete_budget":
+            return door("v2_delete_budget", ids["line"])
+        raise ValueError(kind)
+
+    def after_step(op: dict, label: str) -> bool:
+        py_ids, sq_ids = {}, {}
+        for key, table in (("item", "logistics_items"), ("line", "budget")):
+            if key in op:
+                mid, i = op[key]
+                a, b = rows_of(pc, table, mid), rows_of(sc, table, mid)
+                if i >= len(a):
+                    fail.update(step=label, why=f"no {table} row at {i}")
+                    return False
+                py_ids[key], sq_ids[key] = a[i], b[i]
+        want = after_predict(op)
+        got = after_door(op, sq_ids)
+        status = (got or {}).get("status")
+        entry = {"step": label, "op": op, "want": want, "got": status}
+        if status != want:
+            fail.update(entry, why="the door's answer is not the predicted one", door=got)
+            return False
+        if want == "ok":
+            after_reference(op, py_ids)
+            sc.execute("RESET ROLE")
+        a, b = after_snapshot(pc), after_snapshot(sc)
+        if a != b:
+            fail.update(entry, why="the databases differ", diff=diff(a, b))
+            return False
+        after_log.append(entry)
+        return True
+
+    P = PAST
+    n_plain = len(plain5)
+    after_fixed = [
+        {"op": "add_logistics", "mid": P, "label": "  עוגות  "},
+        {"op": "add_logistics", "mid": P, "label": "   "},
+        {"op": "add_logistics", "mid": P, "label": "א" * 301},
+        {"op": "add_logistics", "mid": P, "label": "שתייה חמה"},
+        {"op": "set_done", "item": (P, 0), "done": True},
+        {"op": "set_done", "item": (P, 1), "done": True},
+        {"op": "set_done", "item": (P, 1), "done": False},
+        {"op": "set_done", "item": (P, 1), "done": None},
+        {"op": "delete_logistics", "item": (P, 0)},
+        {"op": "set_invitation", "mid": P, "url": " https://example.org/inv.png "},
+        {"op": "set_invitation", "mid": P, "url": "javascript:alert(1)"},
+        {"op": "set_invitation", "mid": P, "url": ""},
+        {"op": "add_feedback", "mid": FUTURE, "entries": [{"pos": 0, "rating": 4}]},
+        {"op": "add_feedback", "mid": P, "entries": [{"pos": 0, "rating": 6}]},
+        {"op": "add_feedback", "mid": P, "entries": []},
+        {"op": "add_feedback", "mid": P, "entries": [{"pos": 0, "rating": None, "what_worked": "לא דורג"}]},
+        {"op": "add_feedback", "mid": P, "entries": [
+            {"pos": 0, "rating": 4, "what_worked": "עבד טוב"},
+            {"pos": 1, "rating": None, "what_worked": ""},
+            *([{"pos": 2, "rating": 5, "what_worked": "  רווחים  "}] if n_plain > 2 else [])]},
+        {"op": "add_feedback", "mid": P, "entries": [{"pos": 0, "rating": 2, "what_worked": "שוב"}]},
+        {"op": "add_feedback", "mid": P, "entries": [{"pos": 1, "rating": 3, "what_worked": ""}]},
+        {"op": "add_budget", "mid": P, "lines": [
+            {"expense_type": "מרצה", "description": "  מרצה בדיקה  ", "actual_cost": 0},
+            {"expense_type": "מרצה", "description": "מרצה שני", "actual_cost": 350},
+            {"expense_type": "כיבוד", "description": "", "actual_cost": 120},
+            {"expense_type": "אחר", "description": "", "actual_cost": 0}]},
+        {"op": "add_budget", "mid": P, "lines": [{"expense_type": "כיבוד", "description": "", "actual_cost": 0}]},
+        {"op": "add_budget", "mid": P, "lines": [{"expense_type": "מתנה", "description": "", "actual_cost": 5}]},
+        {"op": "add_budget", "mid": P, "lines": [{"expense_type": "כיבוד", "description": "", "actual_cost": -1}]},
+        {"op": "add_budget", "mid": P, "lines": [{"expense_type": "מרצה", "description": " ", "actual_cost": 5}]},
+        {"op": "add_budget", "mid": P, "lines": [{"expense_type": "אחר", "description": "", "actual_cost": 40.5}]},
+        {"op": "delete_budget", "line": (P, 1)},
+    ]
+    if not fail:
+        for n, op in enumerate(after_fixed):
+            if not after_step(op, f"after #{n}"):
+                break
+    checks["2ג: the refreshments, the invitation, feedback and the budget — every step the same in both"] = \
+        not fail and len(after_log) == len(after_fixed)
+    titled = [n for n in dm.slot_names(dm.get_lessons(PAST)).values() if n.startswith("אותה כותרת")]
+    checks["2ג: two slots of one title — the names agree, the time tells them apart"] = \
+        not fail and not names_differ() and len(titled) == 2 and len(set(titled)) == 2
+    sc.execute("RESET ROLE")
+    sc.execute("SELECT count(*) FROM tasks WHERE mishmar_id = %s AND status <> 'DONE' "
+               "AND v2_private.is_feedback_task(task_description)", (P,))
+    checks["2ג: a feedback sent closed the evening's open feedback task"] = sc.fetchone()[0] == 0
+    after_seen = {(e["op"]["op"], e["got"]) for e in after_log}
+    after_unseen = sorted({("add_logistics", "ok"), ("add_logistics", "invalid_text"), ("set_done", "ok"),
+                           ("set_done", "invalid"), ("delete_logistics", "ok"), ("set_invitation", "ok"),
+                           ("set_invitation", "invalid_url"), ("add_feedback", "ok"),
+                           ("add_feedback", "too_early"), ("add_feedback", "invalid_rating"),
+                           ("add_feedback", "nothing"), ("add_budget", "ok"), ("add_budget", "nothing"),
+                           ("add_budget", "invalid_type"), ("add_budget", "invalid_amount"),
+                           ("add_budget", "invalid_text"), ("delete_budget", "ok")} - after_seen)
+    checks["2ג coverage: every answer of every door was given"] = not after_unseen
+    if after_unseen:
+        unseen = unseen + after_unseen
 
     print(json.dumps({"ok": all(checks.values()), "checks": checks, "steps": len(log),
                       **({"never_seen": unseen} if unseen else {}),

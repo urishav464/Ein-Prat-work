@@ -4,7 +4,8 @@
 // through the doors, like a pasted one. What the screen says about each answer.
 import { refusal } from "./structure";
 
-export { ACCEPT, checkFile, type Target } from "../supabase/functions/v2-tools/upload";
+export { ACCEPT, IMAGE_ACCEPT, checkFile, type Target } from "../supabase/functions/v2-tools/upload";
+import type { Target } from "../supabase/functions/v2-tools/upload";
 
 export interface UploadAnswer { status: string; url?: string; path?: string }
 
@@ -17,9 +18,15 @@ const SAID: Record<string, string> = {
   invalid: "ההעלאה לא הצליחה. כדאי לרענן את הדף ולנסות שוב.",
 };
 
-export function uploadRefusal(status: string | undefined): string {
+export function uploadRefusal(status: string | undefined, target?: Target): string {
+  // dm.upload_invitation's own words; and no link to paste instead of a poster
+  if (target === "invitation") {
+    if (status === "bad_type") return "ההזמנה היא תמונה — PNG, JPG או WEBP";
+    if (status === "storage" || status === "unavailable") return "ההזמנה לא הועלתה כרגע. אפשר לנסות שוב בעוד רגע.";
+  }
   return (status && SAID[status]) || refusal(status);
 }
 
 export const UPLOAD_FAILED = "הקובץ לא הועלה. בדקו את החיבור ונסו שוב, או הדביקו קישור.";
 export const DEMO_UPLOAD = "בהדגמה הקובץ לא עולה לשום מקום. באתר עצמו הוא נשמר, והקישור אליו נכנס לדף המקורות.";
+export const DEMO_INVITATION = "בהדגמה התמונה לא עולה לשום מקום. באתר עצמו היא נשמרת, ומוצגת כאן כהזמנה של הערב.";

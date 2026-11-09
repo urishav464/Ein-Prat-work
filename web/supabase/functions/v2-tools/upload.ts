@@ -24,8 +24,19 @@ export const TYPES = new Map<string, string>([
 // the file picker's filter
 export const ACCEPT = [...TYPES.keys()].map((e) => `.${e}`).join(",");
 
-// a slot's sheet, or one presenter's in a round of חבורות
-export type Target = "lesson" | "presenter";
+// the evening's invitation is ONE image — the poster that goes out on WhatsApp.
+// The types the Streamlit uploader offers (app._logistics_panel), served as
+// dm._IMAGE_TYPES serves them
+export const IMAGE_TYPES = new Map<string, string>([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["webp", "image/webp"],
+]);
+export const IMAGE_ACCEPT = [...IMAGE_TYPES.keys()].map((e) => `.${e}`).join(",");
+
+// a slot's sheet, one presenter's in a round of חבורות, or the evening's poster
+export type Target = "lesson" | "presenter" | "invitation";
 
 // dm._safe_filename: a Storage key must be ASCII, and every sheet a pair
 // uploads is named in Hebrew — the stem is rebuilt from [A-Za-z0-9_-], a stem
@@ -53,15 +64,24 @@ export function objectPath(mishmarId: number, target: Target, id: number, tag: s
   return `mishmar-${String(mishmarId).padStart(2, "0")}/${target}-${id}-${tag}-${safe}`;
 }
 
+// dm.upload_invitation's key: the evening's poster, beside its sheets
+export function invitationPath(mishmarId: number, tag: string, safe: string): string {
+  return `mishmar-${String(mishmarId).padStart(2, "0")}/invitation-${tag}-${safe}`;
+}
+
 export type Checked =
   | { ok: true; safe: string; contentType: string }
   | { ok: false; status: "empty" | "too_large" | "bad_type" };
 
-// what the browser checks before sending, and the function again on arrival
-export function checkFile(name: string, size: number): Checked {
+// what the browser checks before sending, and the function again on arrival —
+// a sheet any of TYPES, the invitation an image (named «invitation» when its
+// name had nothing ASCII, as dm.upload_invitation names it)
+export function checkFile(name: string, size: number, target: Target = "lesson"): Checked {
   if (!(size > 0)) return { ok: false, status: "empty" };
   if (size > MAX_BYTES) return { ok: false, status: "too_large" };
-  const safe = safeFilename(name, "source");
-  const contentType = safe.includes(".") ? TYPES.get(safe.slice(safe.lastIndexOf(".") + 1)) : undefined;
+  const image = target === "invitation";
+  const safe = safeFilename(name, image ? "invitation" : "source");
+  const types = image ? IMAGE_TYPES : TYPES;
+  const contentType = safe.includes(".") ? types.get(safe.slice(safe.lastIndexOf(".") + 1)) : undefined;
   return contentType ? { ok: true, safe, contentType } : { ok: false, status: "bad_type" };
 }

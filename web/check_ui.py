@@ -579,7 +579,7 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
     wf = workfile_fixture()
     mid = wf["mishmar"]["id"]
 
-    # the demo: a door from the home, three tabs, a local add
+    # the demo: a door from the home, four tabs, a local add
     for w in WIDTHS:
         ctx = browser.new_context(viewport={"width": w, "height": 900}, locale="he-IL")
         page = ctx.new_page()
@@ -601,8 +601,9 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
         except Exception as e:
             tabs, added, times, overflow = [], False, f"failed: {str(e).splitlines()[0]}", 1
         facts[f"workfile demo@{w}"] = {"tabs": tabs, "first_slot": times[:80]}
-        checks[k + "the home's card opens it; three tabs; an add shows; slots with times"] = \
-            tabs == ["המשימות", "הערב", "לוגיסטיקה"] and added and bool(re.search(r"\d{2}:\d{2}–\d{2}:\d{2}", times))
+        checks[k + "the home's card opens it; four tabs; an add shows; slots with times"] = \
+            tabs == ["המשימות", "הערב", "לוגיסטיקה", "משוב וסיכום"] and added \
+            and bool(re.search(r"\d{2}:\d{2}–\d{2}:\d{2}", times))
         checks[k + "no sideways scroll, no page errors"] = overflow <= 0 and not errors
         ctx.close()
 
@@ -701,6 +702,9 @@ def check_workfile(browser, demo_base: str, auth_base: str, shots: Path, checks:
 
 STRUCTURE_DOORS = ("v2_set_topic", "v2_add_slot", "v2_save_slot", "v2_delete_slot", "v2_reopen_slot",
                    "v2_add_person", "v2_edit_person", "v2_set_person_status", "v2_remove_person")
+# stage 2ג's doors answer the same way: {status, workfile, result}
+AFTER_DOORS = ("v2_add_logistics", "v2_set_logistics_done", "v2_delete_logistics", "v2_set_invitation",
+               "v2_add_feedback", "v2_add_budget", "v2_delete_budget")
 CLOSED = "✅ סגור"
 
 
@@ -788,13 +792,53 @@ class StructureMock(MockSupabase):
             l, p = self._person(b["p_person_id"])
             l["people"] = [x for x in l["people"] if x is not p]
             result["removed"] = p["name"]
+        elif door == "v2_add_logistics":
+            result["id"] = self._id()
+            wf["logistics"].append({"id": result["id"], "kind": "כיבוד", "label": b["p_label"].strip(),
+                                    "detail": None, "done": False})
+        elif door == "v2_set_logistics_done":
+            next(i for i in wf["logistics"] if i["id"] == b["p_item_id"])["done"] = b["p_done"]
+        elif door == "v2_delete_logistics":
+            wf["logistics"] = [i for i in wf["logistics"] if i["id"] != b["p_item_id"]]
+        elif door == "v2_set_invitation":
+            wf["mishmar"]["invitation_url"] = b["p_url"].strip() or None
+        elif door == "v2_add_feedback":
+            slots = [l for l in wf["lessons"] if not l["is_break"]]
+            mine = {f["lesson_title"] for f in wf["feedback"] if f["mine"]}
+            n = 0
+            for e in b["p_entries"]:
+                i, l = next((i, l) for i, l in enumerate(slots, 1) if l["id"] == e["lesson_id"])
+                name = (l.get("title") or "").strip() or ("חבורות" if "חבורות" in (l.get("lesson_role") or "")
+                                                          else f"שיעור {i}")
+                if e["rating"] is None or name in mine:
+                    continue
+                wf["feedback"].append({"id": self._id(), "lesson_id": l["id"], "lesson_title": name,
+                                       "speaker_name": l.get("speaker_name"), "rating": e["rating"],
+                                       "what_worked": e["what_worked"], "what_didnt": None, "mine": True})
+                n += 1
+            if not n:
+                return {"status": "nothing"}
+            for t in wf["tasks"]:
+                if "משוב" in t["task_description"]:
+                    t["status"] = "DONE"
+            result["saved"] = n
+        elif door == "v2_add_budget":
+            for ln in b["p_lines"]:
+                if ln["expense_type"] == "מרצה" or ln["actual_cost"] > 0:
+                    wf["budget"].append({"id": self._id(), "expense_type": ln["expense_type"],
+                                         "description": ln["description"].strip() if ln["expense_type"] == "מרצה"
+                                         else ln["expense_type"], "actual_cost": ln["actual_cost"]})
+                    result["saved"] = result.get("saved", 0) + 1
+        elif door == "v2_delete_budget":
+            wf["budget"] = [x for x in wf["budget"] if x["id"] != b["p_line_id"]]
+        wf["mishmar"]["budget_used"] = sum(x["actual_cost"] for x in wf.get("budget", []))
         result["sync"] = {"created": 0, "removed": 0, "adopted": 0, "completed": 0, "renamed": 0}
         return {"status": "ok", "workfile": json.loads(json.dumps(wf)), "result": result}
 
     def __call__(self, route, request):
         u = urlparse(request.url)
         door = u.path.rsplit("/", 1)[-1]
-        if u.path.startswith("/rest/v1/rpc/") and door in STRUCTURE_DOORS:
+        if u.path.startswith("/rest/v1/rpc/") and door in STRUCTURE_DOORS + AFTER_DOORS:
             body = json.loads(request.post_data or "{}")
             self.calls.append({"path": u.path, "body": body})
             if self.fail:
@@ -1220,6 +1264,216 @@ def check_upload(browser, demo_base: str, auth_base: str, shots: Path, checks: d
     ctx.close()
 
 
+def check_after(browser, demo_base: str, auth_base: str, shots: Path, checks: dict, facts: dict) -> None:
+    """Stage 2ג: the refreshments list, the invitation, feedback and the budget
+    — each editor sends ONE call saying what it says and draws the evening the
+    answer carries; a poster that is not an image never leaves the phone; the
+    feedback waits for the evening's day; the instructor gets none of it; the
+    demo changes the screen and sends nothing."""
+    demo_home = json.loads((WEB / "src/demo.json").read_text(encoding="utf-8"))
+    base_wf = workfile_fixture()
+    mid = base_wf["mishmar"]["id"]
+    base_wf["mishmar"]["gregorian_date"] = "1.10.2026"          # the evening has happened
+    slots = [l for l in base_wf["lessons"] if not l["is_break"]]
+    plain = [l for l in slots if "חבורות" not in (l.get("lesson_role") or "")]
+    plain[1]["speaker_name"] = "מרצה/ת ב"                       # someone to pay
+    fb_task = next(t for t in base_wf["tasks"] if "משוב" in t["task_description"])
+    png = {"name": "הזמנה.png", "mimeType": "image/png", "buffer": b"\x89PNG\r\n\x1a\n poster"}
+    status_has = "() => document.querySelector('[role=status]')?.textContent.includes(%s)"
+    alert_has = "() => document.querySelector('[role=alert]')?.textContent.includes(%s)"
+
+    for w in WIDTHS:
+        mock = UploadMock(base_wf, rpc_body=demo_home)
+        ctx, page, errors = wf_page(browser, auth_base, mock, w, mid)
+        k = f"after@{w}: "
+        f: dict = {}
+        try:
+            page.get_by_role("heading", name=re.compile(rf"משמר #{mid:02d}")).wait_for(timeout=5000)
+            f["tabs"] = page.get_by_role("tab").all_inner_texts()
+            # ---- the refreshments
+            page.get_by_role("tab", name="לוגיסטיקה").click()
+            page.get_by_label("פריט לכיבוד").fill("  עוגות  ")
+            page.get_by_role("button", name="➕ הוסף").click()
+            page.wait_for_function(status_has % json.dumps("נוסף לרשימת הכיבוד"), timeout=5000)
+            f["add"] = mock.sent("v2_add_logistics")
+            item = mock.wf["logistics"][-1]["id"]
+            row = page.locator(f"[data-logistics='{item}']")
+            row.get_by_role("button", name="סמן שנקנה: עוגות").click()
+            row.get_by_role("button", name="בטל סימון: עוגות").wait_for(timeout=5000)
+            f["done"] = mock.sent("v2_set_logistics_done")
+            f["struck"] = "line-through" in (row.locator("span").first.get_attribute("class") or "")
+            row.get_by_role("button", name="הסרה: עוגות").click()
+            row.wait_for(state="detached", timeout=5000)
+            f["deleted"] = mock.sent("v2_delete_logistics")
+            # ---- the invitation: an image only, uploaded then saved through its door
+            before = len([c for c in mock.calls if c["path"] == TOOLS])
+            page.locator(f"[data-upload='invitation-{mid}']").set_input_files(
+                {"name": "הזמנה.pdf", "mimeType": "application/pdf", "buffer": b"%PDF"})
+            page.wait_for_function(alert_has % json.dumps("ההזמנה היא תמונה"), timeout=5000)
+            f["pdf_kept"] = len([c for c in mock.calls if c["path"] == TOOLS]) == before
+            page.locator(f"[data-upload='invitation-{mid}']").set_input_files(png)
+            page.wait_for_function(status_has % json.dumps("ההזמנה הועלתה"), timeout=5000)
+            f["inv_call"] = [c["body"] for c in mock.calls if c["path"] == TOOLS]
+            f["inv_save"] = mock.sent("v2_set_invitation")
+            f["inv_img"] = page.get_by_role("img", name="ההזמנה למשמר").count()
+            page.screenshot(path=str(shots / f"v2-logistics-{w}.png"), full_page=True)
+            page.get_by_role("button", name="🗑 הסרת ההזמנה").click()
+            page.wait_for_function(status_has % json.dumps("ההזמנה הוסרה"), timeout=5000)
+            f["inv_cleared"] = mock.sent("v2_set_invitation")[-1]
+            # ---- feedback
+            page.get_by_role("tab", name="משוב וסיכום").click()
+            form = page.get_by_role("form", name="משוב על הערב")
+            submit = form.get_by_role("button", name="💾 שמור משוב על הערב")
+            f["submit_off_before"] = submit.is_disabled()
+            first = form.locator(f"[data-feedback-slot='{slots[0]['id']}']")
+            first.get_by_role("radio", name="4 כוכבים").click()
+            first.get_by_role("textbox").fill("עבד טוב")
+            f["checked"] = first.get_by_role("radio", name="4 כוכבים").get_attribute("aria-checked")
+            submit.click()
+            page.wait_for_function(status_has % json.dumps("משימת המשוב נסגרה"), timeout=5000)
+            f["fb"] = mock.sent("v2_add_feedback")
+            f["sent_chip"] = form.locator(f"[data-feedback-slot='{slots[0]['id']}']").get_by_text("✅ כבר נשלח").count()
+            f["fb_task"] = next(t["status"] for t in mock.wf["tasks"] if t["id"] == fb_task["id"])
+            # ---- the budget
+            budget = page.get_by_role("form", name="הוספה לתקציב")
+            budget.get_by_label("תשלום למרצה/ת ב").fill("0")
+            budget.get_by_label("כיבוד (₪)").fill("120")
+            budget.get_by_role("button", name="💾 שמור סיכום תקציב").click()
+            page.wait_for_function(status_has % json.dumps("נשמרו 2 שורות תקציב"), timeout=5000)
+            f["bud"] = mock.sent("v2_add_budget")
+            lines = page.get_by_role("list", name="שורות התקציב")
+            f["lines"] = lines.locator("li").all_inner_texts()
+            f["total"] = page.get_by_text("סה״כ הוצאות למשמר הזה").inner_text()
+            f["paid_gone"] = budget.get_by_label("תשלום למרצה/ת ב").count()
+            budget.get_by_label("הוצאות אחרות (₪)").fill("-5")
+            f["negative"] = [budget.get_by_role("button", name="💾 שמור סיכום תקציב").is_disabled(),
+                             budget.get_by_text("סכום צריך להיות 0 ₪ או יותר").count()]
+            budget.get_by_label("הוצאות אחרות (₪)").fill("")
+            food_line = mock.wf["budget"][-1]["id"]
+            page.locator(f"[data-budget='{food_line}']").get_by_role("button").click()
+            page.wait_for_function(status_has % json.dumps("נמחקה מהתקציב"), timeout=5000)
+            f["bud_del"] = mock.sent("v2_delete_budget")
+            f["total_after"] = page.get_by_text("סה״כ הוצאות למשמר הזה").inner_text()
+            page.screenshot(path=str(shots / f"v2-after-{w}.png"), full_page=True)
+            # ---- a door that says no: said, nothing redrawn
+            mock.refuse["v2_add_logistics"] = "invalid_text"
+            page.get_by_role("tab", name="לוגיסטיקה").click()
+            page.get_by_label("פריט לכיבוד").fill("x")
+            page.get_by_role("button", name="➕ הוסף").click()
+            page.wait_for_function(alert_has % json.dumps("ריק או ארוך מדי"), timeout=5000)
+            f["refused_kept"] = page.get_by_label("פריט לכיבוד").input_value()
+            f["overflowX"] = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+        except Exception as e:
+            f["failed_at"] = str(e).splitlines()[0]
+            page.screenshot(path=str(shots / f"v2-after-failed-{w}.png"), full_page=True)
+        facts[f"after@{w}"] = f
+        checks[k + "four tabs, «משוב וסיכום» the fourth"] = f.get("tabs") == ["המשימות", "הערב", "לוגיסטיקה", "משוב וסיכום"]
+        checks[k + "a refreshments row: ONE v2_add_logistics (the label as typed), ✓ (struck) and 🗑, one call each"] = \
+            f.get("add") == [{"p_mishmar_id": mid, "p_label": "  עוגות  "}] \
+            and len(f.get("done", [])) == 1 and f["done"][0]["p_done"] is True and f.get("struck") is True \
+            and len(f.get("deleted", [])) == 1
+        checks[k + "the invitation: a pdf stays on the phone; a png → one v2-tools call (invitation, the evening), "
+                   "then v2_set_invitation with its link; drawn; 🗑 clears it"] = \
+            f.get("pdf_kept") is True and len(f.get("inv_call", [])) == 1 \
+            and {kk: v for kk, v in f["inv_call"][0].items() if kk != "file"} == \
+                {"action": "upload", "mishmar": str(mid), "target": "invitation", "id": str(mid)} \
+            and len(f.get("inv_save", [])) >= 1 and f["inv_save"][0]["p_url"].startswith(f"{MOCK}/storage/") \
+            and f.get("inv_img") == 1 and f.get("inv_cleared") == {"p_mishmar_id": mid, "p_url": ""}
+        fb = (f.get("fb") or [{}])[0]
+        checks[k + "feedback: the button waits for a star; ONE v2_add_feedback, every slot, the rated one with "
+                   "its words; «✅ כבר נשלח», the feedback task closed"] = \
+            f.get("submit_off_before") is True and f.get("checked") == "true" and len(f.get("fb", [])) == 1 \
+            and fb.get("p_mishmar_id") == mid and len(fb.get("p_entries", [])) == len(slots) \
+            and fb["p_entries"][0] == {"lesson_id": slots[0]["id"], "rating": 4, "what_worked": "עבד טוב"} \
+            and all(e["rating"] is None for e in fb["p_entries"][1:]) \
+            and f.get("sent_chip") == 1 and f.get("fb_task") == "DONE"
+        checks[k + "budget: ONE v2_add_budget (the speaker at 0, refreshments 120); «בהתנדבות», the total; "
+                   "the paid speaker leaves the form; a negative sum blocks it; 🗑 → the total follows"] = \
+            f.get("bud") == [{"p_mishmar_id": mid, "p_lines": [
+                {"expense_type": "מרצה", "description": "מרצה/ת ב", "actual_cost": 0},
+                {"expense_type": "כיבוד", "description": "", "actual_cost": 120}]}] \
+            and any("בהתנדבות" in x for x in f.get("lines", [])) and any("120 ₪" in x for x in f.get("lines", [])) \
+            and "120 ₪" in f.get("total", "") and f.get("paid_gone") == 0 and f.get("negative") == [True, 1] \
+            and len(f.get("bud_del", [])) == 1 and "0 ₪" in f.get("total_after", "")
+        checks[k + "a refusal → said, the text kept"] = f.get("refused_kept") == "x"
+        checks[k + "no sideways scroll, no page errors"] = f.get("overflowX", 1) <= 0 and not errors
+        ctx.close()
+
+    # before the evening: no form, the words of the app
+    early = json.loads(json.dumps(base_wf))
+    early["mishmar"]["gregorian_date"] = (date.today() + timedelta(days=10)).strftime("%-d.%-m.%Y")
+    mock = UploadMock(early, rpc_body=demo_home)
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("tab", name="משוב וסיכום").click()
+        page.get_by_text("המשוב נפתח ביום הערב").wait_for(timeout=5000)
+        e = {"form": page.get_by_role("form", name="משוב על הערב").count(),
+             "budget_form": page.get_by_role("form", name="הוספה לתקציב").count()}
+    except Exception as ex:
+        e = {"failed_at": str(ex).splitlines()[0]}
+    facts["after early"] = e
+    checks["after early: before the evening's day — «המשוב נפתח ביום הערב», no feedback form (the budget stays)"] = \
+        e.get("form") == 0 and e.get("budget_form") == 1 and not errors
+    ctx.close()
+
+    # the instructor: everything to read, nothing to write with
+    seen = json.loads(json.dumps(base_wf))
+    seen["viewer"] = "instructor"
+    seen["logistics"] = [{"id": 1, "kind": "כיבוד", "label": "שתייה", "detail": None, "done": False}]
+    seen["feedback"] = [{"id": 1, "lesson_id": slots[0]["id"], "lesson_title": "שיעור 1", "speaker_name": None,
+                         "rating": 5, "what_worked": "מצוין", "what_didnt": None, "mine": False}]
+    seen["budget"] = [{"id": 1, "expense_type": "כיבוד", "description": "כיבוד", "actual_cost": 80}]
+    seen["mishmar"]["budget_used"] = 80
+    mock = UploadMock(seen, rpc_body={"status": "instructor", "me": {"id": 100, "name": "מדריך/ה לדוגמה"}, "trainees": []})
+    ctx, page, errors = wf_page(browser, auth_base, mock, 390, mid)
+    try:
+        page.get_by_role("tab", name="לוגיסטיקה").click()
+        page.get_by_text("שתייה").wait_for(timeout=5000)
+        h = {"lg_buttons": page.locator("[data-logistics] button:not([disabled])").count(),
+             "add": page.get_by_label("פריט לכיבוד").count(), "upload": page.locator("input[type=file]").count()}
+        page.get_by_role("tab", name="משוב וסיכום").click()
+        page.get_by_text("80 ₪").first.wait_for(timeout=5000)
+        h.update(forms=page.locator("form").count(), stars=page.get_by_role("radio").count(),
+                 trash=page.locator("[data-budget] button").count(),
+                 list=page.get_by_text("משוב שנרשם (1)").count())
+    except Exception as ex:
+        h = {"failed_at": str(ex).splitlines()[0]}
+    facts["after instructor"] = h
+    checks["after instructor: the lists, the feedback given and the total — no ✓, no add, no upload, "
+           "no form, no 🗑"] = h.get("lg_buttons") == 0 and h.get("add") == 0 and h.get("upload") == 0 \
+        and h.get("forms") == 0 and h.get("stars") == 0 and h.get("trash") == 0 and h.get("list") == 1 \
+        and not any(c["path"].rsplit("/", 1)[-1] in AFTER_DOORS for c in mock.calls) and not errors
+    ctx.close()
+
+    # the demo: the screen changes, nothing is sent
+    ctx = browser.new_context(viewport={"width": 390, "height": 900}, locale="he-IL")
+    sent: list[str] = []
+    ctx.on("request", lambda r: sent.append(r.url) if "/functions/" in r.url or "/rpc/" in r.url else None)
+    page = ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("dialog", lambda d: d.accept())
+    d: dict = {}
+    try:
+        page.goto(f"{demo_base}/?demo#/m/{mid}")
+        page.get_by_role("tab", name="לוגיסטיקה").click()
+        page.get_by_label("פריט לכיבוד").fill("פיצוחים")
+        page.get_by_role("button", name="➕ הוסף").click()
+        page.get_by_text("פיצוחים", exact=True).wait_for(timeout=5000)
+        page.get_by_role("tab", name="משוב וסיכום").click()
+        form = page.get_by_role("form", name="משוב על הערב")
+        form.get_by_role("radio", name="5 כוכבים").first.click()
+        form.get_by_role("button", name="💾 שמור משוב על הערב").click()
+        page.get_by_text("✅ כבר נשלח").first.wait_for(timeout=5000)
+        d["sent_chip"] = page.get_by_text("✅ כבר נשלח").count()
+    except Exception as ex:
+        d["failed_at"] = str(ex).splitlines()[0]
+    facts["after demo"] = d
+    checks["after demo: a refreshments row and a feedback on the screen — nothing sent"] = \
+        "failed_at" not in d and d.get("sent_chip") == 1 and not sent and not errors
+    ctx.close()
+
+
 def check_settings(browser, messy: str, badurl: str, shots: Path, checks: dict, facts: dict) -> None:
     """Hand-pasted settings: cleaned when they can be, named when they cannot —
     never a blank page."""
@@ -1287,6 +1541,7 @@ def main(argv: list[str]) -> int:
         check_workfile(browser, demo_base, auth_base, shots, checks, facts)
         check_structure(browser, demo_base, auth_base, shots, checks, facts)
         check_upload(browser, demo_base, auth_base, shots, checks, facts)
+        check_after(browser, demo_base, auth_base, shots, checks, facts)
         check_settings(browser, serve(tmp / "messy", under), serve(tmp / "badurl", under),
                        shots, checks, facts)
         browser.close()

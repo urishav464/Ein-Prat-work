@@ -174,10 +174,12 @@ function SheetField({ p, edit }: { p: Person; edit: NonNullable<Editor> }) {
   );
 }
 
-// a file from the phone or the computer, as a source sheet — the link it
-// gets is the caller's to save (app's «📎 דף מקורות» uploader)
-function UploadButton({ target, id, label, edit, onUploaded }: {
+// a file from the phone or the computer, as a source sheet (or, with
+// IMAGE_ACCEPT, the evening's invitation) — the link it gets is the caller's
+// to save (app's «📎 דף מקורות» uploader, and the logistics panel's poster)
+export function UploadButton({ target, id, label, edit, onUploaded, accept = ACCEPT, text = "📤 העלאת קובץ" }: {
   target: Target; id: number; label: string; edit: NonNullable<Editor>; onUploaded: (url: string, name: string) => void;
+  accept?: string; text?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
@@ -192,11 +194,11 @@ function UploadButton({ target, id, label, edit, onUploaded }: {
   };
   return (
     <>
-      <input ref={input} type="file" accept={ACCEPT} onChange={pick} className="hidden" tabIndex={-1} aria-hidden
+      <input ref={input} type="file" accept={accept} onChange={pick} className="hidden" tabIndex={-1} aria-hidden
              data-upload={`${target}-${id}`} />
       <button type="button" disabled={edit.busy} onClick={() => input.current?.click()} aria-label={label}
               className="rounded-lg px-1.5 py-0.5 text-sm text-navy hover:bg-navy-soft disabled:opacity-50">
-        {sending ? "מעלה…" : "📤 העלאת קובץ"}
+        {sending ? "מעלה…" : text}
       </button>
     </>
   );

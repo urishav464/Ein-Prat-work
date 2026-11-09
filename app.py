@@ -3244,39 +3244,10 @@ def _topic_and_structure(mid: int, tasks: list[dict],
               on_click=_sync_tasks_clicked, args=(mid,))
 
 
-def _slot_names(lessons: list[dict]) -> dict[int, str]:
-    """Every slot of the evening by name — ONE naming, shared by the structure
-    panel, the feedback form and the rooms panel.
-
-    Two rules the screens used to get wrong on their own:
-    · a round of חבורות is recognised by `dm.is_chavurot` (role OR format OR
-      title). The feedback form asked `lesson_role == "חבורות"`, so a round the
-      pair marked in the FORMAT field was listed as «שיעור 2».
-    · names must be UNIQUE. `feedback.lesson_title` is the key for «one
-      submission per slot per trainee», so when #01's two rounds both read
-      «חבורות», feedback on the first silently blocked the second. A round in
-      an evening that holds several says which one it is.
-
-    The lesson numbering counts every non-break slot, exactly as
-    `dm._slot_tasks` numbers «סגירת מרצה — שיעור N» — the two must agree."""
-    slots = [l for l in lessons if not l.get("is_break")]
-    rounds = [l["id"] for l in slots if dm.is_chavurot(l)]
-    names: dict[int, str] = {}
-    for i, l in enumerate(slots, 1):
-        title = (l.get("title") or "").strip()
-        if dm.is_chavurot(l):
-            names[l["id"]] = (title or "חבורות") + dm.round_suffix(
-                rounds.index(l["id"]) + 1, len(rounds))
-        else:
-            names[l["id"]] = title or f"שיעור {i}"
-    # two slots the pair gave the same title: the time tells them apart
-    seen: dict[str, int] = {}
-    for name in names.values():
-        seen[name] = seen.get(name, 0) + 1
-    for l in slots:
-        if seen.get(names[l["id"]], 0) > 1 and l.get("start_time"):
-            names[l["id"]] += f" ({l['start_time']})"
-    return names
+# ONE naming for the evening's slots — it moved to data_manager (pure) when
+# the site's feedback door needed a twin of it: `feedback.lesson_title` is
+# the key both apps lock «one rating per slot per trainee» on.
+_slot_names = dm.slot_names
 
 
 def _slot_label(l: dict, index: int) -> str:

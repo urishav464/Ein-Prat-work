@@ -1,23 +1,26 @@
-// The workfile (תיק המשמר) — one evening whole: who and when, the task board
-// and the evening's structure to work on (Evening.tsx), its logistics to read.
-// A port of app._workfile_body: the same phases, the same task rules, the same
-// names. Logistics, feedback and budget are still EDITED in the Streamlit app
-// (stage 2ג); this screen says so where it matters.
+// The workfile (תיק המשמר) — one evening whole: who and when, the task board,
+// the evening's structure (Evening.tsx), its logistics and its after-work —
+// every one of them to work on, through the doors. A port of
+// app._workfile_body: the same phases, the same task rules, the same names.
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import demoWorkfile from "./demo_workfile.json";
 import { demoApply } from "./demoEdits";
-import { EveningTab, TopicCard, TopicLine, type Editor } from "./Evening";
+import { EveningTab, TopicCard, TopicLine, UploadButton, type Editor } from "./Evening";
 import {
-  PHASES, TASK_CATEGORIES, clean, countdown, deadline, fmtDate, isChavurot, isFeedbackTask, localToday,
-  parseDate, phaseOf, progress, slotLabel, slotNames, slotTimes,
+  PER_MISHMAR_BUDGET_NIS, PHASES, TASK_CATEGORIES, budgetSpeakers, clean, countdown, deadline, fmtDate, fmtNis,
+  isChavurot, isFeedbackTask, localToday, parseDate, phaseOf, progress, slotLabel, slotNames, slotTimes,
   type Lesson, type LogisticsItem, type Progress, type Status, type Task, type Workfile,
 } from "./model";
-import { NOT_SAVED, describe, refusal, type StructureAnswer, type StructureCall } from "./structure";
+import {
+  NOT_SAVED, describe, refusal, type BudgetEntry, type FeedbackEntry, type StructureAnswer, type StructureCall,
+} from "./structure";
 import { demoMode, supabase } from "./supabase";
-import { DEMO_UPLOAD, UPLOAD_FAILED, checkFile, uploadRefusal, type Target, type UploadAnswer } from "./uploads";
+import {
+  DEMO_INVITATION, DEMO_UPLOAD, IMAGE_ACCEPT, UPLOAD_FAILED, checkFile, uploadRefusal, type Target, type UploadAnswer,
+} from "./uploads";
 import { Card, Centered, CheckButton, Chip, H2, Shell, Stepper, safeUrl, type Preview } from "./ui";
 
-type Tab = "tasks" | "evening" | "logistics";
+type Tab = "tasks" | "evening" | "logistics" | "after";
 
 type WfLoad =
   | { kind: "loading" }
@@ -26,7 +29,14 @@ type WfLoad =
   | { kind: "forbidden" }
   | { kind: "error"; message: string };
 
-const LATER = "בינתיים עורכים את זה באפליקציה הנוכחית — זה יגיע לכאן בשלב הבא.";
+// a database whose v2.sql predates stage 2ג answers without these: the
+// screen draws empty lists rather than breaking
+function complete(wf: Workfile): Workfile {
+  return {
+    ...wf, feedback: wf.feedback ?? [], budget: wf.budget ?? [],
+    mishmar: { ...wf.mishmar, budget_used: Number(wf.mishmar.budget_used ?? 0) },
+  };
+}
 
 // One fetch per evening opened. The demo has one evening bundled (#05).
 function useWorkfile(mid: number): [WfLoad, (fn: (wf: Workfile) => Workfile) => void] {
@@ -34,7 +44,7 @@ function useWorkfile(mid: number): [WfLoad, (fn: (wf: Workfile) => Workfile) => 
   useEffect(() => {
     let alive = true;
     if (demoMode || !supabase) {
-      const wf = demoWorkfile as unknown as Workfile;
+      const wf = complete(demoWorkfile as unknown as Workfile);
       setLoad(wf.mishmar.id === mid ? { kind: "ok", wf } : { kind: "missing" });
       return;
     }
@@ -43,7 +53,7 @@ function useWorkfile(mid: number): [WfLoad, (fn: (wf: Workfile) => Workfile) => 
       if (!alive) return;
       if (error) return setLoad({ kind: "error", message: error.message });
       const status = (data as { status?: string } | null)?.status;
-      if (status === "ok") return setLoad({ kind: "ok", wf: data as Workfile });
+      if (status === "ok") return setLoad({ kind: "ok", wf: complete(data as Workfile) });
       setLoad(status === "not_found" ? { kind: "missing" } : { kind: "forbidden" });
     });
     return () => { alive = false; };
@@ -206,15 +216,15 @@ function WorkfileBody({ wf, update, preview }: {
       setAlert(NOT_SAVED);
       return false;
     }
-    const next = answer.workfile;
-    if (answer.status !== "ok" || !next) {
-      setAlert(refusal(answer.status));
+    if (answer.status !== "ok" || !answer.workfile) {
+      setAlert(refusal(answer.status, call.door));
       return false;
     }
+    const next = complete(answer.workfile);
     const said = describe(call, wf, answer.result ?? {});
     update(() => next);
     if (said.warning) setAlert(said.warning);
-    else setNotice(said.notice);
+    else if (said.notice) setNotice(said.notice);
     return true;
   };
 
@@ -225,13 +235,13 @@ function WorkfileBody({ wf, update, preview }: {
     if (busy) return null;
     setAlert(null);
     setNotice(null);
-    const checked = checkFile(file.name, file.size);
+    const checked = checkFile(file.name, file.size, target);
     if (!checked.ok) {
-      setAlert(uploadRefusal(checked.status));
+      setAlert(uploadRefusal(checked.status, target));
       return null;
     }
     if (demoMode || !supabase) {
-      setNotice(DEMO_UPLOAD);
+      setNotice(target === "invitation" ? DEMO_INVITATION : DEMO_UPLOAD);
       return null;
     }
     const form = new FormData();
@@ -251,11 +261,11 @@ function WorkfileBody({ wf, update, preview }: {
       setBusy(false);
     }
     if (!answer) {
-      setAlert(UPLOAD_FAILED);
+      setAlert(target === "invitation" ? uploadRefusal("unavailable", target) : UPLOAD_FAILED);
       return null;
     }
     if (answer.status !== "ok" || !answer.url) {
-      setAlert(uploadRefusal(answer.status));
+      setAlert(uploadRefusal(answer.status, target));
       return null;
     }
     return answer.url;
@@ -269,6 +279,9 @@ function WorkfileBody({ wf, update, preview }: {
       setFocus(t.lesson_id);
     } else if (["מרצים", "תוכן", "נושא"].includes(t.category ?? "")) {
       setTab("evening");
+      window.scrollTo(0, 0);
+    } else if (t.category === "אחרי") {
+      setTab("after");
       window.scrollTo(0, 0);
     } else {
       setTab("logistics");
@@ -288,13 +301,14 @@ function WorkfileBody({ wf, update, preview }: {
       <IdentityCard wf={wf} prog={prog} today={today} edit={editor} />
       {!m.topic && editor && <TopicCard wf={wf} edit={editor} />}
 
-      <div role="tablist" aria-label="חלקי התיק" className="mt-6 grid grid-cols-3 gap-1 rounded-xl bg-sand p-1">
-        {([["tasks", "המשימות"], ["evening", "הערב"], ["logistics", "לוגיסטיקה"]] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-                  className={`rounded-lg px-2 py-2 text-sm font-bold ${tab === k ? "bg-white text-navy shadow-sm" : "text-muted"}`}>
-            {label}
-          </button>
-        ))}
+      <div role="tablist" aria-label="חלקי התיק" className="mt-6 grid grid-cols-4 gap-1 rounded-xl bg-sand p-1">
+        {([["tasks", "המשימות"], ["evening", "הערב"], ["logistics", "לוגיסטיקה"], ["after", "משוב וסיכום"]] as [Tab, string][])
+          .map(([k, label]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                    className={`rounded-lg px-1 py-2 text-sm font-bold leading-tight ${tab === k ? "bg-white text-navy shadow-sm" : "text-muted"}`}>
+              {label}
+            </button>
+          ))}
       </div>
 
       {tab === "tasks" && (
@@ -302,7 +316,8 @@ function WorkfileBody({ wf, update, preview }: {
                   onOpen={onOpen} onAdd={readOnly ? null : onAdd} />
       )}
       {tab === "evening" && <EveningTab wf={wf} today={today} onToggle={onToggle} edit={editor} />}
-      {tab === "logistics" && <LogisticsTab wf={wf} />}
+      {tab === "logistics" && <LogisticsTab wf={wf} edit={editor} onEvening={() => setTab("evening")} />}
+      {tab === "after" && <AfterTab wf={wf} today={today} edit={editor} />}
 
       {editing && (
         <EditSheet t={editing} slots={slots} onClose={() => setEditing(null)}
@@ -436,9 +451,9 @@ function TaskRow({ t, today, slots, onToggle, actions, onOpen }: {
   const dl = deadline(t, today);
   const slotIndex = slots.findIndex((l) => l.id === t.lesson_id);
   const slot = slotIndex >= 0 ? slots[slotIndex] : null;
-  // the invitation is designed and sent outside the app, and the after-evening
-  // forms are not here yet: nowhere for «פתח» to lead
-  const door = t.status !== "DONE" && t.category !== "הזמנה" && t.category !== "אחרי";
+  // the invitation is designed and sent outside the app: nowhere for «פתח» to
+  // lead (app._wf_task_card); the after-evening tasks lead to «משוב וסיכום»
+  const door = t.status !== "DONE" && t.category !== "הזמנה";
   return (
     <div className="rounded-xl border border-line bg-white p-3" data-task={t.id}>
       <div className="flex items-start gap-3">
@@ -572,47 +587,333 @@ function EditSheet({ t, slots, onClose, onSave }: {
 
 // ---------------------------------------------------------------- logistics
 
-function LogisticsTab({ wf }: { wf: Workfile }) {
+// a card that opens with its heading: the heading's top margin is the card's padding
+const SECTION = "[&>h2:first-child]:mt-1";
+const FIELD = "rounded-lg border border-line bg-[#fbfaf6] px-3 py-2";
+const PRIMARY = "rounded-lg bg-navy px-4 py-2 font-bold text-white disabled:opacity-50";
+const ICON_BOX = "grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-white hover:bg-late-bg disabled:opacity-50";
+
+// app._logistics_panel: what to buy, which room each חבורה sits in (derived
+// from the presenters — edited in the evening's structure), the invitation
+function LogisticsTab({ wf, edit, onEvening }: { wf: Workfile; edit: Editor; onEvening: () => void }) {
   const food = wf.logistics.filter((i) => i.kind === "כיבוד");
   const other = wf.logistics.filter((i) => i.kind !== "כיבוד" && i.kind !== "חלל");
   const legacyRooms = wf.logistics.filter((i) => i.kind === "חלל");
   const rounds = wf.lessons.filter((l) => !l.is_break && isChavurot(l));
   const names = slotNames(wf.lessons);
   const invitation = safeUrl(wf.mishmar.invitation_url);
-  const list = (items: LogisticsItem[]) => (
-    <ul className="space-y-1">
-      {items.map((i) => (
-        <li key={i.id} className={i.done ? "text-muted line-through" : ""}>
-          {i.done ? "✓ " : "• "}{i.label}{i.detail ? ` — ${i.detail}` : ""}
-        </li>
-      ))}
-    </ul>
+  const [label, setLabel] = useState("");
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!edit || !label.trim()) return;
+    if (await edit.run({ door: "v2_add_logistics", args: { p_mishmar_id: wf.mishmar.id, p_label: label } })) setLabel("");
+  };
+  const remove = (i: LogisticsItem) => {
+    if (edit && window.confirm(`להסיר את «${i.label}» מהרשימה?`)) {
+      edit.run({ door: "v2_delete_logistics", args: { p_item_id: i.id } });
+    }
+  };
+  const row = (i: LogisticsItem, checkable = true) => (
+    <li key={i.id} className="flex items-center gap-2" data-logistics={i.id}>
+      {checkable && (
+        <button type="button" disabled={!edit || edit.busy} aria-pressed={i.done}
+                aria-label={`${i.done ? "בטל סימון" : "סמן שנקנה"}: ${i.label}`}
+                onClick={() => edit?.run({ door: "v2_set_logistics_done", args: { p_item_id: i.id, p_done: !i.done } })}
+                className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border
+                  ${i.done ? "border-navy bg-navy text-white" : "border-navy/40 bg-white text-navy hover:bg-navy-soft"}
+                  disabled:cursor-not-allowed disabled:opacity-40`}>✓</button>
+      )}
+      <span className={`min-w-0 flex-1 ${i.done ? "text-muted line-through" : ""}`}>
+        {i.label}{i.detail ? <span className="text-sm text-muted"> — {i.detail}</span> : null}
+      </span>
+      {edit && (
+        <button type="button" disabled={edit.busy} onClick={() => remove(i)} aria-label={`הסרה: ${i.label}`}
+                className={ICON_BOX}>🗑</button>
+      )}
+    </li>
   );
+  const removeInvitation = () => {
+    if (edit && window.confirm("להסיר את ההזמנה מהתיק?")) {
+      edit.run({ door: "v2_set_invitation", args: { p_mishmar_id: wf.mishmar.id, p_url: "" } });
+    }
+  };
   return (
     <div className="mt-4 space-y-3">
-      <Card>
+      <Card className={SECTION}>
         <H2>🍎 רשימת הכיבוד</H2>
-        {food.length ? list(food) : <p className="text-muted">הרשימה עוד ריקה.</p>}
+        <p className="mb-2 text-sm text-muted">מה קונים לערב. סימון ✓ = נקנה.</p>
+        {food.length ? <ul className="space-y-2">{food.map((i) => row(i))}</ul>
+          : <p className="text-muted">הרשימה עוד ריקה.</p>}
+        {edit && (
+          <form onSubmit={add} className="mt-3 flex flex-wrap gap-2">
+            <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={300} aria-label="פריט לכיבוד"
+                   placeholder="למשל: עוגות · פיצוחים · שתייה חמה" className={`min-w-0 flex-[3_1_12rem] ${FIELD}`} />
+            <button type="submit" disabled={edit.busy || !label.trim()} className={PRIMARY}>➕ הוסף</button>
+          </form>
+        )}
       </Card>
-      <Card>
+      <Card className={SECTION}>
         <H2>🚪 חלוקת החללים לחבורות</H2>
-        {rounds.some((l) => l.people.length) ? rounds.map((l) => (
-          <div key={l.id} className="mb-2">
-            {rounds.length > 1 && <p className="text-sm text-muted">🕘 <span dir="ltr">{slotTimes(l)}</span> · {names.get(l.id)}</p>}
-            <ul className="space-y-1">
-              {l.people.map((p) => <li key={p.id}><span className="font-semibold">{p.room ?? "טרם נקבע חלל"}</span> — {p.name}</li>)}
-            </ul>
-          </div>
-        )) : <p className="text-muted">אין עדיין מעבירי חבורות.</p>}
-        {legacyRooms.length > 0 && list(legacyRooms)}
+        <p className="mb-2 text-sm text-muted">נגזר ממעבירי החבורות במבנה הערב — כל מעביר וחלל אחד, בתוך הסבב שלו.</p>
+        {rounds.some((l) => l.people.length) ? rounds.map((l) => {
+          const used = l.people.map((p) => p.room).filter(Boolean);
+          return (
+            <div key={l.id} className="mb-2">
+              {rounds.length > 1 && <p className="text-sm text-muted">🕘 <span dir="ltr">{slotTimes(l)}</span> · {names.get(l.id)}</p>}
+              <ul className="space-y-1">
+                {l.people.map((p) => (
+                  <li key={p.id}>
+                    <span className="font-semibold">{p.room ?? "טרם נקבע חלל"}</span> — {p.name}
+                    {p.room && used.filter((r) => r === p.room).length > 1 && (
+                      <span className="text-sm text-late"> ⚠️ אותו חלל לשניים בסבב הזה</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        }) : <p className="text-muted">אין עדיין מעבירי חבורות. מוסיפים אותם במבנה הערב.</p>}
+        <button type="button" onClick={() => { onEvening(); window.scrollTo(0, 0); }}
+                className="mt-1 rounded-lg px-2 py-1 text-sm font-bold text-navy hover:bg-navy-soft">↗ למבנה הערב</button>
+        {legacyRooms.length > 0 && (
+          <details className="mt-3 rounded-xl border border-line px-3 py-2">
+            <summary className="text-sm font-bold text-muted">שורות חללים ישנות ({legacyRooms.length})</summary>
+            <p className="my-2 text-sm text-muted">נרשמו כשהחללים היו רשימה חופשית. אפשר למחוק אותן.</p>
+            <ul className="space-y-2">{legacyRooms.map((i) => row(i, false))}</ul>
+          </details>
+        )}
       </Card>
-      <Card>
-        <H2>✉️ ההזמנה</H2>
+      <Card className={SECTION}>
+        <H2>✉️ ההזמנה למשמר</H2>
+        <p className="mb-2 text-sm text-muted">ההזמנה היא תמונה אחת — הפוסטר שיוצא בוואטסאפ. מעלים אותה כאן.</p>
         {invitation ? <img src={invitation} alt="ההזמנה למשמר" className="max-h-[28rem] w-auto max-w-full rounded-xl border border-line" />
           : <p className="text-muted">עוד לא הועלתה הזמנה.</p>}
+        {edit && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <UploadButton target="invitation" id={wf.mishmar.id} edit={edit} accept={IMAGE_ACCEPT}
+                          label="העלאת תמונת ההזמנה" text={invitation ? "📤 החלפת התמונה" : "📤 העלאת ההזמנה"}
+                          onUploaded={(url) => edit.run({ door: "v2_set_invitation",
+                                                          args: { p_mishmar_id: wf.mishmar.id, p_url: url } })} />
+            {invitation && (
+              <button type="button" disabled={edit.busy} onClick={removeInvitation}
+                      className="rounded-lg border border-line px-2 py-1 text-sm hover:bg-late-bg disabled:opacity-50">
+                🗑 הסרת ההזמנה
+              </button>
+            )}
+          </div>
+        )}
       </Card>
-      {other.length > 0 && <Card><H2>📦 עוד</H2>{list(other)}</Card>}
-      <p className="text-sm text-muted">עדכון הכיבוד, החללים וההזמנה — {LATER}</p>
+      {other.length > 0 && <Card className={SECTION}><H2>📦 עוד</H2><ul className="space-y-2">{other.map((i) => row(i))}</ul></Card>}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- after the evening
+
+// app._after_tab: a rating per slot, then the budget
+function AfterTab({ wf, today, edit }: { wf: Workfile; today: Date; edit: Editor }) {
+  return (
+    <div className="mt-4 space-y-3">
+      <FeedbackCard wf={wf} today={today} edit={edit} />
+      <BudgetCard wf={wf} edit={edit} />
+    </div>
+  );
+}
+
+function Stars({ value, onChange, name, disabled }: {
+  value: number | null; onChange: (v: number | null) => void; name: string; disabled?: boolean;
+}) {
+  return (
+    <div role="radiogroup" aria-label={`דירוג: ${name}`} className="flex shrink-0 gap-0.5" dir="ltr">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} type="button" role="radio" aria-checked={value === n} disabled={disabled}
+                aria-label={n === 1 ? "כוכב אחד" : `${n} כוכבים`}
+                // the same star again clears it: unrated is not a 1
+                onClick={() => onChange(value === n ? null : n)}
+                className={`grid h-9 w-8 place-items-center rounded-md text-xl leading-none hover:bg-navy-soft disabled:opacity-40
+                  ${value !== null && n <= value ? "text-[#c58b00]" : "text-line"}`}>
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FeedbackCard({ wf, today, edit }: { wf: Workfile; today: Date; edit: Editor }) {
+  const slots = wf.lessons.filter((l) => !l.is_break);
+  const names = slotNames(wf.lessons);
+  const mine = new Set(wf.feedback.filter((f) => f.mine).map((f) => f.lesson_title));
+  const evening = parseDate(wf.mishmar.gregorian_date);
+  const open = !evening || evening <= today;
+  const [stars, setStars] = useState<Record<number, number | null>>({});
+  const [words, setWords] = useState<Record<number, string>>({});
+  const rated = slots.filter((l) => stars[l.id] && !mine.has(names.get(l.id) ?? ""));
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!edit) return;
+    const entries: FeedbackEntry[] = slots
+      .filter((l) => !mine.has(names.get(l.id) ?? ""))
+      .map((l) => ({ lesson_id: l.id, rating: stars[l.id] ?? null, what_worked: (words[l.id] ?? "").trim() || null }));
+    if (await edit.run({ door: "v2_add_feedback", args: { p_mishmar_id: wf.mishmar.id, p_entries: entries } })) {
+      setStars({});
+      setWords({});
+    }
+  };
+  return (
+    <Card className={SECTION}>
+      <H2>🌙 משוב על הערב — לפי מקטעים</H2>
+      <p className="mb-3 text-sm text-muted">
+        המשוב נשמר על שמך ועל המשמר הזה, והופך את מאגר המרצים לזיכרון מוסדי. דרגו רק מקטעים שהייתם
+        בהם — מקטע בלי כוכבים לא נשמר. שליחה גם סוגרת את משימת המשוב.
+      </p>
+      {!open ? (
+        <p className="rounded-xl border border-dashed border-line px-4 py-3 text-muted">
+          המשוב נפתח ביום הערב. אז אפשר לדרג כל מקטע ולכתוב מה עבד.
+        </p>
+      ) : !slots.length ? (
+        <p className="rounded-xl border border-dashed border-line px-4 py-3 text-muted">
+          אין עדיין מבנה ערב. המשוב ייפתח כשיהיו מקטעים.
+        </p>
+      ) : edit ? (
+        <form onSubmit={send} className="space-y-3" aria-label="משוב על הערב">
+          {slots.map((l) => {
+            const name = names.get(l.id) ?? "מקטע";
+            const sent = mine.has(name);
+            return (
+              <div key={l.id} className="rounded-xl border border-line p-3" data-feedback-slot={l.id}>
+                <p className="font-semibold">
+                  {name}
+                  {l.speaker_name && <span className="font-normal text-muted"> · 🎤 {l.speaker_name}</span>}
+                  {sent && <span className="ms-1"><Chip kind="green">✅ כבר נשלח</Chip></span>}
+                </p>
+                {!sent && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Stars value={stars[l.id] ?? null} name={name} disabled={edit.busy}
+                           onChange={(v) => setStars((s) => ({ ...s, [l.id]: v }))} />
+                    <input value={words[l.id] ?? ""} onChange={(e) => setWords((w) => ({ ...w, [l.id]: e.target.value }))}
+                           maxLength={2000} aria-label={`התייחסות: ${name}`} placeholder="התייחסות — מה עבד, מה פחות"
+                           className={`min-w-0 flex-[1_1_12rem] ${FIELD}`} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <button type="submit" disabled={edit.busy || !rated.length} className={PRIMARY}>💾 שמור משוב על הערב</button>
+        </form>
+      ) : null}
+      {wf.feedback.length > 0 && (
+        <details className="mt-3 rounded-xl border border-line px-3 py-2">
+          <summary className="text-sm font-bold">משוב שנרשם ({wf.feedback.length})</summary>
+          <ul className="mt-2 space-y-2">
+            {wf.feedback.map((f) => (
+              <li key={f.id}>
+                <span className="font-semibold">{f.lesson_title || f.speaker_name || "המשמר בכללותו"}</span>
+                {" — "}<span aria-label={`${f.rating ?? 0} כוכבים`}>{"⭐".repeat(f.rating ?? 0)}</span>
+                {f.mine && <span className="text-sm text-muted"> (שלך)</span>}
+                {f.what_worked && <p className="text-sm text-muted">{clean(f.what_worked)}</p>}
+                {f.what_didnt && <p className="text-sm text-muted">פחות: {clean(f.what_didnt)}</p>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Card>
+  );
+}
+
+function BudgetCard({ wf, edit }: { wf: Workfile; edit: Editor }) {
+  const paid = new Set(wf.budget.filter((b) => b.expense_type === "מרצה").map((b) => (b.description ?? "").trim()));
+  const unpaid = budgetSpeakers(wf).filter((n) => !paid.has(n));
+  const [pay, setPay] = useState<Record<string, string>>({});
+  const [extraName, setExtraName] = useState("");
+  const [extraSum, setExtraSum] = useState("");
+  const [food, setFood] = useState("");
+  const [other, setOther] = useState("");
+  const spent = Number(wf.mishmar.budget_used ?? 0);
+  const num = (s: string) => (s.trim() === "" ? null : Number(s));
+  const lines: BudgetEntry[] = [
+    ...unpaid.filter((n) => num(pay[n] ?? "") !== null)
+      .map((n) => ({ expense_type: "מרצה" as const, description: n, actual_cost: num(pay[n])! })),
+    ...(extraName.trim() ? [{ expense_type: "מרצה" as const, description: extraName.trim(), actual_cost: num(extraSum) ?? 0 }] : []),
+    ...(num(food) ? [{ expense_type: "כיבוד" as const, description: "", actual_cost: num(food)! }] : []),
+    ...(num(other) ? [{ expense_type: "אחר" as const, description: "", actual_cost: num(other)! }] : []),
+  ];
+  const bad = lines.some((l) => !Number.isFinite(l.actual_cost) || l.actual_cost < 0);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!edit || !lines.length || bad) return;
+    if (await edit.run({ door: "v2_add_budget", args: { p_mishmar_id: wf.mishmar.id, p_lines: lines } })) {
+      setPay({});
+      setExtraName("");
+      setExtraSum("");
+      setFood("");
+      setOther("");
+    }
+  };
+  const remove = (id: number, what: string) => {
+    if (edit && window.confirm(`למחוק את השורה «${what}» מהתקציב?`)) {
+      edit.run({ door: "v2_delete_budget", args: { p_line_id: id } });
+    }
+  };
+  const money = (value: string, set: (v: string) => void, label: string) => (
+    <input type="number" inputMode="decimal" min={0} step={10} value={value} onChange={(e) => set(e.target.value)}
+           aria-label={label} placeholder="₪" className={`w-28 ${FIELD}`} dir="ltr" />
+  );
+  return (
+    <Card className={SECTION}>
+      <H2>💰 סיכום תקציב</H2>
+      <p className="mb-3 text-sm text-muted">
+        האינדיקציה היא {PER_MISHMAR_BUDGET_NIS} ₪ למשמר — ממוצע שכולל מרצים וכיבוד יחד. חריגה במשמר בודד
+        אינה שגיאה: היא נמשכת מהסעיף העונתי.
+      </p>
+      {wf.budget.length > 0 ? (
+        <ul className="space-y-2" aria-label="שורות התקציב">
+          {wf.budget.map((b) => (
+            <li key={b.id} className="flex items-center gap-2" data-budget={b.id}>
+              <span className="min-w-0 flex-1">
+                <span className="font-semibold">{b.expense_type === "מרצה" ? b.description : b.expense_type}</span>
+                {b.expense_type === "מרצה" && <span className="text-sm text-muted"> · מרצה</span>}
+              </span>
+              <span className="tabular-nums" dir="ltr">
+                {Number(b.actual_cost) === 0 && b.expense_type === "מרצה" ? "בהתנדבות" : fmtNis(Number(b.actual_cost))}
+              </span>
+              {edit && (
+                <button type="button" disabled={edit.busy} onClick={() => remove(b.id, b.description ?? b.expense_type)}
+                        aria-label={`מחיקת שורה: ${b.description ?? b.expense_type}`} className={ICON_BOX}>🗑</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="text-muted">עוד לא נרשמו הוצאות.</p>}
+      <p className="mt-3 border-t border-line pt-3 font-bold">
+        סה״כ הוצאות למשמר הזה: <span className="tabular-nums" dir="ltr">{fmtNis(spent)}</span>
+      </p>
+      {spent > PER_MISHMAR_BUDGET_NIS && <p className="text-sm text-muted">מעל האינדיקציה — לידיעה, לא לדאגה.</p>}
+      {edit && (
+        <form onSubmit={save} className="mt-4 space-y-3 rounded-xl border border-dashed border-navy/40 p-3" aria-label="הוספה לתקציב">
+          <p className="text-sm font-bold">מרצים שהגיעו ומה שולם להם <span className="font-normal text-muted">(0 = הגיע בהתנדבות · שדה ריק לא נשמר)</span></p>
+          {unpaid.length ? unpaid.map((n) => (
+            <label key={n} className="flex flex-wrap items-center justify-between gap-2">
+              <span>{n}</span>
+              {money(pay[n] ?? "", (v) => setPay((p) => ({ ...p, [n]: v })), `תשלום ל${n}`)}
+            </label>
+          )) : (
+            <p className="text-sm text-muted">
+              {budgetSpeakers(wf).length ? "לכל המרצים של הערב כבר יש שורה." : "לא רשומים מרצים במבנה הערב."}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={extraName} onChange={(e) => setExtraName(e.target.value)} maxLength={120}
+                   aria-label="מרצה נוסף שלא מופיע למעלה" placeholder="מרצה נוסף שלא מופיע למעלה"
+                   className={`min-w-0 flex-[1_1_10rem] ${FIELD}`} />
+            {money(extraSum, setExtraSum, "תשלום למרצה הנוסף")}
+          </div>
+          <label className="flex flex-wrap items-center justify-between gap-2"><span>כיבוד</span>{money(food, setFood, "כיבוד (₪)")}</label>
+          <label className="flex flex-wrap items-center justify-between gap-2"><span>הוצאות אחרות</span>{money(other, setOther, "הוצאות אחרות (₪)")}</label>
+          {bad && <p className="text-sm text-late">סכום צריך להיות 0 ₪ או יותר.</p>}
+          <button type="submit" disabled={edit.busy || !lines.length || bad} className={PRIMARY}>💾 שמור סיכום תקציב</button>
+        </form>
+      )}
+    </Card>
   );
 }

@@ -10,7 +10,8 @@
 // v2_workfile — and answers {checks, facts}.
 import { readFileSync } from "node:fs";
 import { handle } from "./functions/v2-tools/handler.ts";
-import { MAX_BYTES, contentTag, objectPath, safeFilename } from "./functions/v2-tools/upload.ts";
+import { IMAGE_TYPES, MAX_BYTES, checkFile, contentTag, invitationPath, objectPath, safeFilename }
+  from "./functions/v2-tools/upload.ts";
 
 const SITE = "https://urishav464.github.io";
 const FN = "https://project.example/functions/v1/v2-tools";
@@ -24,7 +25,17 @@ async function twins() {
     const tag = await contentTag(bytes.buffer);
     paths.push(objectPath(f.mid, "lesson", f.id, tag, safeFilename(f.name, "source")));
   }
-  return { safe, paths };
+  // the invitation: its key, and what checkFile makes of the name — the type
+  // it is stored as, or the refusal
+  const invitations = [];
+  for (const f of input.invitations ?? []) {
+    const bytes = Uint8Array.from(Buffer.from(f.b64, "base64"));
+    const checked = checkFile(f.name, bytes.byteLength, "invitation");
+    invitations.push(checked.ok
+      ? { path: invitationPath(f.mid, await contentTag(bytes.buffer), checked.safe), type: checked.contentType }
+      : { refused: checked.status });
+  }
+  return { safe, paths, invitations, imageTypes: Object.fromEntries(IMAGE_TYPES) };
 }
 
 // the demo evening (#05, the pair's own), with one presenter on its חבורות
@@ -166,6 +177,31 @@ async function handler() {
   checks["no bucket yet → made, and the upload tried once more; failing still → storage"] =
     first.body.status === "ok" && first.calls.bucket === 1 && first.calls.upload.length === 2
     && never.body.status === "storage" && !("url" in never.body);
+
+  // the invitation: the evening's own poster, an image, at dm.upload_invitation's key
+  const poster = new File(["\x89PNG poster"], "הזמנה.PNG");
+  const inv = await run(request({ fields: fields("invitation", 5), file: poster }));
+  facts.invitation = inv.body;
+  checks["the invitation → ok: mishmar-05/invitation-<tag>-invitation.png, image/png, its public link"] =
+    inv.body.status === "ok" && /^mishmar-05\/invitation-[0-9a-f]{8}-invitation\.png$/.test(inv.body.path)
+    && inv.calls.upload.length === 1 && inv.calls.upload[0].contentType === "image/png"
+    && inv.body.url === `https://project.example/storage/v1/object/public/sources/${inv.body.path}`;
+  const invOther = await run(request({ fields: fields("invitation", 6), file: poster }));
+  const invForeign = await run(request({ fields: fields("invitation", 5), file: poster }),
+                               { wf: { ...evening(), mishmar: { ...evening().mishmar, id: 6 } } });
+  checks["the invitation of another evening (an id that is not the evening's, an answer for another) → forbidden"] =
+    invOther.body.status === "forbidden" && invForeign.body.status === "forbidden"
+    && invOther.calls.upload.length === 0 && invForeign.calls.upload.length === 0;
+  passed = true;
+  for (const name of ["poster.pdf", "poster.gif", "poster.svg", "poster.docx", "poster"]) {
+    const r = await run(request({ fields: fields("invitation", 5), file: new File(["x"], name) }));
+    passed &&= r.body.status === "bad_type" && r.calls.upload.length === 0;
+  }
+  checks["an invitation that is not a PNG / JPG / WEBP (pdf, gif, svg, docx, no extension) → bad_type"] = passed;
+  const invBoss = await run(request({ fields: fields("invitation", 5), file: poster }),
+                            { wf: { ...evening(), viewer: "instructor" } });
+  checks["the instructor's invitation → refused, nothing stored"] =
+    invBoss.body.status === "instructor" && invBoss.calls.upload.length === 0;
   return { checks, facts };
 }
 

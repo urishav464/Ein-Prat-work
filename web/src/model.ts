@@ -255,14 +255,61 @@ export interface LogisticsItem {
   done: boolean;
 }
 
+// one rating of one slot — never who wrote it, only whether the caller did
+export interface FeedbackRow {
+  id: number;
+  lesson_id: number | null;
+  lesson_title: string | null;
+  speaker_name: string | null;
+  rating: number | null;
+  what_worked: string | null;
+  what_didnt: string | null;
+  mine: boolean;
+}
+
+export interface BudgetLine {
+  id: number;
+  expense_type: string;          // «מרצה» / «כיבוד» / «אחר»
+  description: string | null;
+  actual_cost: number;
+}
+
 export interface Workfile {
   status: "ok";
   as_of: string;
   viewer: "trainee" | "instructor";
-  mishmar: Mishmar & { note: string | null; start_time: string; invitation_url: string | null };
+  mishmar: Mishmar & {
+    note: string | null; start_time: string; invitation_url: string | null; budget_used: number;
+  };
   lessons: Lesson[];
   logistics: LogisticsItem[];
+  feedback: FeedbackRow[];
+  budget: BudgetLine[];
   tasks: Task[];
+}
+
+// dm.PER_MISHMAR_BUDGET_NIS — an indication, never a ceiling
+export const PER_MISHMAR_BUDGET_NIS = 500;
+
+// app._fmt_nis — «1,250 ₪»
+export function fmtNis(x: number): string {
+  return `${Math.round(x).toLocaleString("en-US")} ₪`;
+}
+
+// app._after_tab's speakers: everyone who taught the evening (a panel paid
+// person by person), then the names already on its budget lines
+// (dm.get_budget_speaker_names) — the people the budget asks about
+export function budgetSpeakers(wf: Workfile): string[] {
+  const out: string[] = [];
+  for (const l of wf.lessons) {
+    if (l.is_break || !l.speaker_name) continue;
+    for (const n of isPanel(l) ? l.speaker_name.split(PANEL_SEP) : [l.speaker_name]) out.push(n);
+  }
+  for (const b of wf.budget) {
+    const n = (b.description ?? "").trim();
+    if (b.expense_type === "מרצה" && n && !out.includes(n)) out.push(n);
+  }
+  return out;
 }
 
 // dm.TASK_CATEGORIES — the add form's choices

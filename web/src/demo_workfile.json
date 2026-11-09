@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-19",
+ "as_of": "2026-11-09",
  "tasks": [
   {
    "id": 38,
@@ -73,7 +73,7 @@
   },
   {
    "id": 45,
-   "status": "TO DO",
+   "status": "DONE",
    "details": null,
    "category": "אחרי",
    "due_date": "2026-10-22",
@@ -82,7 +82,7 @@
    "task_description": "משוב על המשמר — דירוג השיעורים והמרצים *(אחרי)*"
   },
   {
-   "id": 183,
+   "id": 167,
    "status": "DONE",
    "details": null,
    "category": "מרצים",
@@ -92,7 +92,7 @@
    "task_description": "סגירת מרצה — שיעור 1"
   },
   {
-   "id": 184,
+   "id": 168,
    "status": "DONE",
    "details": null,
    "category": "תוכן",
@@ -102,7 +102,7 @@
    "task_description": "דף מקורות — שיעור 1"
   },
   {
-   "id": 185,
+   "id": 169,
    "status": "DONE",
    "details": null,
    "category": "מרצים",
@@ -112,7 +112,7 @@
    "task_description": "סגירת מרצה — שיעור 2"
   },
   {
-   "id": 186,
+   "id": 170,
    "status": "DONE",
    "details": null,
    "category": "תוכן",
@@ -122,7 +122,7 @@
    "task_description": "דף מקורות — שיעור 2"
   },
   {
-   "id": 187,
+   "id": 171,
    "status": "DONE",
    "details": null,
    "category": "מרצים",
@@ -132,7 +132,7 @@
    "task_description": "סגירת מרצה — שיעור 3"
   },
   {
-   "id": 188,
+   "id": 172,
    "status": "DONE",
    "details": null,
    "category": "תוכן",
@@ -142,7 +142,7 @@
    "task_description": "דף מקורות — שיעור 3"
   },
   {
-   "id": 189,
+   "id": 173,
    "status": "DONE",
    "details": null,
    "category": "תוכן",
@@ -152,7 +152,7 @@
    "task_description": "מי מעביר את התוכן — חבורות"
   },
   {
-   "id": 190,
+   "id": 174,
    "status": "DONE",
    "details": null,
    "category": "תוכן",
@@ -162,7 +162,7 @@
    "task_description": "דפי מקורות למעבירי החבורות"
   },
   {
-   "id": 191,
+   "id": 175,
    "status": "DONE",
    "details": null,
    "category": "לוגיסטיקה",
@@ -172,6 +172,7 @@
    "task_description": "חלוקת חללים למעבירי החבורות"
   }
  ],
+ "budget": [],
  "status": "ok",
  "viewer": "trainee",
  "lessons": [
@@ -292,11 +293,13 @@
    "שותף/ה 1"
   ],
   "start_time": "20:00",
+  "budget_used": 0,
   "hebrew_date": "ד׳ חשון תשפ״ז",
   "mishmar_type": "חיצוני",
   "gregorian_date": "15.10.2026",
   "invitation_url": null,
   "is_staff_built": false
  },
+ "feedback": [],
  "logistics": []
 }
