@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 19 Mishmarim built by pairs of trainees (21 on the calendar — #08 on 5.11 and #11 on 26.11 were cancelled on 2.11.2026; the other numbers did not move). Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout — two model calls per search: `chat_agent.scout_map` reads the topic as fields, then `scout_speakers` searches the web itself with Anthropic's server web-search tool ($10 per 1,000 searches, capped at 8 per run).
+The toolkit for Midreshet Ein Prat's **Mishmar** programme — Thursday-night study seminars, scoped strictly to **שנה ב' תשפ"ז (5787 / 2026-27)**: 19 Mishmarim built by pairs of trainees (21 on the calendar — #08 on 5.11 and #11 on 26.11 were cancelled on 2.11.2026; the other numbers did not move). Two halves: a **Streamlit web app** (8 trainees + one instructor), and a **Hebrew content repository** (generator prompt, work-file templates, speaker database, invitation assets). The chat is **dormant** behind `app.CHAT_ENABLED = False` (its UI is parked in `chat_panel.py`); the live Anthropic use is the speaker-search scout — two model calls per search: `chat_agent.scout_map` reads the topic as fields, then `scout_speakers` searches the web itself with Anthropic's server web-search tool ($10 per 1,000 searches; 3 per angle + 1 per «בסגנון של» example, capped at 12 per run — `SCOUT_MAX_SEARCHES`).
 
 **`web/` is v2**: the trainee home rebuilt as a static React app (Vite · TypeScript · Tailwind, installable PWA), published on GitHub Pages at `https://urishav464.github.io/mishmar/` by a separate deploy-only repo, `urishav464/mishmar` (its `deploy.yml` builds this repo's `web/` — hourly when `web/` changed, or on dispatch; **after changing `web/`, dispatch it**), with Supabase Auth (Google), on the same Supabase — the trainee home and the workfile (`src/Workfile.tsx`, hash route `#/m/N`: the task board to work on — ✓, add, edit, delete — the evening's structure to build in `src/Evening.tsx` — topic, slots, candidates, panel, חבורות, a source sheet as a link or an uploaded file — the logistics — the refreshments list, the invitation's image — and «משוב וסיכום» — a rating per slot, the budget lines; the demo makes every change on the screen only, `src/demoEdits.ts`). Cloudflare was tried first (`web/wrangler.jsonc` still describes it): the build deployed, but the new `workers.dev` address stayed NXDOMAIN. All `urishav464.github.io` sites (the Shabbat pages too) share one origin and its `localStorage`, where the v2 session lives — never put a third-party script on any of them. **Stage 1** (the real trainee home) is set up and was tried by trainees, who asked for the whole system there; **stage 2** moves it part by part, each with its own plan and the instructor's preview first: **2א the workfile (done)** → **2ב editing the evening's structure (done)** → **2ג logistics, uploads, feedback, budget (done)** → 2ד the speaker index and search → 2ה the instructor's dashboard. Until a part moves, it is edited in the Streamlit app, which keeps working on the same data.
 
@@ -20,6 +20,8 @@ streamlit run app.py
 
 Without a venv, `Authlib`→`cryptography` fails on Debian/Ubuntu system Python with *"Cannot uninstall cryptography, RECORD file not found"*, aborting the whole install. Escape hatch: `pip install --ignore-installed cryptography Authlib`.
 
+**The verification tooling needs more than `requirements.txt`** (Cloud needs none of it, so it is not listed there): `pip install psycopg2-binary playwright` in the same venv — the harness, `test_v2*.py` and `check_ui.py` fail with `No module named 'psycopg2'` / `'playwright'` on a fresh container. Do **not** run `playwright install`: the scripts launch the pre-installed Chromium (`/opt/pw-browsers/…`). PostgreSQL 16 is expected at `/usr/lib/postgresql/16/bin` (`db.py` prints the `apt-get` line when it is missing). Deno, for `test_v2_tools.py --deno` only: `npm i deno` in a scratch folder.
+
 ```bash
 python3 -m py_compile app.py data_manager.py chat_agent.py speaker_search.py chat_panel.py archive.py scripts/*.py   # the only static check
 MISHMAR_NO_CACHE=1 streamlit run app.py               # read cache off, for scripts that write around the seam
@@ -28,6 +30,7 @@ python3 scripts/streamlit_dom_context.py              # regenerate .claude/rules
 python3 scripts/assign_trainees.py                    # regenerate migrations/2026-09-assign-trainees.sql + the three owner docs (an exact search; cancelled and fixed evenings at its top)
 python3 scripts/harness/db.py up && python3 scripts/harness/harness.py serve   # local PG16 fixture + the app, traced
 python3 scripts/harness/harness.py sweep              # every screen + one click per kind vs the click contract
+python3 scripts/harness/harness.py scenario scripts/harness/scenarios/add_candidate_workfile.json   # one flow, step by step: runs, their cause, queries by table
 python3 scripts/harness/harness.py stop && python3 scripts/harness/db.py down
 python3 scripts/harness/test_scout.py                 # the speaker scout around the model, on recorded answers: budgets, grounding, «בסגנון של» / «לא מתאים», the teaching-first ranking
 cd web && npm install && npm run build                # v2: tsc --noEmit + vite build (no env vars → demo mode)
@@ -63,7 +66,7 @@ There is no test suite and no live Supabase reachable from a sandbox. Verificati
 
 ## The ideas that explain most of the code
 
-- **One renderer, one seam.** `app.py` (~3.7k lines) only renders; `data_manager.py` (~2.7k) is the
+- **One renderer, one seam.** `app.py` (~4.1k lines) only renders; `data_manager.py` (~3k) is the
   only module that talks to storage. Anything needing a join or an aggregate is a **view** in
   `supabase_schema.sql` — `v_tasks_full`, `v_speaker_status`, `v_overdue_tasks`, `v_mishmar_budget`,
   `v_outreach_full`, `v_student_progress` — because PostgREST cannot express one.
@@ -138,7 +141,7 @@ students_tasks.md      # seed data read on first run
 migrations/            # one-off SQL run by a human in the SQL Editor (trainee names + pairs)
 scripts/               # rerun_audit · streamlit_dom_context · assign_trainees · keep_awake · harness/ (local PG16 + shim + rerun tracer, test-only)
 .github/workflows/     # keep-awake.yml — visits the Cloud app every 6 h (needs the STREAMLIT_APP_URL repo variable)
-web/                   # v2 — React PWA (the home, the workfile, the evening's structure) · supabase/v2.sql the doors + test_v2.py + test_v2_structure.py · supabase/functions/v2-tools the upload function + test_v2_tools.py · check_ui.py
+web/                   # v2 — React PWA (the home, the workfile: tasks, structure, logistics, feedback + budget) · supabase/v2.sql the doors + test_v2.py + test_v2_structure.py · supabase/functions/v2-tools the upload function + test_v2_tools.py · check_ui.py
 Mishmer-section/       # generator prompt · templates · speakers · 2025-26 archive · 2026-27 season
 Invitations/           # house style, watercolor prompts, past posters
 ```
