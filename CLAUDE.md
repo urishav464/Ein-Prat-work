@@ -156,7 +156,11 @@ script writes, grey = computed.
 - **Four stages** (`bw.STAGES`, the last is תורנות מוצ"ש) order the work. A person takes at most one group per
   stage and at most `--max-stages` stages overall, and `assign_all` additionally blocks
   any candidate whose already-assigned `(day, hour)` slots collide with the new group's —
-  that is what keeps the 08:00 Friday preps and the 08:00 בית מדרש duty disjoint.
+  that is what keeps the 08:00 Friday preps and the 08:00 בית מדרש duty disjoint. The block is per group
+  (`clash_blocks`, since 13.11): until then a clash dropped the person from the *whole* stage, so everyone at the
+  Friday 14:00 dining room was out of every תורנות שבת group (גסטרונומים unloads at 14:00) — with 11 there on 13.11
+  the Shabbat groups shrank. Weeks assigned before (≤ 13.11's first run) no longer reproduce: 30.10 would move 42 of
+  48 people. Pinned people keep the old whole-stage rule.
 - **Points live on the group, not the task** (`ניקוד` in `data/group_plan.csv`): each duty
   is worth its points once. `data/duty_history.csv` stores one row per person per duty, and
   candidates are ranked by historical + already-earned-this-week points, lowest first.

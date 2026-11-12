@@ -335,13 +335,19 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
                     committed[n] += points_of[g]
         # חניך פנוי לשלב רק אם אף משימה שכבר שובץ אליה אינה מתנגשת בזמן עם
         # משימות השלב — כך בית מדרש ב-8:00 והכנות ב-8:00 לא נופלים על אותו אדם.
+        # התנגשות חוסמת רק את הקבוצות שמתנגשות, לא את כל השלב: מי שמנקה את חדר האוכל
+        # בשישי ב-14:00 לא נכנס לגסטרונומים (פריקה ב-14:00) — אבל כן לטיש או לפינוי.
         stage_slots = set().union(*(timed_slots(tasks, g["name"]) for g in stage_plan)) \
             if stage_plan else set()
+        def clash(n, g):
+            taken = busy.get(n, set()) | (set() if n in stage_pins else reserved.get(n, set()))
+            return taken & timed_slots(tasks, g["name"])
         pool = [n for n in available
                 if (stages_of[n] < max_stages or n in stage_pins)
                 and stage not in blocked.get(n, ())
-                and not (busy.get(n, set()) & stage_slots)
-                and (n in stage_pins or not (reserved.get(n, set()) & stage_slots))]
+                and not (n in stage_pins and busy.get(n, set()) & stage_slots)
+                and (n in stage_pins or any(not clash(n, g) for g in stage_plan))]
+        clash_blocks = {n: {g["name"] for g in stage_plan if clash(n, g)} for n in pool if n not in stage_pins}
 
         # אחראי מצוות השבת לכל קבוצה שדורשת אחד — נספר בתוך גודל הקבוצה.
         # הצוות מתאפס בכל שלב: אותו אדם יכול להיות אחראי בשישי וגם בשבת, אבל
@@ -381,6 +387,8 @@ def assign_all(plan, tasks, available, programs, past, pins, seed, max_stages,
                 if match and match not in stage_pins:
                     fixed[g["name"]] += 1
         blocks = {n: set(gs) for n, gs in group_blocks.items()}  # bw.APART: מי שכבר בשלב הקודם לא נכנס/ת
+        for n, gs in clash_blocks.items():
+            blocks.setdefault(n, set()).update(gs)
         for g in stage_plan:
             for gname, members in groups.items():
                 if stage_of.get(gname) in bw.APART.get(g["name"], ()):
