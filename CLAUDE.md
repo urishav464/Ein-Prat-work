@@ -242,8 +242,10 @@ script writes, grey = computed.
 
 ### Rendering
 
-`export_pdf.py` builds HTML and drives headless Chromium (`CHROME_CANDIDATES`, resolved
-under `/opt/pw-browsers/`) with `--print-to-pdf` and `--screenshot`. Fonts are embedded as
+`export_pdf.py` builds HTML and drives headless Chromium (`CHROME_CANDIDATES`, globbed under `/opt/pw-browsers/`
+for any installed version — the paths changed from chromium-1194 `chrome-linux/headless_shell` to chromium-1243
+`chrome-linux64/chrome-headless-shell` — with the headless shell first for every step: 1243's full `chrome` hangs
+under `--headless`, even a bare `--dump-dom`) with `--print-to-pdf` and `--screenshot`. Fonts are embedded as
 base64 data URIs from `assets/fonts/` so rendering never touches the network.
 `--virtual-time-budget` is required or Chromium captures before layout settles. Pages are
 fitted by measuring first: `measure_page` is a `--dump-dom` pass where an inline script sets

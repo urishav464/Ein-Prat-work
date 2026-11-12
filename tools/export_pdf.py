@@ -11,6 +11,7 @@
 """
 import argparse
 import base64
+import glob
 import html
 import re
 import shutil
@@ -28,11 +29,16 @@ import build_workbook as bw
 
 ROOT = Path(__file__).resolve().parent.parent
 FONTS = ROOT / "assets" / "fonts"
+# כל גרסה שמותקנת (הגרסה והתיקייה משתנות בין סביבות: chrome-linux/headless_shell ב-1194,
+# chrome-linux64/chrome-headless-shell ב-1243), החדשה קודם. headless_shell ראשון לכל השלבים: ה-chrome
+# המלא של 1243 נתקע ב---headless (גם ב---dump-dom הפשוט), וגם ב-1194 צייר רק חלק מהחלון בצילום.
 CHROME_CANDIDATES = [
-    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-    "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
+    *sorted(glob.glob("/opt/pw-browsers/chromium_headless_shell-*/*/headless_shell")
+            + glob.glob("/opt/pw-browsers/chromium_headless_shell-*/*/chrome-headless-shell"), reverse=True),
+    *sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux*/chrome"), reverse=True),
     "chromium", "chromium-browser", "google-chrome",
 ]
+HEADLESS_SHELL = re.compile(r"/(chrome-headless-shell|headless_shell)$")
 DAY_ORDER = bw.DAY_ORDER
 SCHEDULE_DAY = {"חמישי": "חמישי", "שישי": "שישי", "שבת": "שבת", "מוצאי שבת": "שבת"}   # מוצ"ש יושב בלו"ז תחת שבת
 IMAGES = "תמונות"       # התמונות לשליחה — תיקייה בתוך shabbatot/<תאריך>/
@@ -1046,7 +1052,7 @@ def shot_binary():
     """הדפדפן לצילומי PNG. ב-chrome המלא חלון בגובה 1123 מצייר רק כ-1036px (תחתית העמוד —
     שורות אחרונות ופוטר — נעלמת מהתמונה); headless_shell מצייר את כל החלון, ולכן הוא קודם."""
     for candidate in CHROME_CANDIDATES:
-        if "headless_shell" in candidate and Path(candidate).exists():
+        if HEADLESS_SHELL.search(candidate) and Path(candidate).exists():
             return candidate
     return chrome_binary()
 
